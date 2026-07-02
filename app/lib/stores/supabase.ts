@@ -147,10 +147,22 @@ export function initializeSupabaseConnection() {
   // Auto-connect using environment variable if available
   const envToken = import.meta.env?.VITE_SUPABASE_ACCESS_TOKEN;
 
-  if (envToken && !supabaseConnection.get().token) {
-    updateSupabaseConnection({ token: envToken });
-    fetchSupabaseStats(envToken).catch(console.error);
+  // Don't reconnect if there's no env token, or a user is already connected
+  if (!envToken || supabaseConnection.get().user) {
+    return;
   }
+
+  updateSupabaseConnection({ token: envToken });
+  fetchSupabaseStats(envToken).catch(console.error);
+}
+
+/*
+ * Run auto-connect as soon as this module loads in the browser, so an env-provided
+ * token connects immediately without requiring the user to open Settings > Supabase first.
+ * The guard above prevents duplicate requests if this ever runs more than once.
+ */
+if (typeof window !== 'undefined') {
+  initializeSupabaseConnection();
 }
 
 export async function fetchSupabaseStats(token: string) {

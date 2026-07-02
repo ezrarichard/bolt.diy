@@ -81,6 +81,16 @@ export const updateNetlifyConnection = (updates: Partial<NetlifyConnection>) => 
   }
 };
 
+/*
+ * Run auto-connect as soon as this module loads in the browser, so an env-provided
+ * token connects immediately without requiring the user to open Settings > Netlify first.
+ * initializeNetlifyConnection() already guards against re-connecting when a user is
+ * already present (line 29), so this only ever does real work once.
+ */
+if (typeof window !== 'undefined') {
+  initializeNetlifyConnection();
+}
+
 export async function fetchNetlifyStats(token: string) {
   try {
     isFetchingStats.set(true);
