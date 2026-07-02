@@ -665,17 +665,19 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
       {isPortDropdownOpen && (
         <div className="z-iframe-overlay w-full h-full absolute" onClick={() => setIsPortDropdownOpen(false)} />
       )}
-      <div className="bg-bolt-elements-background-depth-2 p-2 flex items-center gap-2">
-        <div className="flex items-center gap-2">
-          <IconButton icon="i-ph:arrow-clockwise" onClick={reloadPreview} />
+      <div className="bg-bolt-elements-background-depth-2 px-2.5 py-1 flex items-center gap-2 min-h-[40px]">
+        <div className="flex items-center gap-0.5 border border-bolt-elements-borderColor rounded-full px-0.5 py-0.5">
+          <IconButton icon="i-ph:arrow-clockwise" size="md" onClick={reloadPreview} title="Refresh preview" />
           <IconButton
             icon="i-ph:selection"
+            size="md"
             onClick={() => setIsSelectionMode(!isSelectionMode)}
             className={isSelectionMode ? 'bg-bolt-elements-background-depth-3' : ''}
+            title="Select element"
           />
         </div>
 
-        <div className="flex-grow flex items-center gap-1 bg-bolt-elements-preview-addressBar-background border border-bolt-elements-borderColor text-bolt-elements-preview-addressBar-text rounded-full px-1 py-1 text-sm hover:bg-bolt-elements-preview-addressBar-backgroundHover hover:focus-within:bg-bolt-elements-preview-addressBar-backgroundActive focus-within:bg-bolt-elements-preview-addressBar-backgroundActive focus-within-border-bolt-elements-borderColorActive focus-within:text-bolt-elements-preview-addressBar-textActive">
+        <div className="flex-grow flex items-center gap-1 bg-bolt-elements-preview-addressBar-background border border-bolt-elements-borderColor text-bolt-elements-preview-addressBar-text rounded-full px-2.5 py-1 text-xs hover:bg-bolt-elements-preview-addressBar-backgroundHover hover:focus-within:bg-bolt-elements-preview-addressBar-backgroundActive focus-within:bg-bolt-elements-preview-addressBar-backgroundActive focus-within-border-bolt-elements-borderColorActive focus-within:text-bolt-elements-preview-addressBar-textActive">
           <PortDropdown
             activePreviewIndex={activePreviewIndex}
             setActivePreviewIndex={setActivePreviewIndex}
@@ -714,14 +716,17 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
           />
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-0.5 border border-bolt-elements-borderColor rounded-full px-0.5 py-0.5">
           <IconButton
             icon="i-ph:devices"
+            size="md"
             onClick={toggleDeviceMode}
             title={isDeviceModeOn ? 'Switch to Responsive Mode' : 'Switch to Device Mode'}
           />
 
-          {expoUrl && <IconButton icon="i-ph:qr-code" onClick={() => setIsExpoQrModalOpen(true)} title="Show QR" />}
+          {expoUrl && (
+            <IconButton icon="i-ph:qr-code" size="md" onClick={() => setIsExpoQrModalOpen(true)} title="Show QR" />
+          )}
 
           <ExpoQrModal open={isExpoQrModalOpen} onClose={() => setIsExpoQrModalOpen(false)} />
 
@@ -729,11 +734,13 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
             <>
               <IconButton
                 icon="i-ph:device-rotate"
+                size="md"
                 onClick={() => setIsLandscape(!isLandscape)}
                 title={isLandscape ? 'Switch to Portrait' : 'Switch to Landscape'}
               />
               <IconButton
                 icon={showDeviceFrameInPreview ? 'i-ph:device-mobile' : 'i-ph:device-mobile-slash'}
+                size="md"
                 onClick={() => setShowDeviceFrameInPreview(!showDeviceFrameInPreview)}
                 title={showDeviceFrameInPreview ? 'Hide Device Frame' : 'Show Device Frame'}
               />
@@ -741,6 +748,7 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
           )}
           <IconButton
             icon="i-ph:cursor-click"
+            size="md"
             onClick={toggleInspectorMode}
             className={
               isInspectorMode ? 'bg-bolt-elements-background-depth-3 !text-bolt-elements-item-contentAccent' : ''
@@ -749,6 +757,7 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
           />
           <IconButton
             icon={isFullscreen ? 'i-ph:arrows-in' : 'i-ph:arrows-out'}
+            size="md"
             onClick={toggleFullscreen}
             title={isFullscreen ? 'Exit Full Screen' : 'Full Screen'}
           />
@@ -756,6 +765,7 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
           <div className="flex items-center relative">
             <IconButton
               icon="i-ph:list"
+              size="md"
               onClick={() => setIsWindowSizeDropdownOpen(!isWindowSizeDropdownOpen)}
               title="New Window Options"
             />
@@ -763,10 +773,10 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
             {isWindowSizeDropdownOpen && (
               <>
                 <div className="fixed inset-0 z-50" onClick={() => setIsWindowSizeDropdownOpen(false)} />
-                <div className="absolute right-0 top-full mt-2 z-50 min-w-[240px] max-h-[400px] overflow-y-auto bg-white dark:bg-black rounded-xl shadow-2xl border border-[#E5E7EB] dark:border-[rgba(255,255,255,0.1)] overflow-hidden">
-                  <div className="p-3 border-b border-[#E5E7EB] dark:border-[rgba(255,255,255,0.1)]">
+                <div className="absolute right-0 top-full mt-2 z-50 min-w-[240px] max-h-[400px] overflow-y-auto bg-bolt-elements-background-depth-2 rounded-xl shadow-lg border border-bolt-elements-borderColor overflow-hidden">
+                  <div className="p-3 border-b border-bolt-elements-borderColor">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-[#111827] dark:text-gray-300">Window Options</span>
+                      <span className="text-sm font-medium text-bolt-elements-textPrimary">Window Options</span>
                     </div>
                     <div className="flex flex-col gap-2">
                       <button
@@ -813,7 +823,7 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
                         <span className="text-xs text-bolt-elements-textTertiary">Show Device Frame</span>
                         <button
                           className={`w-10 h-5 rounded-full transition-colors duration-200 ${
-                            showDeviceFrame ? 'bg-[#6D28D9]' : 'bg-gray-300 dark:bg-gray-700'
+                            showDeviceFrame ? 'bg-[#27272A]' : 'bg-gray-300 dark:bg-gray-700'
                           } relative`}
                           onClick={(e) => {
                             e.stopPropagation();
@@ -831,7 +841,7 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
                         <span className="text-xs text-bolt-elements-textTertiary">Landscape Mode</span>
                         <button
                           className={`w-10 h-5 rounded-full transition-colors duration-200 ${
-                            isLandscape ? 'bg-[#6D28D9]' : 'bg-gray-300 dark:bg-gray-700'
+                            isLandscape ? 'bg-[#27272A]' : 'bg-gray-300 dark:bg-gray-700'
                           } relative`}
                           onClick={(e) => {
                             e.stopPropagation();
@@ -850,7 +860,7 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
                   {WINDOW_SIZES.map((size) => (
                     <button
                       key={size.name}
-                      className="w-full px-4 py-3.5 text-left text-[#111827] dark:text-gray-300 text-sm whitespace-nowrap flex items-center gap-3 group hover:bg-[#F5EEFF] dark:hover:bg-gray-900 bg-white dark:bg-black"
+                      className="w-full px-3 py-2.5 text-left text-bolt-elements-textPrimary text-sm whitespace-nowrap flex items-center gap-3 group hover:bg-bolt-elements-background-depth-3 bg-transparent transition-colors duration-150"
                       onClick={() => {
                         setSelectedWindowSize(size);
                         setIsWindowSizeDropdownOpen(false);
@@ -858,13 +868,13 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
                       }}
                     >
                       <div
-                        className={`${size.icon} w-5 h-5 text-[#6B7280] dark:text-gray-400 group-hover:text-[#6D28D9] dark:group-hover:text-[#6D28D9] transition-colors duration-200`}
+                        className={`${size.icon} w-5 h-5 text-bolt-elements-textTertiary group-hover:text-bolt-elements-textPrimary transition-colors duration-150`}
                       />
                       <div className="flex-grow flex flex-col">
-                        <span className="font-medium group-hover:text-[#6D28D9] dark:group-hover:text-[#6D28D9] transition-colors duration-200">
+                        <span className="font-medium group-hover:text-bolt-elements-textPrimary transition-colors duration-150">
                           {size.name}
                         </span>
-                        <span className="text-xs text-[#6B7280] dark:text-gray-400 group-hover:text-[#6D28D9] dark:group-hover:text-[#6D28D9] transition-colors duration-200">
+                        <span className="text-xs text-bolt-elements-textTertiary transition-colors duration-150">
                           {isLandscape && (size.frameType === 'mobile' || size.frameType === 'tablet')
                             ? `${size.height} × ${size.width}`
                             : `${size.width} × ${size.height}`}
@@ -872,7 +882,7 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
                         </span>
                       </div>
                       {selectedWindowSize.name === size.name && (
-                        <div className="text-[#6D28D9] dark:text-[#6D28D9]">
+                        <div className="text-bolt-elements-textPrimary">
                           <svg
                             xmlns="http://www.w3.org/2000/svg"
                             width="16"
@@ -1011,8 +1021,9 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
               />
             </>
           ) : (
-            <div className="flex w-full h-full justify-center items-center bg-bolt-elements-background-depth-1 text-bolt-elements-textPrimary">
-              No preview available
+            <div className="flex flex-col gap-2 w-full h-full justify-center items-center bg-bolt-elements-background-depth-1 text-bolt-elements-textTertiary">
+              <div className="i-ph:browser text-3xl opacity-60" />
+              <span className="text-sm">No preview available</span>
             </div>
           )}
 

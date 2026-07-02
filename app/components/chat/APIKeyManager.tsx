@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { IconButton } from '~/components/ui/IconButton';
 import type { ProviderInfo } from '~/types/model';
 import Cookies from 'js-cookie';
+import { classNames } from '~/utils/classNames';
 
 interface APIKeyManagerProps {
   provider: ProviderInfo;
@@ -85,85 +86,54 @@ export const APIKeyManager: React.FC<APIKeyManagerProps> = ({ provider, apiKey, 
     setIsEditing(false);
   };
 
-  return (
-    <div className="flex items-center justify-between py-3 px-1">
-      <div className="flex items-center gap-2 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-bolt-elements-textSecondary">{provider?.name} API Key:</span>
-          {!isEditing && (
-            <div className="flex items-center gap-2">
-              {apiKey ? (
-                <>
-                  <div className="i-ph:check-circle-fill text-green-500 w-4 h-4" />
-                  <span className="text-xs text-green-500">Set via UI</span>
-                </>
-              ) : isEnvKeySet ? (
-                <>
-                  <div className="i-ph:check-circle-fill text-green-500 w-4 h-4" />
-                  <span className="text-xs text-green-500">Set via environment variable</span>
-                </>
-              ) : (
-                <>
-                  <div className="i-ph:x-circle-fill text-red-500 w-4 h-4" />
-                  <span className="text-xs text-red-500">Not Set (Please set via UI or ENV_VAR)</span>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
+  const hasKey = Boolean(apiKey) || isEnvKeySet;
 
-      <div className="flex items-center gap-2 shrink-0">
-        {isEditing ? (
-          <div className="flex items-center gap-2">
-            <input
-              type="password"
-              value={tempKey}
-              placeholder="Enter API Key"
-              onChange={(e) => setTempKey(e.target.value)}
-              className="w-[300px] px-3 py-1.5 text-sm rounded border border-bolt-elements-borderColor 
-                        bg-bolt-elements-prompt-background text-bolt-elements-textPrimary 
-                        focus:outline-none focus:ring-2 focus:ring-bolt-elements-focus"
-            />
-            <IconButton
-              onClick={handleSave}
-              title="Save API Key"
-              className="bg-green-500/10 hover:bg-green-500/20 text-green-500"
-            >
-              <div className="i-ph:check w-4 h-4" />
-            </IconButton>
-            <IconButton
-              onClick={() => setIsEditing(false)}
-              title="Cancel"
-              className="bg-red-500/10 hover:bg-red-500/20 text-red-500"
-            >
-              <div className="i-ph:x w-4 h-4" />
-            </IconButton>
-          </div>
-        ) : (
-          <>
-            {
-              <IconButton
-                onClick={() => setIsEditing(true)}
-                title="Edit API Key"
-                className="bg-blue-500/10 hover:bg-blue-500/20 text-blue-500"
-              >
-                <div className="i-ph:pencil-simple w-4 h-4" />
-              </IconButton>
-            }
-            {provider?.getApiKeyLink && !apiKey && (
-              <IconButton
-                onClick={() => window.open(provider?.getApiKeyLink)}
-                title="Get API Key"
-                className="bg-purple-500/10 hover:bg-purple-500/20 text-purple-500 flex items-center gap-2"
-              >
-                <span className="text-xs whitespace-nowrap">{provider?.labelForGetApiKey || 'Get API Key'}</span>
-                <div className={`${provider?.icon || 'i-ph:key'} w-4 h-4`} />
-              </IconButton>
-            )}
-          </>
-        )}
-      </div>
+  return (
+    <div className="flex items-center gap-2 mt-1">
+      {isEditing ? (
+        <div className="flex items-center gap-1.5">
+          <input
+            type="password"
+            value={tempKey}
+            placeholder="Enter API Key"
+            autoFocus
+            onChange={(e) => setTempKey(e.target.value)}
+            className="w-[220px] px-2 py-1 text-xs rounded-md border border-bolt-elements-borderColor
+                      bg-bolt-elements-background-depth-1 text-bolt-elements-textPrimary
+                      focus:outline-none focus:ring-1 focus:ring-bolt-elements-focus"
+          />
+          <IconButton onClick={handleSave} title="Save API Key" className="text-green-500">
+            <div className="i-ph:check w-3.5 h-3.5" />
+          </IconButton>
+          <IconButton onClick={() => setIsEditing(false)} title="Cancel" className="text-red-500">
+            <div className="i-ph:x w-3.5 h-3.5" />
+          </IconButton>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setIsEditing(true)}
+          title={hasKey ? 'Edit API key' : 'Set API key'}
+          className={classNames(
+            'flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] border transition-colors',
+            hasKey
+              ? 'border-green-500/30 text-green-500 hover:bg-green-500/10'
+              : 'border-bolt-elements-borderColor text-bolt-elements-textTertiary hover:text-bolt-elements-textPrimary hover:bg-bolt-elements-background-depth-3',
+          )}
+        >
+          <div className={hasKey ? 'i-ph:check-circle-fill w-3 h-3' : 'i-ph:circle-dashed w-3 h-3'} />
+          {apiKey ? 'API key set' : isEnvKeySet ? 'API key via env' : 'No API key'}
+        </button>
+      )}
+      {!isEditing && !apiKey && provider?.getApiKeyLink && (
+        <button
+          type="button"
+          onClick={() => window.open(provider?.getApiKeyLink)}
+          className="text-[11px] text-bolt-elements-textTertiary hover:text-bolt-elements-textPrimary underline-offset-2 hover:underline"
+        >
+          {provider?.labelForGetApiKey || 'Get API key'}
+        </button>
+      )}
     </div>
   );
 };

@@ -88,14 +88,12 @@ export const Artifact = memo(({ artifactId }: ArtifactProps) => {
               workbenchStore.showWorkbench.set(!showWorkbench);
             }}
           >
-            <div className="px-5 p-3.5 w-full text-left">
-              <div className="w-full text-bolt-elements-textPrimary font-medium leading-5 text-sm">
+            <div className="px-3 py-2 w-full text-left">
+              <div className="w-full text-bolt-elements-textPrimary font-medium leading-4 text-xs">
                 {/* Use the dynamic title here */}
                 {dynamicTitle}
               </div>
-              <div className="w-full w-full text-bolt-elements-textSecondary text-xs mt-0.5">
-                Click to open Workbench
-              </div>
+              <div className="w-full text-bolt-elements-textTertiary text-[11px] mt-0.5">Click to open Workbench</div>
             </div>
           </button>
           {artifact.type !== 'bundled' && <div className="bg-bolt-elements-artifacts-borderColor w-[1px]" />}
@@ -109,7 +107,7 @@ export const Artifact = memo(({ artifactId }: ArtifactProps) => {
                 className="bg-bolt-elements-artifacts-background hover:bg-bolt-elements-artifacts-backgroundHover"
                 onClick={toggleActions}
               >
-                <div className="p-4">
+                <div className="px-2.5 py-2">
                   <div className={showActions ? 'i-ph:caret-up-bold' : 'i-ph:caret-down-bold'}></div>
                 </div>
               </motion.button>
@@ -117,15 +115,15 @@ export const Artifact = memo(({ artifactId }: ArtifactProps) => {
           </AnimatePresence>
         </div>
         {artifact.type === 'bundled' && (
-          <div className="flex items-center gap-1.5 p-5 bg-bolt-elements-actions-background border-t border-bolt-elements-artifacts-borderColor">
-            <div className={classNames('text-lg', getIconColor(allActionFinished ? 'complete' : 'running'))}>
+          <div className="flex items-center gap-1.5 px-3 py-2 bg-bolt-elements-actions-background border-t border-bolt-elements-artifacts-borderColor">
+            <div className={classNames('text-sm', getIconColor(allActionFinished ? 'complete' : 'running'))}>
               {allActionFinished ? (
                 <div className="i-ph:check"></div>
               ) : (
                 <div className="i-svg-spinners:90-ring-with-bg"></div>
               )}
             </div>
-            <div className="text-bolt-elements-textPrimary font-medium leading-5 text-sm">
+            <div className="text-bolt-elements-textPrimary font-medium leading-4 text-xs">
               {/* This status text remains the same */}
               {allActionFinished
                 ? artifact.id === 'restored-project-setup'
@@ -146,7 +144,7 @@ export const Artifact = memo(({ artifactId }: ArtifactProps) => {
             >
               <div className="bg-bolt-elements-artifacts-borderColor h-[1px]" />
 
-              <div className="p-5 text-left bg-bolt-elements-actions-background">
+              <div className="px-3 py-2.5 text-left bg-bolt-elements-actions-background">
                 <ActionList actions={actions} />
               </div>
             </motion.div>
