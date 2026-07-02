@@ -129,14 +129,51 @@ export async function autoConnectVercel() {
   }
 }
 
-export function initializeVercelConnection() {
+export async function initializeVercelConnection() {
   // Auto-connect using environment variable if available
   const envToken = import.meta.env?.VITE_VERCEL_ACCESS_TOKEN;
 
-  if (envToken && !vercelConnection.get().token) {
-    updateVercelConnection({ token: envToken });
-    fetchVercelStats(envToken).catch(console.error);
+  if (!envToken || vercelConnection.get().user) {
+    return;
   }
+
+  try {
+    const response = await fetch('https://api.vercel.com/v2/user', {
+      headers: {
+        Authorization: `Bearer ${envToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Vercel API error: ${response.status}`);
+    }
+
+    const userData = (await response.json()) as any;
+
+    updateVercelConnection({
+      user: userData.user || userData,
+      token: envToken,
+    });
+
+    // Fetch stats now that we have a confirmed connection
+    await fetchVercelStats(envToken);
+  } catch (error) {
+    console.error('Failed to auto-connect to Vercel:', error);
+    logStore.logError(`Vercel auto-connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`, {
+      type: 'system',
+      message: 'Vercel auto-connection failed',
+    });
+  }
+}
+
+/*
+ * Run auto-connect as soon as this module loads in the browser, so an env-provided
+ * token connects immediately without requiring the user to open Settings > Vercel first.
+ * (initializeVercelConnection previously had no caller outside that Settings tab.)
+ */
+if (typeof window !== 'undefined') {
+  initializeVercelConnection();
 }
 
 export const fetchVercelStatsViaAPI = fetchVercelStats;
