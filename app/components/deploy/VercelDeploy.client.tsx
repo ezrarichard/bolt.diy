@@ -7,6 +7,7 @@ import { path } from '~/utils/path';
 import { useState } from 'react';
 import type { ActionCallbackData } from '~/lib/runtime/message-parser';
 import { chatId } from '~/lib/persistence/useChatHistory';
+import { description } from '~/lib/persistence';
 import { formatBuildFailureOutput } from './deployUtils';
 
 export function useVercelDeploy() {
@@ -190,6 +191,7 @@ export function useVercelDeploy() {
           sourceFiles: allProjectFiles,
           token: vercelConn.token,
           chatId: currentChatId,
+          projectTitle: description.value || artifact.title || undefined,
         }),
       });
 

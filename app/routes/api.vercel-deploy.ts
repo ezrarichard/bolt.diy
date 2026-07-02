@@ -237,14 +237,43 @@ interface DeployRequestBody {
   sourceFiles?: Record<string, string>;
   chatId: string;
   framework?: string;
+  projectTitle?: string;
+}
+
+const VERCEL_PROJECT_PREFIX = 'builders';
+const MAX_SLUG_LENGTH = 50; // keep the final name comfortably under Vercel's 100-char project name limit
+
+// Turn a chat/project title into a lowercase, hyphen-separated, Vercel-safe slug
+function slugifyProjectTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, '') // strip anything that isn't a letter, digit, space or hyphen
+    .replace(/\s+/g, '-') // collapse whitespace into hyphens
+    .replace(/-+/g, '-') // collapse repeated hyphens
+    .replace(/^-|-$/g, '') // trim leading/trailing hyphens
+    .slice(0, MAX_SLUG_LENGTH)
+    .replace(/-$/, ''); // avoid a trailing hyphen left by the length cut
+}
+
+// Generate a Vercel-safe project name, preferring a clean slug from the chat/project title
+function generateVercelProjectName(chatId: string, projectTitle?: string): string {
+  const slug = projectTitle ? slugifyProjectTitle(projectTitle) : '';
+
+  if (slug) {
+    return `${VERCEL_PROJECT_PREFIX}-${slug}`;
+  }
+
+  return `${VERCEL_PROJECT_PREFIX}-${chatId}-${Date.now()}`;
 }
 
 // Existing action function for POST requests
 export async function action({ request }: ActionFunctionArgs) {
   try {
-    const { projectId, files, sourceFiles, token, chatId, framework } = (await request.json()) as DeployRequestBody & {
-      token: string;
-    };
+    const { projectId, files, sourceFiles, token, chatId, framework, projectTitle } =
+      (await request.json()) as DeployRequestBody & {
+        token: string;
+      };
 
     if (!token) {
       return json({ error: 'Not connected to Vercel' }, { status: 401 });
@@ -263,7 +292,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // If no projectId provided, create a new project
     if (!targetProjectId) {
-      const projectName = `bolt-diy-${chatId}-${Date.now()}`;
+      const projectName = generateVercelProjectName(chatId, projectTitle);
       const createProjectResponse = await fetch('https://api.vercel.com/v9/projects', {
         method: 'POST',
         headers: {
@@ -310,7 +339,7 @@ export async function action({ request }: ActionFunctionArgs) {
         };
       } else {
         // If project doesn't exist, create a new one
-        const projectName = `bolt-diy-${chatId}-${Date.now()}`;
+        const projectName = generateVercelProjectName(chatId, projectTitle);
         const createProjectResponse = await fetch('https://api.vercel.com/v9/projects', {
           method: 'POST',
           headers: {
