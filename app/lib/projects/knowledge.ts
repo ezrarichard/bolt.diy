@@ -34,6 +34,9 @@ export interface ProjectKnowledge {
   /** How the product makes money / its business model, if relevant. */
   businessModel?: string;
 
+  /** The industry/vertical this product operates in, e.g. "Construction", "Retail". */
+  industry?: string;
+
   /** The product's core features. */
   coreFeatures?: string[];
 
@@ -192,6 +195,7 @@ export function isRequirementsCaptured(knowledge: ProjectKnowledge | undefined):
     hasText(knowledge.projectVision) ||
     hasText(knowledge.targetUsers) ||
     hasText(knowledge.businessModel) ||
+    hasText(knowledge.industry) ||
     hasList(knowledge.coreFeatures) ||
     hasList(knowledge.pagesOrScreens) ||
     hasList(knowledge.userRoles) ||

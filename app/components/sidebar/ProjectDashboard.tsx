@@ -8,6 +8,7 @@ import { PROJECT_COLOR_CLASSES } from './ProjectListItem';
 import BackgroundRays from '~/components/ui/BackgroundRays';
 import { blueprintEngine, type RoadmapItemStatus } from '~/lib/blueprints';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
+import { projectKnowledgeEngine, type ReadinessStageStatus } from '~/lib/projects/projectKnowledgeEngine';
 import { ProjectRequirementsDialog } from './ProjectRequirementsDialog';
 
 interface ProjectDashboardProps {
@@ -168,6 +169,53 @@ function RequirementsRow({ label, value }: RequirementsRowProps) {
   );
 }
 
+/**
+ * Sprint 10 — status meta for the Project Readiness panel (Task 5). Purely
+ * presentational; status/percent always come from
+ * projectKnowledgeEngine.getReadiness(project).
+ */
+const READINESS_STATUS_META: Record<
+  ReadinessStageStatus,
+  { icon: string; className: string; label: (percent?: number) => string }
+> = {
+  'not-started': {
+    icon: 'i-ph:circle-dashed',
+    className: 'text-bolt-elements-textTertiary',
+    label: () => 'Not Started',
+  },
+  'in-progress': {
+    icon: 'i-ph:circle-half-duotone',
+    className: 'text-amber-600 dark:text-amber-400',
+    label: (percent) => `${percent ?? 0}%`,
+  },
+  completed: {
+    icon: 'i-ph:check-circle-duotone',
+    className: 'text-green-600 dark:text-green-400',
+    label: () => 'Completed',
+  },
+};
+
+interface ReadinessRowProps {
+  label: string;
+  status: ReadinessStageStatus;
+  percent?: number;
+}
+
+/** One row in the Project Readiness panel — icon, label, and status/percent. */
+function ReadinessRow({ label, status, percent }: ReadinessRowProps) {
+  const meta = READINESS_STATUS_META[status];
+
+  return (
+    <div className="flex items-center justify-between gap-3 py-2">
+      <div className="flex items-center gap-2.5">
+        <span className={classNames(meta.icon, 'w-4 h-4 shrink-0', meta.className)} />
+        <span className="text-sm text-bolt-elements-textSecondary">{label}</span>
+      </div>
+      <span className={classNames('text-xs font-medium', meta.className)}>{meta.label(percent)}</span>
+    </div>
+  );
+}
+
 interface ProjectProgressCardProps {
   completed: number;
   total: number;
@@ -265,6 +313,16 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
    */
   const knowledge = getProjectKnowledge(project);
   const requirementsCaptured = isRequirementsCaptured(knowledge);
+
+  /*
+   * Sprint 10 — Project Readiness. The high-level, at-a-glance progress
+   * indicator across the whole project lifecycle. Requirements/Roadmap are
+   * computed from real local data via projectKnowledgeEngine; the remaining
+   * stages (Design/Database/Frontend/Backend/Deployment) have no data
+   * source yet in this sprint and always read "Not Started" until a future
+   * sprint wires real signals into them.
+   */
+  const readiness = projectKnowledgeEngine.getReadiness(project);
 
   return (
     <>
@@ -382,6 +440,33 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       </div>
                     </div>
 
+                    {/* Project Readiness — Sprint 10 */}
+                    <div>
+                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                        Project Readiness
+                      </h2>
+                      <div
+                        className={classNames(
+                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                          'grid grid-cols-1 sm:grid-cols-2 gap-x-8 divide-y divide-bolt-elements-borderColor/20 sm:divide-y-0',
+                        )}
+                      >
+                        {readiness.map((stage) => (
+                          <ReadinessRow
+                            key={stage.id}
+                            label={stage.label}
+                            status={stage.status}
+                            percent={stage.percent}
+                          />
+                        ))}
+                      </div>
+                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                        Readiness is computed locally from Requirements and Roadmap progress — Design, Database,
+                        Frontend, Backend, and Deployment become available in future sprints.
+                      </div>
+                    </div>
+
                     {/* Blueprint Overview */}
                     {blueprint && (
                       <div>
@@ -469,16 +554,21 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                         <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">
                           Requirements & Knowledge
                         </h2>
-                        <span
-                          className={classNames(
-                            'text-[11px] font-medium px-2 py-0.5 rounded-full border',
-                            requirementsCaptured
-                              ? 'text-green-600 dark:text-green-400 border-green-500/30 bg-green-500/10'
-                              : 'text-bolt-elements-textTertiary border-bolt-elements-borderColor/50',
-                          )}
-                        >
-                          {requirementsCaptured ? 'Requirements captured' : 'Requirements missing'}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-medium text-bolt-elements-textTertiary">
+                            {projectKnowledgeEngine.getCompletion(knowledge).overall}% complete
+                          </span>
+                          <span
+                            className={classNames(
+                              'text-[11px] font-medium px-2 py-0.5 rounded-full border',
+                              requirementsCaptured
+                                ? 'text-green-600 dark:text-green-400 border-green-500/30 bg-green-500/10'
+                                : 'text-bolt-elements-textTertiary border-bolt-elements-borderColor/50',
+                            )}
+                          >
+                            {requirementsCaptured ? 'Requirements captured' : 'Requirements missing'}
+                          </span>
+                        </div>
                       </div>
 
                       {!requirementsCaptured ? (

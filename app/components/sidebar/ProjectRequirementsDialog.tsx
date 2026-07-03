@@ -1,9 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import * as RadixDialog from '@radix-ui/react-dialog';
 import { toast } from 'react-toastify';
 import { classNames } from '~/utils/classNames';
 import { getProjectKnowledge, updateProjectKnowledge, type Project } from '~/lib/stores/projects';
 import { getProjectKnowledgeHints, type ProjectKnowledge } from '~/lib/projects/knowledge';
+import {
+  projectKnowledgeEngine,
+  KNOWLEDGE_SECTIONS,
+  type KnowledgeFieldConfig,
+  type KnowledgeFieldKey,
+  type KnowledgeSectionId,
+  type SectionCompletionStatus,
+} from '~/lib/projects/projectKnowledgeEngine';
+import { blueprintEngine } from '~/lib/blueprints';
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '~/components/ui/Collapsible';
 
 interface ProjectRequirementsDialogProps {
   project: Project | null;
@@ -12,65 +22,29 @@ interface ProjectRequirementsDialogProps {
 }
 
 /*
- * Phase 2 Sprint 9 — editable local form for a project's structured
- * Project Knowledge (see app/lib/projects/knowledge.ts). This is a plain
- * local form: no AI call, no generation, nothing here talks to GitHub,
- * Supabase, or any provider. Saving just calls updateProjectKnowledge(),
- * which merges into the project and persists to localStorage exactly like
- * every other project write.
- *
- * List-style fields (Core Features, Pages/Screens, User Roles,
- * Integrations, Payments, Compliance, Shipping, Languages) are edited as
- * comma-separated text for now, per spec ("allow comma-separated input for
- * now") — parsed into string[] only on save.
+ * Phase 2 Sprint 10 — grouped, collapsible Requirements form driven entirely
+ * by `projectKnowledgeEngine`/`KNOWLEDGE_SECTIONS` (see
+ * app/lib/projects/projectKnowledgeEngine.ts). No section/field list is
+ * hardcoded here — this component only renders whatever the engine
+ * describes, computes completion/summary from the in-progress form state,
+ * and saves via the same updateProjectKnowledge() used since Sprint 9. No
+ * AI call, no generation, nothing here talks to GitHub, Supabase, or any
+ * provider.
  */
 
-/** In-progress form state — list fields are kept as raw comma-separated text while editing. */
-interface RequirementsFormState {
-  projectVision: string;
-  targetUsers: string;
-  coreFeatures: string;
-  pagesOrScreens: string;
-  userRoles: string;
-  integrations: string;
-  paymentNeeds: string;
-  complianceNeeds: string;
-  shippingNeeds: string;
-  languages: string;
-  location: string;
-  notes: string;
-}
+type FormState = Record<KnowledgeFieldKey, string>;
 
-const EMPTY_FORM_STATE: RequirementsFormState = {
-  projectVision: '',
-  targetUsers: '',
-  coreFeatures: '',
-  pagesOrScreens: '',
-  userRoles: '',
-  integrations: '',
-  paymentNeeds: '',
-  complianceNeeds: '',
-  shippingNeeds: '',
-  languages: '',
-  location: '',
-  notes: '',
-};
+function knowledgeToFormState(knowledge: ProjectKnowledge | undefined): FormState {
+  const state = {} as FormState;
 
-function knowledgeToFormState(knowledge: ProjectKnowledge | undefined): RequirementsFormState {
-  return {
-    projectVision: knowledge?.projectVision ?? '',
-    targetUsers: knowledge?.targetUsers ?? '',
-    coreFeatures: (knowledge?.coreFeatures ?? []).join(', '),
-    pagesOrScreens: (knowledge?.pagesOrScreens ?? []).join(', '),
-    userRoles: (knowledge?.userRoles ?? []).join(', '),
-    integrations: (knowledge?.integrations ?? []).join(', '),
-    paymentNeeds: (knowledge?.paymentNeeds ?? []).join(', '),
-    complianceNeeds: (knowledge?.complianceNeeds ?? []).join(', '),
-    shippingNeeds: (knowledge?.shippingNeeds ?? []).join(', '),
-    languages: (knowledge?.languages ?? []).join(', '),
-    location: knowledge?.location ?? '',
-    notes: knowledge?.notes ?? '',
-  };
+  for (const section of KNOWLEDGE_SECTIONS) {
+    for (const field of section.fields) {
+      const value = knowledge?.[field.key];
+      state[field.key] = Array.isArray(value) ? value.join(', ') : (value ?? '');
+    }
+  }
+
+  return state;
 }
 
 /** Splits "a, b,, c" into ['a', 'b', 'c'] — trims and drops empty entries. */
@@ -81,21 +55,53 @@ function parseList(raw: string): string[] {
     .filter((item) => item.length > 0);
 }
 
-function formStateToKnowledge(form: RequirementsFormState): Partial<ProjectKnowledge> {
-  return {
-    projectVision: form.projectVision.trim() || undefined,
-    targetUsers: form.targetUsers.trim() || undefined,
-    coreFeatures: parseList(form.coreFeatures),
-    pagesOrScreens: parseList(form.pagesOrScreens),
-    userRoles: parseList(form.userRoles),
-    integrations: parseList(form.integrations),
-    paymentNeeds: parseList(form.paymentNeeds),
-    complianceNeeds: parseList(form.complianceNeeds),
-    shippingNeeds: parseList(form.shippingNeeds),
-    languages: parseList(form.languages),
-    location: form.location.trim() || undefined,
-    notes: form.notes.trim() || undefined,
-  };
+function formStateToKnowledge(form: FormState): ProjectKnowledge {
+  const knowledge: Record<string, unknown> = {};
+
+  for (const section of KNOWLEDGE_SECTIONS) {
+    for (const field of section.fields) {
+      const raw = form[field.key] ?? '';
+      knowledge[field.key] = field.kind === 'list' ? parseList(raw) : raw.trim() || undefined;
+    }
+  }
+
+  return knowledge as ProjectKnowledge;
+}
+
+const SECTION_STATE_STORAGE_KEY = 'builder_requirements_section_state';
+
+function defaultSectionState(): Record<KnowledgeSectionId, boolean> {
+  return Object.fromEntries(KNOWLEDGE_SECTIONS.map((section) => [section.id, section.defaultExpanded])) as Record<
+    KnowledgeSectionId,
+    boolean
+  >;
+}
+
+/** Task 2 — remembers which sections are expanded/collapsed across sessions, local only. */
+function loadSectionState(): Record<KnowledgeSectionId, boolean> {
+  const defaults = defaultSectionState();
+
+  if (typeof window === 'undefined') {
+    return defaults;
+  }
+
+  try {
+    const stored = localStorage.getItem(SECTION_STATE_STORAGE_KEY);
+
+    if (stored) {
+      return { ...defaults, ...JSON.parse(stored) };
+    }
+  } catch (error) {
+    console.error('Failed to load requirements section state:', error);
+  }
+
+  return defaults;
+}
+
+function persistSectionState(state: Record<KnowledgeSectionId, boolean>) {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(SECTION_STATE_STORAGE_KEY, JSON.stringify(state));
+  }
 }
 
 const textInputClasses = classNames(
@@ -105,31 +111,59 @@ const textInputClasses = classNames(
   'border border-gray-200 dark:border-bolt-elements-borderColor',
 );
 
-interface FieldProps {
-  label: string;
-  hint?: string;
+function FieldLabel({ label, hint, recommended }: { label: string; hint?: string; recommended?: boolean }) {
+  return (
+    <div className="flex items-center gap-2 mb-1.5">
+      <label className="block text-xs font-medium text-bolt-elements-textTertiary">
+        {label}
+        {hint && <span className="ml-2 normal-case font-normal text-bolt-elements-textTertiary/70">{hint}</span>}
+      </label>
+      {recommended && (
+        <span className="text-[9px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded-full border border-purple-500/30 text-purple-600 dark:text-purple-300 shrink-0">
+          Recommended
+        </span>
+      )}
+    </div>
+  );
 }
 
-function FieldLabel({ label, hint }: FieldProps) {
+const SECTION_STATUS_META: Record<SectionCompletionStatus, { label: (percent: number) => string; className: string }> =
+  {
+    'not-started': {
+      label: () => 'Not Started',
+      className: 'text-bolt-elements-textTertiary border-bolt-elements-borderColor/50',
+    },
+    'in-progress': {
+      label: (percent) => `${percent}%`,
+      className: 'text-amber-600 dark:text-amber-400 border-amber-500/30',
+    },
+    completed: {
+      label: () => '✔ Completed',
+      className: 'text-green-600 dark:text-green-400 border-green-500/30',
+    },
+  };
+
+function SectionCompletionBadge({ status, percent }: { status: SectionCompletionStatus; percent: number }) {
+  const meta = SECTION_STATUS_META[status];
+
   return (
-    <label className="block text-xs font-medium text-bolt-elements-textTertiary mb-1.5">
-      {label}
-      {hint && <span className="ml-2 normal-case font-normal text-bolt-elements-textTertiary/70">{hint}</span>}
-    </label>
+    <span className={classNames('text-[11px] font-medium px-2 py-0.5 rounded-full border shrink-0', meta.className)}>
+      {meta.label(percent)}
+    </span>
   );
 }
 
 export function ProjectRequirementsDialog({ project, open, onClose }: ProjectRequirementsDialogProps) {
-  const [form, setForm] = useState<RequirementsFormState>(EMPTY_FORM_STATE);
+  const [form, setForm] = useState<FormState>(() => knowledgeToFormState(undefined));
+  const [expandedSections, setExpandedSections] = useState<Record<KnowledgeSectionId, boolean>>(() =>
+    loadSectionState(),
+  );
 
-  /*
-   * Sprint 9 (Task 5) — blueprint-aware placeholder hints only. These are
-   * never written into `form` automatically; they're passed as the
-   * `placeholder` attribute so the user sees a helpful example and still
-   * has to type (or the field stays empty on save) — nothing is prefilled
-   * as a real value unless the user saves it themselves.
-   */
   const hints = getProjectKnowledgeHints(project?.blueprintId);
+  const blueprint = project
+    ? (blueprintEngine.getBlueprint(project.blueprintId) ?? blueprintEngine.getDefaultBlueprint())
+    : undefined;
+  const recommendedFields = projectKnowledgeEngine.getRecommendedFields(project?.blueprintId);
 
   // Reset the form from the project's saved knowledge every time the dialog opens for a project.
   useEffect(() => {
@@ -137,6 +171,26 @@ export function ProjectRequirementsDialog({ project, open, onClose }: ProjectReq
       setForm(knowledgeToFormState(project ? getProjectKnowledge(project) : undefined));
     }
   }, [open, project]);
+
+  const liveKnowledge = useMemo(() => formStateToKnowledge(form), [form]);
+  const completion = useMemo(() => projectKnowledgeEngine.getCompletion(liveKnowledge), [liveKnowledge]);
+  const missingFields = useMemo(
+    () => projectKnowledgeEngine.getMissingFields(liveKnowledge, project?.blueprintId),
+    [liveKnowledge, project],
+  );
+  const summary = useMemo(
+    () => projectKnowledgeEngine.getSummary(liveKnowledge, blueprint?.name),
+    [liveKnowledge, blueprint],
+  );
+
+  const toggleSection = (id: KnowledgeSectionId, next: boolean) => {
+    setExpandedSections((prev) => {
+      const updated = { ...prev, [id]: next };
+      persistSectionState(updated);
+
+      return updated;
+    });
+  };
 
   const handleClose = () => {
     // Cancel discards in-progress edits — nothing is persisted.
@@ -153,10 +207,38 @@ export function ProjectRequirementsDialog({ project, open, onClose }: ProjectReq
     onClose();
   };
 
-  const update =
-    (field: keyof RequirementsFormState) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-      setForm((prev) => ({ ...prev, [field]: event.target.value }));
-    };
+  const update = (key: KnowledgeFieldKey) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setForm((prev) => ({ ...prev, [key]: event.target.value }));
+  };
+
+  function renderField(field: KnowledgeFieldConfig) {
+    const hintText = (hints as Partial<Record<KnowledgeFieldKey, string>>)[field.key];
+    const placeholder = hintText ?? field.placeholder;
+    const isRecommended = recommendedFields.includes(field.key);
+    const listHint = field.kind === 'list' ? '(comma-separated)' : undefined;
+
+    return (
+      <div key={field.key} className={field.kind === 'textarea' ? 'sm:col-span-2' : undefined}>
+        <FieldLabel label={field.label} hint={listHint} recommended={isRecommended} />
+        {field.kind === 'textarea' ? (
+          <textarea
+            className={classNames(textInputClasses, 'min-h-[72px] resize-y')}
+            placeholder={placeholder}
+            value={form[field.key] ?? ''}
+            onChange={update(field.key)}
+          />
+        ) : (
+          <input
+            className={textInputClasses}
+            type="text"
+            placeholder={placeholder}
+            value={form[field.key] ?? ''}
+            onChange={update(field.key)}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <RadixDialog.Root open={open} onOpenChange={(next) => !next && handleClose()}>
@@ -167,7 +249,7 @@ export function ProjectRequirementsDialog({ project, open, onClose }: ProjectReq
           <RadixDialog.Content aria-describedby={undefined} onEscapeKeyDown={handleClose} className="relative z-[111]">
             <div
               className={classNames(
-                'w-[760px] max-w-[92vw] max-h-[85vh]',
+                'w-[900px] max-w-[94vw] max-h-[88vh]',
                 'bg-bolt-elements-background-depth-1',
                 'rounded-2xl shadow-2xl',
                 'border border-bolt-elements-borderColor',
@@ -199,145 +281,120 @@ export function ProjectRequirementsDialog({ project, open, onClose }: ProjectReq
 
               {/* Body */}
               <div className="flex-1 overflow-y-auto px-8 py-6 space-y-5">
-                <div>
-                  <FieldLabel label="Project Vision" />
-                  <textarea
-                    className={classNames(textInputClasses, 'min-h-[72px] resize-y')}
-                    placeholder="What is this product, in a sentence or two?"
-                    value={form.projectVision}
-                    onChange={update('projectVision')}
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                {/* Task 3/6 — overall completion + live, auto-generated summary. */}
+                <div
+                  className={classNames(
+                    'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                    'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                    'grid grid-cols-1 md:grid-cols-2 gap-6',
+                  )}
+                >
                   <div>
-                    <FieldLabel label="Target Users" />
-                    <input
-                      className={textInputClasses}
-                      type="text"
-                      placeholder={hints.targetUsers ?? 'Who is this for?'}
-                      value={form.targetUsers}
-                      onChange={update('targetUsers')}
-                    />
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+                      Requirements Completion
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-bolt-elements-background-depth-2 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-purple-500 transition-all duration-300 ease-out"
+                        style={{ width: `${completion.overall}%` }}
+                      />
+                    </div>
+                    <div className="text-xs text-bolt-elements-textTertiary mt-2">{completion.overall}% Overall</div>
+
+                    {missingFields.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {missingFields.map((field) => (
+                          <span
+                            key={field.key}
+                            className="text-[10px] px-2 py-0.5 rounded-full border border-amber-500/30 text-amber-600 dark:text-amber-400"
+                          >
+                            {field.label} recommended
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div>
-                    <FieldLabel label="Region / Location" />
-                    <input
-                      className={textInputClasses}
-                      type="text"
-                      placeholder="e.g. India, Tamil Nadu, Global"
-                      value={form.location}
-                      onChange={update('location')}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                  <div>
-                    <FieldLabel label="Core Features" hint="(comma-separated)" />
-                    <input
-                      className={textInputClasses}
-                      type="text"
-                      placeholder={hints.coreFeatures ?? 'e.g. Login, Search, Checkout'}
-                      value={form.coreFeatures}
-                      onChange={update('coreFeatures')}
-                    />
-                  </div>
-
-                  <div>
-                    <FieldLabel label="Pages / Screens" hint="(comma-separated)" />
-                    <input
-                      className={textInputClasses}
-                      type="text"
-                      placeholder={hints.pagesOrScreens ?? 'e.g. Home, Dashboard, Settings'}
-                      value={form.pagesOrScreens}
-                      onChange={update('pagesOrScreens')}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                  <div>
-                    <FieldLabel label="User Roles" hint="(comma-separated)" />
-                    <input
-                      className={textInputClasses}
-                      type="text"
-                      placeholder={hints.userRoles ?? 'e.g. Admin, Member'}
-                      value={form.userRoles}
-                      onChange={update('userRoles')}
-                    />
-                  </div>
-
-                  <div>
-                    <FieldLabel label="Integrations" hint="(comma-separated)" />
-                    <input
-                      className={textInputClasses}
-                      type="text"
-                      placeholder={hints.integrations ?? 'e.g. WhatsApp, Google Maps'}
-                      value={form.integrations}
-                      onChange={update('integrations')}
-                    />
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+                      Live Summary{summary.productType ? ` — ${summary.productType}` : ''}
+                    </div>
+                    <div className="space-y-1 text-xs text-bolt-elements-textSecondary">
+                      <div>
+                        <span className="text-bolt-elements-textTertiary">Target: </span>
+                        {summary.target || 'Not set'}
+                      </div>
+                      <div>
+                        <span className="text-bolt-elements-textTertiary">Audience: </span>
+                        {summary.audience || 'Not set'}
+                      </div>
+                      <div>
+                        <span className="text-bolt-elements-textTertiary">Languages: </span>
+                        {summary.languages.length > 0 ? summary.languages.join(', ') : 'Not set'}
+                      </div>
+                      <div>
+                        <span className="text-bolt-elements-textTertiary">Pages: </span>
+                        {summary.pages.length > 0 ? summary.pages.join(', ') : 'Not set'}
+                      </div>
+                      <div>
+                        <span className="text-bolt-elements-textTertiary">Payments: </span>
+                        {summary.payments.length > 0 ? summary.payments.join(', ') : 'None'}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                  <div>
-                    <FieldLabel label="Payments" hint="(comma-separated)" />
-                    <input
-                      className={textInputClasses}
-                      type="text"
-                      placeholder={hints.paymentNeeds ?? 'e.g. Razorpay, UPI, PhonePe, Paytm, Cashfree'}
-                      value={form.paymentNeeds}
-                      onChange={update('paymentNeeds')}
-                    />
-                  </div>
+                {/* Task 1/2 — grouped, collapsible sections. */}
+                {KNOWLEDGE_SECTIONS.map((section) => {
+                  const sectionCompletion = completion.sections.find((entry) => entry.id === section.id);
+                  const expanded = expandedSections[section.id];
 
-                  <div>
-                    <FieldLabel label="Compliance" hint="(comma-separated)" />
-                    <input
-                      className={textInputClasses}
-                      type="text"
-                      placeholder={hints.complianceNeeds ?? 'e.g. GST, Invoice generation'}
-                      value={form.complianceNeeds}
-                      onChange={update('complianceNeeds')}
-                    />
-                  </div>
-                </div>
+                  return (
+                    <Collapsible
+                      key={section.id}
+                      open={expanded}
+                      onOpenChange={(next) => toggleSection(section.id, next)}
+                    >
+                      <div
+                        className={classNames(
+                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4',
+                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                        )}
+                      >
+                        <CollapsibleTrigger asChild>
+                          <button
+                            type="button"
+                            className="w-full flex items-center justify-between gap-3 bg-transparent text-left appearance-none focus:outline-none"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={classNames(
+                                  'i-ph:caret-right w-3.5 h-3.5 text-bolt-elements-textTertiary transition-transform duration-150',
+                                  expanded && 'rotate-90',
+                                )}
+                              />
+                              <span className="text-sm font-semibold text-bolt-elements-textPrimary">
+                                {section.label}
+                              </span>
+                            </div>
+                            {sectionCompletion && (
+                              <SectionCompletionBadge
+                                status={sectionCompletion.status}
+                                percent={sectionCompletion.percent}
+                              />
+                            )}
+                          </button>
+                        </CollapsibleTrigger>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                  <div>
-                    <FieldLabel label="Shipping" hint="(comma-separated)" />
-                    <input
-                      className={textInputClasses}
-                      type="text"
-                      placeholder={hints.shippingNeeds ?? 'e.g. Shiprocket, Delhivery'}
-                      value={form.shippingNeeds}
-                      onChange={update('shippingNeeds')}
-                    />
-                  </div>
-
-                  <div>
-                    <FieldLabel label="Languages" hint="(comma-separated)" />
-                    <input
-                      className={textInputClasses}
-                      type="text"
-                      placeholder="e.g. English, Hindi, Tamil, Malayalam"
-                      value={form.languages}
-                      onChange={update('languages')}
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <FieldLabel label="Notes" />
-                  <textarea
-                    className={classNames(textInputClasses, 'min-h-[72px] resize-y')}
-                    placeholder={hints.notes ?? 'Anything else worth capturing.'}
-                    value={form.notes}
-                    onChange={update('notes')}
-                  />
-                </div>
+                        <CollapsibleContent>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 pt-4">
+                            {section.fields.map((field) => renderField(field))}
+                          </div>
+                        </CollapsibleContent>
+                      </div>
+                    </Collapsible>
+                  );
+                })}
               </div>
 
               {/* Footer */}
