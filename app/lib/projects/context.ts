@@ -1,5 +1,6 @@
 import { blueprintEngine, type BlueprintCategory } from '~/lib/blueprints';
-import type { Project } from '~/lib/stores/projects';
+import { getProjectKnowledge, type Project } from '~/lib/stores/projects';
+import type { ProjectKnowledge } from '~/lib/projects/knowledge';
 
 /**
  * Project Workspace Context — Sprint 6.
@@ -33,6 +34,15 @@ export interface ProjectBlueprintContext {
 export interface ProjectContextSummary {
   project: ProjectWorkspaceContext;
   blueprint: ProjectBlueprintContext;
+
+  /**
+   * Phase 2 Sprint 9 — structured product knowledge (see
+   * app/lib/projects/knowledge.ts), when the project has any saved.
+   * undefined when nothing has been captured yet. Structured data only —
+   * not used in any AI prompt yet; a future sprint's AI Project Manager
+   * will read this.
+   */
+  knowledge?: ProjectKnowledge;
 }
 
 /** The project's own fields, structured for UI consumption. */
@@ -66,11 +76,12 @@ export function getProjectBlueprintContext(project: Project): ProjectBlueprintCo
   };
 }
 
-/** Combined project + blueprint context — the one-stop shape most UI consumers want. */
+/** Combined project + blueprint (+ knowledge, when present) context — the one-stop shape most UI consumers want. */
 export function getProjectContextSummary(project: Project): ProjectContextSummary {
   return {
     project: getProjectWorkspaceContext(project),
     blueprint: getProjectBlueprintContext(project),
+    knowledge: getProjectKnowledge(project),
   };
 }
 

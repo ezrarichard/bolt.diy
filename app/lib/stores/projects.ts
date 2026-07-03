@@ -1,5 +1,6 @@
 import { atom } from 'nanostores';
 import type { RoadmapItemStatus } from '~/lib/blueprints';
+import type { ProjectKnowledge } from '~/lib/projects/knowledge';
 
 /**
  * Project data model — Sprint 1 (UI-only).
@@ -39,6 +40,16 @@ export interface Project {
    */
   roadmapStatus?: Record<string, RoadmapItemStatus>;
 
+  /**
+   * Phase 2 Sprint 9 — structured product knowledge captured before any AI
+   * generation happens (see app/lib/projects/knowledge.ts for the shape and
+   * the Blueprint -> Requirements -> Project Knowledge -> Roadmap -> ...
+   * layering this belongs to). Local-only, same localStorage persistence as
+   * the rest of Project — no backend, no IndexedDB. Not present until the
+   * user saves the Requirements dialog at least once.
+   */
+  projectKnowledge?: ProjectKnowledge;
+
   // Future fields — intentionally unset in Sprint 1.
   githubRepo?: string;
   supabaseProjectId?: string;
@@ -52,52 +63,29 @@ export interface Project {
 
 const STORAGE_KEY = 'builder_projects';
 
-const MOCK_PROJECTS: Project[] = [
-  {
-    id: 'proj-builders-platform',
-    name: 'Builders Platform',
-    description: 'The internal AI engineering platform itself.',
-    icon: '🚀',
-    color: 'purple',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'proj-localshop-india',
-    name: 'LocalShop India',
-    description: 'Local commerce storefront.',
-    icon: '🏪',
-    color: 'orange',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'proj-ai-advertising',
-    name: 'AI Advertising',
-    description: 'AI-driven ad platform.',
-    icon: '🤖',
-    color: 'blue',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'proj-company-website',
-    name: 'Company Website',
-    description: 'Marketing site.',
-    icon: '🌐',
-    color: 'green',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'proj-mobile-app',
-    name: 'Mobile App',
-    description: 'Companion mobile app.',
-    icon: '📱',
-    color: 'pink',
-    createdAt: new Date().toISOString(),
-  },
-];
+/**
+ * Sprint 9 — ids of the Sprint 1-era mock/demo projects (Builders Platform,
+ * LocalShop India, AI Advertising, Company Website, Mobile App). They used
+ * to be the in-memory fallback returned by loadProjects() whenever
+ * localStorage was empty; because addProject() built new arrays off of
+ * whatever loadProjects() returned, creating your very first real project
+ * would silently persist these mock entries alongside it, making them look
+ * like real user projects forever after. They are stripped out below (both
+ * from the fallback and from anything already persisted) — this does not
+ * touch blueprint definitions (app/lib/blueprints/registry.ts), which are
+ * unrelated and still power the New Project blueprint picker.
+ */
+const LEGACY_MOCK_PROJECT_IDS = new Set([
+  'proj-builders-platform',
+  'proj-localshop-india',
+  'proj-ai-advertising',
+  'proj-company-website',
+  'proj-mobile-app',
+]);
 
 function loadProjects(): Project[] {
   if (typeof window === 'undefined') {
-    return MOCK_PROJECTS;
+    return [];
   }
 
   try {
@@ -106,15 +94,27 @@ function loadProjects(): Project[] {
     if (stored) {
       const parsed = JSON.parse(stored);
 
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+      if (Array.isArray(parsed)) {
+        const cleaned = parsed.filter(
+          (project) => project && typeof project.id === 'string' && !LEGACY_MOCK_PROJECT_IDS.has(project.id),
+        );
+
+        if (cleaned.length !== parsed.length) {
+          /*
+           * One-time cleanup — re-persist without the legacy mock entries so
+           * they don't reappear on the next load.
+           */
+          persist(cleaned);
+        }
+
+        return cleaned;
       }
     }
   } catch (error) {
     console.error('Failed to load projects from localStorage:', error);
   }
 
-  return MOCK_PROJECTS;
+  return [];
 }
 
 export const projectsStore = atom<Project[]>(loadProjects());
@@ -181,6 +181,28 @@ export function addProject(input: {
 }
 
 /**
+ * Sprint 9 — remove a project from the local project store only.
+ *
+ * This never touches chat history/persistence, GitHub, Supabase, or any
+ * deployment — it only filters projectsStore and re-persists to
+ * localStorage, exactly like every other write in this file. If the
+ * deleted project was the active one, the active-project selection (and
+ * the Project Dashboard, if it happened to be open for this project) is
+ * cleared so the UI doesn't end up pointing at a project that no longer
+ * exists.
+ */
+export function deleteProject(projectId: string): void {
+  const next = projectsStore.get().filter((project) => project.id !== projectId);
+  projectsStore.set(next);
+  persist(next);
+
+  if (currentProjectIdStore.get() === projectId) {
+    currentProjectIdStore.set(null);
+    isProjectDashboardOpenStore.set(false);
+  }
+}
+
+/**
  * Sprint 8 — read a roadmap item's status for a project. Defaults to
  * "not-started" when nothing has been stored for that key yet, matching
  * the roadmap item's implicit default before any interaction.
@@ -204,6 +226,57 @@ export function setRoadmapItemStatus(projectId: string, itemKey: string, status:
         ? { ...project, roadmapStatus: { ...project.roadmapStatus, [itemKey]: status } }
         : project,
     );
+  projectsStore.set(next);
+  persist(next);
+}
+
+/**
+ * Phase 2 Sprint 9 — read a project's Project Knowledge. Returns undefined
+ * when nothing has been saved yet (see ProjectDashboard's empty state).
+ */
+export function getProjectKnowledge(project: Project): ProjectKnowledge | undefined {
+  return project.projectKnowledge;
+}
+
+/**
+ * Phase 2 Sprint 9 — merge partial Project Knowledge into a project and
+ * persist it. Local-only (localStorage via the existing persist()), same
+ * pattern as setRoadmapItemStatus/addProject. A shallow merge is
+ * intentional: array fields (coreFeatures, pagesOrScreens, etc.) are
+ * replaced wholesale by whatever the Requirements dialog submits, not
+ * appended to — the dialog always sends the full current field list.
+ */
+export function updateProjectKnowledge(projectId: string, partialKnowledge: Partial<ProjectKnowledge>): void {
+  const next = projectsStore.get().map((project) =>
+    project.id === projectId
+      ? {
+          ...project,
+          projectKnowledge: {
+            ...project.projectKnowledge,
+            ...partialKnowledge,
+          },
+        }
+      : project,
+  );
+  projectsStore.set(next);
+  persist(next);
+}
+
+/**
+ * Phase 2 Sprint 9 — remove all captured Project Knowledge from a project,
+ * reverting it to the empty-state ("No requirements captured yet."). Local
+ * store only, does not touch chats, GitHub, Supabase, or IndexedDB.
+ */
+export function clearProjectKnowledge(projectId: string): void {
+  const next = projectsStore.get().map((project) => {
+    if (project.id !== projectId) {
+      return project;
+    }
+
+    const { projectKnowledge: _removed, ...rest } = project;
+
+    return rest;
+  });
   projectsStore.set(next);
   persist(next);
 }
