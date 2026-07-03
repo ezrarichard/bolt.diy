@@ -14,6 +14,9 @@ import { useSearchFilter } from '~/lib/hooks/useSearchFilter';
 import { classNames } from '~/utils/classNames';
 import { useStore } from '@nanostores/react';
 import { profileStore } from '~/lib/stores/profile';
+import { projectsStore, currentProjectIdStore } from '~/lib/stores/projects';
+import { ProjectList } from './ProjectList';
+import { ProjectDashboard } from './ProjectDashboard';
 
 const menuVariants = {
   closed: {
@@ -73,6 +76,15 @@ export const Menu = () => {
   const profile = useStore(profileStore);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
+  const projects = useStore(projectsStore);
+  const currentProjectId = useStore(currentProjectIdStore);
+  const currentProject = currentProjectId ? projects.find((project) => project.id === currentProjectId) : null;
+  const [isProjectDashboardOpen, setIsProjectDashboardOpen] = useState(false);
+
+  const handleSelectProject = (id: string) => {
+    currentProjectIdStore.set(id);
+    setIsProjectDashboardOpen(true);
+  };
 
   const { filteredItems: filteredList, handleSearchChange } = useSearchFilter({
     items: list,
@@ -361,15 +373,14 @@ export const Menu = () => {
         </div>
         <CurrentDateTime />
         <div className="flex-1 flex flex-col h-full w-full overflow-hidden">
-          <div className="p-4 space-y-3">
-            <div className="flex gap-2">
-              <a
-                href="/"
-                className="flex-1 flex gap-2 items-center bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-500/20 rounded-lg px-4 py-2 transition-colors"
-              >
-                <span className="inline-block i-ph:plus-circle h-4 w-4" />
-                <span className="text-sm font-medium">Start new chat</span>
-              </a>
+          <ProjectList onSelectProject={handleSelectProject} />
+
+          <div className="px-4">
+            <div className="h-px bg-bolt-elements-borderColor/40 my-1" />
+          </div>
+
+          <div className="p-4 pb-2">
+            <div className="flex justify-end">
               <button
                 onClick={toggleSelectionMode}
                 className={classNames(
@@ -383,7 +394,7 @@ export const Menu = () => {
                 <span className={selectionMode ? 'i-ph:x h-4 w-4' : 'i-ph:check-square h-4 w-4'} />
               </button>
             </div>
-            <div className="relative w-full">
+            <div className="relative w-full mt-3">
               <div className="absolute left-3 top-1/2 -translate-y-1/2">
                 <span className="i-ph:magnifying-glass h-4 w-4 text-gray-400 dark:text-gray-500" />
               </div>
@@ -397,7 +408,7 @@ export const Menu = () => {
             </div>
           </div>
           <div className="flex items-center justify-between text-sm px-4 py-2">
-            <div className="font-medium text-gray-600 dark:text-gray-400">Your Chats</div>
+            <div className="font-medium text-gray-600 dark:text-gray-400">Recent Activity</div>
             {selectionMode && (
               <div className="flex items-center gap-2">
                 <Button variant="ghost" size="sm" onClick={selectAll}>
@@ -534,6 +545,11 @@ export const Menu = () => {
         </div>
       </motion.div>
 
+      <ProjectDashboard
+        project={currentProject || null}
+        open={isProjectDashboardOpen}
+        onClose={() => setIsProjectDashboardOpen(false)}
+      />
       <ControlPanel open={isSettingsOpen} onClose={handleSettingsClose} />
     </>
   );

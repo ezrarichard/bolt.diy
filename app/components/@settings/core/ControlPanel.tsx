@@ -38,6 +38,33 @@ interface ControlPanelProps {
 // Beta status for experimental features
 const BETA_TABS = new Set<TabType>(['local-providers', 'mcp']);
 
+/*
+ * Groups the control panel grid into labeled sections, purely for presentation.
+ * This does not affect tab visibility/order logic — visibleTabs (driven by
+ * tabConfigurationStore) is still the single source of truth for what renders;
+ * this just buckets that same list under headings.
+ */
+const PANEL_SECTIONS: { id: string; label: string; icon: string; tabs: TabType[] }[] = [
+  {
+    id: 'infrastructure',
+    label: 'Infrastructure',
+    icon: 'i-ph:cloud-arrow-up-duotone',
+    tabs: ['github', 'gitlab', 'supabase', 'vercel', 'netlify'],
+  },
+  {
+    id: 'ai',
+    label: 'AI',
+    icon: 'i-ph:brain-duotone',
+    tabs: ['cloud-providers', 'local-providers', 'mcp'],
+  },
+  {
+    id: 'workspace',
+    label: 'Workspace',
+    icon: 'i-ph:squares-four-duotone',
+    tabs: ['data', 'notifications', 'event-logs', 'features'],
+  },
+];
+
 const BetaLabel = () => (
   <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-full bg-purple-500/10 dark:bg-purple-500/20">
     <span className="text-[10px] font-medium text-purple-600 dark:text-purple-400">BETA</span>
@@ -250,17 +277,17 @@ export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
               </div>
               <div className="relative z-10 flex flex-col h-full">
                 {/* Header */}
-                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-bolt-elements-borderColor/60">
                   <div className="flex items-center space-x-4">
                     {(activeTab || showTabManagement) && (
                       <button
                         onClick={handleBack}
                         className="flex items-center justify-center w-8 h-8 rounded-full bg-transparent hover:bg-purple-500/10 dark:hover:bg-purple-500/20 group transition-colors duration-150"
                       >
-                        <div className="i-ph:arrow-left w-4 h-4 text-gray-500 dark:text-gray-400 group-hover:text-purple-500 transition-colors" />
+                        <div className="i-ph:arrow-left w-4 h-4 text-bolt-elements-textTertiary group-hover:text-purple-500 transition-colors" />
                       </button>
                     )}
-                    <DialogTitle className="text-xl font-semibold text-gray-900 dark:text-white">
+                    <DialogTitle className="text-xl font-semibold tracking-tight text-bolt-elements-textPrimary">
                       {showTabManagement ? 'Tab Management' : activeTab ? TAB_LABELS[activeTab] : 'Control Panel'}
                     </DialogTitle>
                   </div>
@@ -276,7 +303,7 @@ export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
                       onClick={handleClose}
                       className="flex items-center justify-center w-8 h-8 rounded-full bg-transparent hover:bg-purple-500/10 dark:hover:bg-purple-500/20 group transition-all duration-200"
                     >
-                      <div className="i-ph:x w-4 h-4 text-gray-500 dark:text-gray-400 group-hover:text-purple-500 transition-colors" />
+                      <div className="i-ph:x w-4 h-4 text-bolt-elements-textTertiary group-hover:text-purple-500 transition-colors" />
                     </button>
                   </div>
                 </div>
@@ -289,8 +316,8 @@ export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
                     'hover:overflow-y-auto',
                     'scrollbar scrollbar-w-2',
                     'scrollbar-track-transparent',
-                    'scrollbar-thumb-[#E5E5E5] hover:scrollbar-thumb-[#CCCCCC]',
-                    'dark:scrollbar-thumb-[#333333] dark:hover:scrollbar-thumb-[#444444]',
+                    'scrollbar-thumb-bolt-elements-borderColor hover:scrollbar-thumb-purple-500/30',
+                    'dark:scrollbar-thumb-[#333333] dark:hover:scrollbar-thumb-purple-500/30',
                     'will-change-scroll',
                     'touch-auto',
                   )}
@@ -304,33 +331,75 @@ export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
                     {activeTab ? (
                       getTabComponent(activeTab)
                     ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 relative">
-                        {visibleTabs.map((tab, index) => (
-                          <div
-                            key={tab.id}
-                            className={classNames(
-                              'aspect-[1.5/1] transition-transform duration-100 ease-out',
-                              'hover:scale-[1.01]',
-                            )}
-                            style={{
-                              animationDelay: `${index * 30}ms`,
-                              animation: open ? 'fadeInUp 200ms ease-out forwards' : 'none',
-                            }}
-                          >
-                            <TabTile
-                              tab={tab}
-                              onClick={() => handleTabClick(tab.id as TabType)}
-                              isActive={activeTab === tab.id}
-                              hasUpdate={getTabUpdateStatus(tab.id)}
-                              statusMessage={getStatusMessage(tab.id)}
-                              description={TAB_DESCRIPTIONS[tab.id]}
-                              isLoading={loadingTab === tab.id}
-                              className="h-full relative"
-                            >
-                              {BETA_TABS.has(tab.id) && <BetaLabel />}
-                            </TabTile>
-                          </div>
-                        ))}
+                      <div className="flex flex-col gap-8">
+                        {(() => {
+                          let tileIndex = 0;
+                          const sectioned = PANEL_SECTIONS.map((section) => ({
+                            ...section,
+                            items: visibleTabs.filter((tab) => section.tabs.includes(tab.id as TabType)),
+                          })).filter((section) => section.items.length > 0);
+
+                          /*
+                           * Anything not covered by a named section (e.g. a future tab type)
+                           * still renders, grouped under "More", so nothing is ever silently hidden.
+                           */
+                          const sectionedIds = new Set(PANEL_SECTIONS.flatMap((section) => section.tabs));
+                          const remaining = visibleTabs.filter((tab) => !sectionedIds.has(tab.id as TabType));
+
+                          if (remaining.length > 0) {
+                            sectioned.push({
+                              id: 'more',
+                              label: 'More',
+                              icon: 'i-ph:dots-three-circle-duotone',
+                              tabs: remaining.map((tab) => tab.id as TabType),
+                              items: remaining,
+                            });
+                          }
+
+                          return sectioned.map((section) => (
+                            <div key={section.id}>
+                              <div className="flex items-center gap-2 mb-4">
+                                <div className={classNames(section.icon, 'w-4 h-4 text-purple-500/70')} />
+                                <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">
+                                  {section.label}
+                                </h2>
+                                <div className="flex-1 h-px bg-bolt-elements-borderColor/40" />
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 relative">
+                                {section.items.map((tab) => {
+                                  const index = tileIndex++;
+
+                                  return (
+                                    <div
+                                      key={tab.id}
+                                      className={classNames(
+                                        'aspect-[1.5/1] transition-transform duration-100 ease-out',
+                                        'hover:scale-[1.01]',
+                                      )}
+                                      style={{
+                                        animationDelay: `${index * 30}ms`,
+                                        animation: open ? 'fadeInUp 200ms ease-out forwards' : 'none',
+                                      }}
+                                    >
+                                      <TabTile
+                                        tab={tab}
+                                        onClick={() => handleTabClick(tab.id as TabType)}
+                                        isActive={activeTab === tab.id}
+                                        hasUpdate={getTabUpdateStatus(tab.id)}
+                                        statusMessage={getStatusMessage(tab.id)}
+                                        description={TAB_DESCRIPTIONS[tab.id]}
+                                        isLoading={loadingTab === tab.id}
+                                        className="h-full relative"
+                                      >
+                                        {BETA_TABS.has(tab.id) && <BetaLabel />}
+                                      </TabTile>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ));
+                        })()}
                       </div>
                     )}
                   </div>

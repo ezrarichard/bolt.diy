@@ -32,7 +32,7 @@ export const TabTile: React.FC<TabTileProps> = ({
       <Tooltip.Root>
         <Tooltip.Trigger asChild>
           <div className={classNames('min-h-[160px] list-none', className || '')}>
-            <div className="relative h-full rounded-xl border border-[#E5E5E5] dark:border-[#333333] p-0.5">
+            <div className="relative h-full rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-0.5">
               <GlowingEffect
                 blur={0}
                 borderWidth={1}
@@ -45,13 +45,27 @@ export const TabTile: React.FC<TabTileProps> = ({
               />
               <div
                 onClick={onClick}
+                role="button"
+                tabIndex={isLoading ? -1 : 0}
+                onKeyDown={(event) => {
+                  if (!isLoading && (event.key === 'Enter' || event.key === ' ')) {
+                    event.preventDefault();
+                    onClick?.();
+                  }
+                }}
                 className={classNames(
-                  'relative flex flex-col items-center justify-center h-full p-4 rounded-lg',
-                  'bg-white dark:bg-[#141414]',
+                  'relative flex flex-col items-center justify-center h-full p-5 rounded-xl',
+                  'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                  'border border-black/[0.05] dark:border-white/[0.05]',
                   'group cursor-pointer',
-                  'hover:bg-purple-50 dark:hover:bg-[#1a1a1a]',
-                  'transition-colors duration-100 ease-out',
-                  isActive ? 'bg-purple-500/5 dark:bg-purple-500/10' : '',
+                  'shadow-sm hover:shadow-lg hover:shadow-purple-500/5 dark:hover:shadow-black/20',
+                  'hover:-translate-y-0.5 hover:border-purple-500/25 dark:hover:border-purple-500/20',
+                  'hover:bg-[#F1EFFB]/90 dark:hover:bg-[#1e1e1e]/90',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bolt-elements-background-depth-1',
+                  'transition-all duration-200 ease-out',
+                  isActive
+                    ? 'bg-purple-500/5 dark:bg-purple-500/10 border-purple-500/30 dark:border-purple-500/25'
+                    : '',
                   isLoading ? 'cursor-wait opacity-70 pointer-events-none' : '',
                 )}
               >
@@ -59,15 +73,16 @@ export const TabTile: React.FC<TabTileProps> = ({
                 <div
                   className={classNames(
                     'relative',
-                    'w-14 h-14',
+                    'w-12 h-12',
                     'flex items-center justify-center',
-                    'rounded-xl',
-                    'bg-gray-100 dark:bg-gray-800',
-                    'ring-1 ring-gray-200 dark:ring-gray-700',
-                    'group-hover:bg-purple-100 dark:group-hover:bg-gray-700/80',
-                    'group-hover:ring-purple-200 dark:group-hover:ring-purple-800/30',
-                    'transition-all duration-100 ease-out',
-                    isActive ? 'bg-purple-500/10 dark:bg-purple-500/10 ring-purple-500/30 dark:ring-purple-500/20' : '',
+                    'rounded-full',
+                    'bg-purple-500/8 dark:bg-purple-500/10',
+                    'ring-1 ring-purple-500/10 dark:ring-purple-500/15',
+                    'group-hover:bg-purple-500/15 dark:group-hover:bg-purple-500/20',
+                    'group-hover:ring-purple-500/30 dark:group-hover:ring-purple-500/30',
+                    'group-hover:scale-105',
+                    'transition-all duration-200 ease-out',
+                    isActive ? 'bg-purple-500/15 dark:bg-purple-500/20 ring-purple-500/40 dark:ring-purple-500/40' : '',
                   )}
                 >
                   {(() => {
@@ -75,11 +90,11 @@ export const TabTile: React.FC<TabTileProps> = ({
                     return (
                       <IconComponent
                         className={classNames(
-                          'w-8 h-8',
-                          'text-gray-600 dark:text-gray-300',
-                          'group-hover:text-purple-500 dark:group-hover:text-purple-400/80',
-                          'transition-colors duration-100 ease-out',
-                          isActive ? 'text-purple-500 dark:text-purple-400/90' : '',
+                          'w-6 h-6',
+                          'text-purple-600/80 dark:text-purple-400/80',
+                          'group-hover:text-purple-600 dark:group-hover:text-purple-300',
+                          'transition-colors duration-200 ease-out',
+                          isActive ? 'text-purple-600 dark:text-purple-300' : '',
                         )}
                       />
                     );
@@ -90,11 +105,11 @@ export const TabTile: React.FC<TabTileProps> = ({
                 <div className="flex flex-col items-center mt-4 w-full">
                   <h3
                     className={classNames(
-                      'text-[15px] font-medium leading-snug mb-2',
-                      'text-gray-700 dark:text-gray-200',
+                      'text-[14px] font-semibold tracking-tight leading-snug mb-1.5',
+                      'text-bolt-elements-textPrimary',
                       'group-hover:text-purple-600 dark:group-hover:text-purple-300/90',
-                      'transition-colors duration-100 ease-out',
-                      isActive ? 'text-purple-500 dark:text-purple-400/90' : '',
+                      'transition-colors duration-200 ease-out',
+                      isActive ? 'text-purple-600 dark:text-purple-400/90' : '',
                     )}
                   >
                     {TAB_LABELS[tab.id]}
@@ -102,12 +117,12 @@ export const TabTile: React.FC<TabTileProps> = ({
                   {description && (
                     <p
                       className={classNames(
-                        'text-[13px] leading-relaxed',
-                        'text-gray-500 dark:text-gray-400',
+                        'text-[12px] leading-relaxed',
+                        'text-bolt-elements-textTertiary',
                         'max-w-[85%]',
                         'text-center',
-                        'group-hover:text-purple-500 dark:group-hover:text-purple-400/70',
-                        'transition-colors duration-100 ease-out',
+                        'group-hover:text-purple-500/80 dark:group-hover:text-purple-400/70',
+                        'transition-colors duration-200 ease-out',
                         isActive ? 'text-purple-400 dark:text-purple-400/80' : '',
                       )}
                     >
