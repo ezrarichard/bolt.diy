@@ -14,7 +14,7 @@ import { useSearchFilter } from '~/lib/hooks/useSearchFilter';
 import { classNames } from '~/utils/classNames';
 import { useStore } from '@nanostores/react';
 import { profileStore } from '~/lib/stores/profile';
-import { projectsStore, currentProjectIdStore } from '~/lib/stores/projects';
+import { projectsStore, currentProjectIdStore, isProjectDashboardOpenStore } from '~/lib/stores/projects';
 import { ProjectList } from './ProjectList';
 import { ProjectDashboard } from './ProjectDashboard';
 
@@ -79,11 +79,17 @@ export const Menu = () => {
   const projects = useStore(projectsStore);
   const currentProjectId = useStore(currentProjectIdStore);
   const currentProject = currentProjectId ? projects.find((project) => project.id === currentProjectId) : null;
-  const [isProjectDashboardOpen, setIsProjectDashboardOpen] = useState(false);
+
+  /*
+   * Sprint 6: lifted to a store (isProjectDashboardOpenStore) so other
+   * components — e.g. the Current Project badge near the chat input — can
+   * reopen the dashboard for the active project without prop-drilling.
+   */
+  const isProjectDashboardOpen = useStore(isProjectDashboardOpenStore);
 
   const handleSelectProject = (id: string) => {
     currentProjectIdStore.set(id);
-    setIsProjectDashboardOpen(true);
+    isProjectDashboardOpenStore.set(true);
   };
 
   const { filteredItems: filteredList, handleSearchChange } = useSearchFilter({
@@ -548,7 +554,7 @@ export const Menu = () => {
       <ProjectDashboard
         project={currentProject || null}
         open={isProjectDashboardOpen}
-        onClose={() => setIsProjectDashboardOpen(false)}
+        onClose={() => isProjectDashboardOpenStore.set(false)}
       />
       <ControlPanel open={isSettingsOpen} onClose={handleSettingsClose} />
     </>

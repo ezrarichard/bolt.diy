@@ -19,6 +19,14 @@ export interface Project {
   color: string; // tailwind-ish accent color token, e.g. 'purple' | 'blue' | 'green'
   createdAt: string;
 
+  /**
+   * Sprint 3 — id of the ProjectBlueprint (see app/lib/blueprints/) chosen
+   * when the project was created. Metadata only: no prompt, template, or
+   * repository is generated from this yet. Future sprints will use it to
+   * drive starter prompts/templates/integrations per blueprint.
+   */
+  blueprintId?: string;
+
   // Future fields — intentionally unset in Sprint 1.
   githubRepo?: string;
   supabaseProjectId?: string;
@@ -108,19 +116,48 @@ export const projectsStore = atom<Project[]>(loadProjects());
  */
 export const currentProjectIdStore = atom<string | null>(null);
 
+/**
+ * Sprint 6 — whether the Project Dashboard modal is open. Lifted out of
+ * Menu.client.tsx's local component state so other components (e.g. the
+ * Current Project badge near the chat input) can reopen the dashboard for
+ * the active project without prop-drilling through BaseChat/Menu.
+ */
+export const isProjectDashboardOpenStore = atom(false);
+
+/**
+ * Sprint 6 — a monotonically increasing counter. Bump it via
+ * requestChatInputFocus() to ask the chat prompt textarea to focus itself
+ * (e.g. after closing the Project Dashboard from "Start Chat"). This is a
+ * signal, not a value: components that care watch it change in a
+ * useEffect and imperatively call textareaRef.current?.focus() — the
+ * number itself has no meaning beyond "this changed since last time."
+ */
+export const focusChatInputRequestStore = atom(0);
+
+export function requestChatInputFocus() {
+  focusChatInputRequestStore.set(focusChatInputRequestStore.get() + 1);
+}
+
 function persist(projects: Project[]) {
   if (typeof window !== 'undefined') {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
   }
 }
 
-export function addProject(input: { name: string; icon: string; color: string; description?: string }): Project {
+export function addProject(input: {
+  name: string;
+  icon: string;
+  color: string;
+  description?: string;
+  blueprintId?: string;
+}): Project {
   const project: Project = {
     id: `proj-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: input.name,
     description: input.description,
     icon: input.icon,
     color: input.color,
+    blueprintId: input.blueprintId,
     createdAt: new Date().toISOString(),
   };
 

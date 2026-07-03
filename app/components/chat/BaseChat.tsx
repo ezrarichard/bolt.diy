@@ -30,6 +30,8 @@ import { expoUrlAtom } from '~/lib/stores/qrCodeStore';
 import { useStore } from '@nanostores/react';
 import { StickToBottom, useStickToBottomContext } from '~/lib/hooks';
 import { ChatBox } from './ChatBox';
+import { CurrentProjectBadge } from './CurrentProjectBadge';
+import { focusChatInputRequestStore } from '~/lib/stores/projects';
 import type { DesignScheme } from '~/types/design-scheme';
 import type { ElementInfo } from '~/components/workbench/Inspector';
 import LlmErrorAlert from './LLMApiAlert';
@@ -146,12 +148,24 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
     const [progressAnnotations, setProgressAnnotations] = useState<ProgressAnnotation[]>([]);
     const expoUrl = useStore(expoUrlAtom);
     const [qrModalOpen, setQrModalOpen] = useState(false);
+    const focusChatInputRequest = useStore(focusChatInputRequestStore);
 
     useEffect(() => {
       if (expoUrl) {
         setQrModalOpen(true);
       }
     }, [expoUrl]);
+
+    /*
+     * Sprint 6: focus the prompt textarea on request (e.g. after closing the
+     * Project Dashboard via "Start Chat"). Skipped on the initial mount
+     * (counter starts at 0) so the textarea isn't stolen-focus on page load.
+     */
+    useEffect(() => {
+      if (focusChatInputRequest > 0) {
+        textareaRef?.current?.focus();
+      }
+    }, [focusChatInputRequest]);
 
     useEffect(() => {
       if (data) {
@@ -426,6 +440,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
                   {llmErrorAlert && <LlmErrorAlert alert={llmErrorAlert} clearAlert={() => clearLlmErrorAlert?.()} />}
                 </div>
                 {progressAnnotations && <ProgressCompilation data={progressAnnotations} />}
+                <ClientOnly>{() => <CurrentProjectBadge />}</ClientOnly>
                 <ChatBox
                   isModelSettingsCollapsed={isModelSettingsCollapsed}
                   setIsModelSettingsCollapsed={setIsModelSettingsCollapsed}

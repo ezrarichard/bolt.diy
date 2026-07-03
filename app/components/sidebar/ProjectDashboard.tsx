@@ -1,8 +1,11 @@
 import * as RadixDialog from '@radix-ui/react-dialog';
+import { useNavigate } from '@remix-run/react';
 import { classNames } from '~/utils/classNames';
+import { requestChatInputFocus } from '~/lib/stores/projects';
 import type { Project } from '~/lib/stores/projects';
 import { PROJECT_COLOR_CLASSES } from './ProjectListItem';
 import BackgroundRays from '~/components/ui/BackgroundRays';
+import { blueprintEngine } from '~/lib/blueprints';
 
 interface ProjectDashboardProps {
   project: Project | null;
@@ -76,11 +79,43 @@ function ActionButton({ icon, label }: ActionButtonProps) {
 }
 
 export function ProjectDashboard({ project, open, onClose }: ProjectDashboardProps) {
+  const navigate = useNavigate();
+
   if (!project) {
     return null;
   }
 
   const colorClasses = PROJECT_COLOR_CLASSES[project.color] || PROJECT_COLOR_CLASSES.purple;
+
+  /**
+   * Sprint 6 — "Start Chat" from the Project Dashboard.
+   *
+   * Closes the dashboard, keeps the project active (currentProjectIdStore
+   * is untouched here — it was already set when the dashboard was opened),
+   * client-side navigates to the homepage if we're not already there, and
+   * asks the chat textarea to focus itself. No route is created, no
+   * message is sent, and no chat persistence is touched — this only moves
+   * the user's attention to the existing chat input.
+   */
+  const handleStartChat = () => {
+    onClose();
+
+    if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+      navigate('/');
+    }
+
+    requestChatInputFocus();
+  };
+
+  /*
+   * Fall back to the Blank Project blueprint (always present in the registry)
+   * when the project has no blueprintId, or one that no longer matches a
+   * registry entry — satisfies "if no blueprint is found, show Blank Project"
+   * while still rendering full structured data rather than a bare string.
+   * All blueprint data is read through blueprintEngine, never the registry
+   * directly (see app/lib/blueprints/engine.ts).
+   */
+  const blueprint = blueprintEngine.getBlueprint(project.blueprintId) ?? blueprintEngine.getDefaultBlueprint();
 
   return (
     <RadixDialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
@@ -192,10 +227,110 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       <InfoCard
                         icon="i-ph:stack-duotone"
                         label="Templates"
-                        rows={[{ label: 'Active', value: project.templates?.[0] || 'Blank Project' }]}
+                        rows={[{ label: 'Active', value: blueprint?.name || 'Blank Project' }]}
                       />
                     </div>
                   </div>
+
+                  {/* Blueprint Overview */}
+                  {blueprint && (
+                    <div>
+                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                        Blueprint Overview
+                      </h2>
+                      <div
+                        className={classNames(
+                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                        )}
+                      >
+                        <div className="flex items-start gap-3 mb-4">
+                          <span className="text-2xl leading-none shrink-0">{blueprint.icon}</span>
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-bolt-elements-textPrimary">{blueprint.name}</div>
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                              <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-300 font-medium">
+                                {blueprintEngine.getBlueprintCategory(blueprint.id)}
+                              </span>
+                              {blueprintEngine.getBlueprintProductType(blueprint.id) && (
+                                <span className="text-xs text-bolt-elements-textTertiary">
+                                  {blueprintEngine.getBlueprintProductType(blueprint.id)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                          <div>
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+                              Recommended Stack
+                            </div>
+                            {blueprintEngine.getRecommendedStack(blueprint.id).length > 0 ? (
+                              <div className="flex flex-wrap gap-1.5">
+                                {blueprintEngine.getRecommendedStack(blueprint.id).map((item) => (
+                                  <span
+                                    key={item}
+                                    className="text-xs px-2 py-1 rounded-md bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/40 text-bolt-elements-textSecondary"
+                                  >
+                                    {item}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-bolt-elements-textTertiary">No suggestions yet</div>
+                            )}
+                          </div>
+
+                          <div>
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+                              Recommended Integrations
+                            </div>
+                            {blueprintEngine.getRecommendedIntegrations(blueprint.id).length > 0 ? (
+                              <div className="flex flex-wrap gap-1.5">
+                                {blueprintEngine.getRecommendedIntegrations(blueprint.id).map((item) => (
+                                  <span
+                                    key={item}
+                                    className="text-xs px-2 py-1 rounded-md bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/40 text-bolt-elements-textSecondary"
+                                  >
+                                    {item}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-bolt-elements-textTertiary">No suggestions yet</div>
+                            )}
+                          </div>
+
+                          <div>
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+                              Recommended Next Steps
+                            </div>
+                            {blueprintEngine.getRecommendedNextSteps(blueprint.id).length > 0 ? (
+                              <ul className="space-y-1.5">
+                                {blueprintEngine.getRecommendedNextSteps(blueprint.id).map((step) => (
+                                  <li
+                                    key={step}
+                                    className="flex items-start gap-1.5 text-xs text-bolt-elements-textSecondary"
+                                  >
+                                    <span className="i-ph:circle-dashed w-3.5 h-3.5 mt-0.5 text-bolt-elements-textTertiary shrink-0" />
+                                    {step}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <div className="text-xs text-bolt-elements-textTertiary">No suggestions yet</div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="mt-4 pt-3 border-t border-bolt-elements-borderColor/30 text-[11px] text-bolt-elements-textTertiary">
+                          These are recommendations only — nothing here is applied, generated, or connected
+                          automatically.
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Recent Chats */}
                   <div>
@@ -210,13 +345,14 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       <div className="text-xs text-bolt-elements-textTertiary mt-1 max-w-[320px]">
                         Start a conversation and it will automatically belong to this project.
                       </div>
-                      <a
-                        href="/"
+                      <button
+                        type="button"
+                        onClick={handleStartChat}
                         className="mt-4 flex gap-2 items-center bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-500/20 rounded-lg px-4 py-2 transition-colors"
                       >
                         <span className="inline-block i-ph:plus-circle h-4 w-4" />
                         <span className="text-sm font-medium">Start Chat</span>
-                      </a>
+                      </button>
                     </div>
                   </div>
 
