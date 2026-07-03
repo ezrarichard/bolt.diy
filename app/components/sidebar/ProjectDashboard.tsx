@@ -1,11 +1,11 @@
 import * as RadixDialog from '@radix-ui/react-dialog';
 import { useNavigate } from '@remix-run/react';
 import { classNames } from '~/utils/classNames';
-import { requestChatInputFocus } from '~/lib/stores/projects';
+import { requestChatInputFocus, getRoadmapItemStatus } from '~/lib/stores/projects';
 import type { Project } from '~/lib/stores/projects';
 import { PROJECT_COLOR_CLASSES } from './ProjectListItem';
 import BackgroundRays from '~/components/ui/BackgroundRays';
-import { blueprintEngine } from '~/lib/blueprints';
+import { blueprintEngine, type RoadmapItemStatus } from '~/lib/blueprints';
 
 interface ProjectDashboardProps {
   project: Project | null;
@@ -57,10 +57,11 @@ function InfoCard({ icon, label, rows }: InfoCardProps) {
 interface ActionButtonProps {
   icon: string;
   label: string;
+  fullWidth?: boolean;
 }
 
-// All Project Actions are placeholders — "No functionality yet" per spec.
-function ActionButton({ icon, label }: ActionButtonProps) {
+// All Project Actions/Quick Actions are placeholders — "No functionality yet" per spec.
+function ActionButton({ icon, label, fullWidth }: ActionButtonProps) {
   return (
     <button
       type="button"
@@ -70,11 +71,111 @@ function ActionButton({ icon, label }: ActionButtonProps) {
         'flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium',
         'bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/50',
         'text-bolt-elements-textTertiary cursor-not-allowed opacity-60',
+        fullWidth ? 'w-full justify-start' : '',
       )}
     >
-      <div className={classNames(icon, 'w-4 h-4')} />
+      <div className={classNames(icon, 'w-4 h-4 shrink-0')} />
       {label}
     </button>
+  );
+}
+
+/**
+ * Sprint 8 — status metadata for roadmap items and the "Future status
+ * badge" mentioned in the spec. Purely presentational; the status itself
+ * always comes from getRoadmapItemStatus(project, item.key), which defaults
+ * to "not-started" until a future sprint wires up a way to change it.
+ */
+const ROADMAP_STATUS_META: Record<RoadmapItemStatus, { label: string; dotClass: string; badgeClass: string }> = {
+  'not-started': {
+    label: 'Not Started',
+    dotClass: 'bg-bolt-elements-textTertiary/50',
+    badgeClass: 'text-bolt-elements-textTertiary border-bolt-elements-borderColor/50',
+  },
+  'in-progress': {
+    label: 'In Progress',
+    dotClass: 'bg-amber-500',
+    badgeClass: 'text-amber-600 dark:text-amber-400 border-amber-500/30',
+  },
+  completed: {
+    label: 'Completed',
+    dotClass: 'bg-green-500',
+    badgeClass: 'text-green-600 dark:text-green-400 border-green-500/30',
+  },
+  blocked: {
+    label: 'Blocked',
+    dotClass: 'bg-red-500',
+    badgeClass: 'text-red-600 dark:text-red-400 border-red-500/30',
+  },
+};
+
+interface RoadmapItemCardProps {
+  title: string;
+  description: string;
+  status: RoadmapItemStatus;
+}
+
+/** One Project Roadmap step — status dot, title, description, status badge, hover effect. */
+function RoadmapItemCard({ title, description, status }: RoadmapItemCardProps) {
+  const meta = ROADMAP_STATUS_META[status];
+
+  return (
+    <div
+      className={classNames(
+        'flex items-start gap-3 rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4',
+        'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+        'hover:border-purple-500/25 dark:hover:border-purple-500/20 transition-colors duration-200',
+      )}
+    >
+      <span className={classNames('mt-1.5 w-2.5 h-2.5 rounded-full shrink-0', meta.dotClass)} />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium text-bolt-elements-textPrimary">{title}</div>
+        <div className="text-xs text-bolt-elements-textTertiary mt-0.5">{description}</div>
+      </div>
+      <span
+        className={classNames(
+          'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0',
+          meta.badgeClass,
+        )}
+      >
+        {meta.label}
+      </span>
+    </div>
+  );
+}
+
+interface ProjectProgressCardProps {
+  completed: number;
+  total: number;
+}
+
+/** Progress card — computed only from local roadmap status, per spec. */
+function ProjectProgressCard({ completed, total }: ProjectProgressCardProps) {
+  const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  return (
+    <div
+      className={classNames(
+        'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4',
+        'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+      )}
+    >
+      <div className="flex items-center gap-2.5 mb-3">
+        <div className="flex items-center justify-center w-8 h-8 rounded-full bg-purple-500/10 ring-1 ring-purple-500/15 shrink-0">
+          <div className="i-ph:gauge-duotone w-4 h-4 text-purple-600/80 dark:text-purple-400/80" />
+        </div>
+        <div className="text-[13px] font-semibold text-bolt-elements-textPrimary">Project Progress</div>
+      </div>
+      <div className="h-2 w-full rounded-full bg-bolt-elements-background-depth-2 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-purple-500 transition-all duration-300 ease-out"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <div className="text-xs text-bolt-elements-textTertiary mt-2">
+        {completed} / {total} Completed
+      </div>
+    </div>
   );
 }
 
@@ -116,6 +217,20 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
    * directly (see app/lib/blueprints/engine.ts).
    */
   const blueprint = blueprintEngine.getBlueprint(project.blueprintId) ?? blueprintEngine.getDefaultBlueprint();
+
+  /*
+   * Sprint 8 — Project Roadmap. Static step content (key/title/description)
+   * always comes from blueprintEngine.getRoadmap(), never hardcoded here or
+   * read from the registry directly. Per-item status is resolved from the
+   * project's own local-only roadmapStatus map (defaults to "not-started").
+   * Progress is calculated purely from that local status, per spec.
+   */
+  const roadmap = blueprintEngine.getRoadmap(blueprint.id);
+  const roadmapWithStatus = roadmap.map((item) => ({
+    ...item,
+    status: getRoadmapItemStatus(project, item.key),
+  }));
+  const completedRoadmapCount = roadmapWithStatus.filter((item) => item.status === 'completed').length;
 
   return (
     <RadixDialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
@@ -261,7 +376,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                           <div>
                             <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
                               Recommended Stack
@@ -301,27 +416,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                               <div className="text-xs text-bolt-elements-textTertiary">No suggestions yet</div>
                             )}
                           </div>
-
-                          <div>
-                            <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
-                              Recommended Next Steps
-                            </div>
-                            {blueprintEngine.getRecommendedNextSteps(blueprint.id).length > 0 ? (
-                              <ul className="space-y-1.5">
-                                {blueprintEngine.getRecommendedNextSteps(blueprint.id).map((step) => (
-                                  <li
-                                    key={step}
-                                    className="flex items-start gap-1.5 text-xs text-bolt-elements-textSecondary"
-                                  >
-                                    <span className="i-ph:circle-dashed w-3.5 h-3.5 mt-0.5 text-bolt-elements-textTertiary shrink-0" />
-                                    {step}
-                                  </li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <div className="text-xs text-bolt-elements-textTertiary">No suggestions yet</div>
-                            )}
-                          </div>
                         </div>
 
                         <div className="mt-4 pt-3 border-t border-bolt-elements-borderColor/30 text-[11px] text-bolt-elements-textTertiary">
@@ -331,6 +425,60 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       </div>
                     </div>
                   )}
+
+                  {/* Project Roadmap — Sprint 8 */}
+                  <div>
+                    <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                      Project Roadmap
+                    </h2>
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                      <div className="lg:col-span-2 space-y-3">
+                        {roadmapWithStatus.length > 0 ? (
+                          roadmapWithStatus.map((item) => (
+                            <RoadmapItemCard
+                              key={item.key}
+                              title={item.title}
+                              description={item.description}
+                              status={item.status}
+                            />
+                          ))
+                        ) : (
+                          <div className="text-xs text-bolt-elements-textTertiary">
+                            No roadmap for this blueprint yet
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-4">
+                        <ProjectProgressCard completed={completedRoadmapCount} total={roadmapWithStatus.length} />
+
+                        <div
+                          className={classNames(
+                            'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4',
+                            'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                          )}
+                        >
+                          <div className="text-[13px] font-semibold text-bolt-elements-textPrimary mb-3">
+                            Quick Actions
+                          </div>
+                          <div className="flex flex-col gap-2">
+                            <ActionButton icon="i-ph:play-circle" label="Continue Building" fullWidth />
+                            <ActionButton icon="i-ph:clipboard-text" label="Generate Requirements" fullWidth />
+                            <ActionButton icon="i-ph:layout" label="Generate UI" fullWidth />
+                            <ActionButton icon="i-ph:database" label="Generate Database" fullWidth />
+                            <ActionButton icon="i-ph:github-logo" label="Connect GitHub" fullWidth />
+                            <ActionButton icon="i-ph:database-duotone" label="Connect Supabase" fullWidth />
+                            <ActionButton icon="i-ph:rocket-launch" label="Deploy" fullWidth />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                      Roadmap status is stored locally for this project only — nothing here is generated, connected, or
+                      deployed automatically.
+                    </div>
+                  </div>
 
                   {/* Recent Chats */}
                   <div>

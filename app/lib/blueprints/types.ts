@@ -35,9 +35,40 @@ export interface ProjectBlueprint {
   /** Default project status label shown until real status tracking exists. */
   defaultStatus?: string;
 
+  /**
+   * Sprint 8 — the structured Project Roadmap shown in the Project
+   * Dashboard, replacing the plain-text `recommendedNextSteps` list.
+   * `recommendedNextSteps` is kept as-is for backward compatibility (still
+   * typed, still populated in the registry) — `roadmap` is the richer,
+   * status-aware source of truth going forward. Display only; nothing here
+   * generates code, starts a chat, or provisions anything.
+   */
+  roadmap?: RoadmapItem[];
+
   enabled: boolean;
   comingSoon?: boolean;
 }
+
+/**
+ * Sprint 8 — one step in a blueprint's Project Roadmap.
+ *
+ * `key` is a stable, blueprint-scoped identifier (e.g. "requirements",
+ * "homepage") used to store this step's status on the project itself —
+ * see `Project.roadmapStatus` in app/lib/stores/projects.ts. The blueprint
+ * only ever supplies the step's static content (title/description); it
+ * never carries per-project status.
+ */
+export interface RoadmapItem {
+  key: string;
+  title: string;
+  description: string;
+}
+
+/**
+ * Sprint 8 — status of a single roadmap item for a specific project.
+ * Stored locally only (project.roadmapStatus), no backend.
+ */
+export type RoadmapItemStatus = 'not-started' | 'in-progress' | 'completed' | 'blocked';
 
 /**
  * A blueprint's recommendation surface grouped together — used by

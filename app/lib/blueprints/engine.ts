@@ -6,6 +6,7 @@ import type {
   BlueprintSystemPrompt,
   BlueprintStarterTemplate,
   BlueprintSuggestedEnvironmentVariable,
+  RoadmapItem,
 } from './types';
 
 /**
@@ -77,6 +78,18 @@ function getBlueprintProductType(id: string | undefined): string | undefined {
   return getBlueprint(id)?.productType;
 }
 
+/**
+ * Sprint 8 — the blueprint's structured Project Roadmap (static content
+ * only: key/title/description). Per-project status is never stored here —
+ * it lives on the project itself (Project.roadmapStatus in
+ * app/lib/stores/projects.ts) and is merged in by the caller (the Project
+ * Dashboard). This is the only way any consumer should read roadmap data —
+ * never import registry.ts directly.
+ */
+function getRoadmap(id: string | undefined): RoadmapItem[] {
+  return getBlueprint(id)?.roadmap ?? [];
+}
+
 /*
  * ------------------------------------------------------------------------
  * Future extension points (Sprint 6+).
@@ -144,6 +157,7 @@ export const blueprintEngine = {
   getBlueprintRecommendation,
   getBlueprintCategory,
   getBlueprintProductType,
+  getRoadmap,
 
   // Future (Sprint 6+) — placeholders only, see comment block above
   getSystemPrompt,

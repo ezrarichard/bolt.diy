@@ -17,4 +17,6 @@ export type {
   BlueprintStarterTemplate,
   BlueprintSuggestedEnvironmentVariable,
   SuggestedPaymentProvider,
+  RoadmapItem,
+  RoadmapItemStatus,
 } from './types';

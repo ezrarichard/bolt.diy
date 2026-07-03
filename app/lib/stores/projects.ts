@@ -1,4 +1,5 @@
 import { atom } from 'nanostores';
+import type { RoadmapItemStatus } from '~/lib/blueprints';
 
 /**
  * Project data model — Sprint 1 (UI-only).
@@ -26,6 +27,17 @@ export interface Project {
    * drive starter prompts/templates/integrations per blueprint.
    */
   blueprintId?: string;
+
+  /**
+   * Sprint 8 — local-only status per roadmap item, keyed by the blueprint's
+   * RoadmapItem.key (see app/lib/blueprints/types.ts and
+   * blueprintEngine.getRoadmap()). Not present until a status is explicitly
+   * set for at least one item; any key without an entry here is treated as
+   * "not-started" by whoever reads it (see getRoadmapItemStatus below).
+   * Stored in localStorage only, same as the rest of Project — no backend,
+   * no IndexedDB.
+   */
+  roadmapStatus?: Record<string, RoadmapItemStatus>;
 
   // Future fields — intentionally unset in Sprint 1.
   githubRepo?: string;
@@ -166,6 +178,34 @@ export function addProject(input: {
   persist(next);
 
   return project;
+}
+
+/**
+ * Sprint 8 — read a roadmap item's status for a project. Defaults to
+ * "not-started" when nothing has been stored for that key yet, matching
+ * the roadmap item's implicit default before any interaction.
+ */
+export function getRoadmapItemStatus(project: Project, itemKey: string): RoadmapItemStatus {
+  return project.roadmapStatus?.[itemKey] ?? 'not-started';
+}
+
+/**
+ * Sprint 8 — set a roadmap item's status for a project. Local-only
+ * (localStorage via the existing persist()), no backend, no IndexedDB.
+ * Not wired to any UI control yet — this sprint only needs the roadmap to
+ * be readable and its progress calculable; this setter exists so a future
+ * sprint can let users change status without another store change.
+ */
+export function setRoadmapItemStatus(projectId: string, itemKey: string, status: RoadmapItemStatus): void {
+  const next = projectsStore
+    .get()
+    .map((project) =>
+      project.id === projectId
+        ? { ...project, roadmapStatus: { ...project.roadmapStatus, [itemKey]: status } }
+        : project,
+    );
+  projectsStore.set(next);
+  persist(next);
 }
 
 export const PROJECT_COLOR_OPTIONS = ['purple', 'blue', 'green', 'orange', 'pink', 'teal'] as const;
