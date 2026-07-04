@@ -19,6 +19,7 @@ import { ReviewQueueCard } from './ReviewComponents';
 import { RequirementsDraftPanel } from './RequirementsDraftPanel';
 import { ArchitectureDraftPanel } from './ArchitectureDraftPanel';
 import { DatabaseDraftPanel } from './DatabaseDraftPanel';
+import { UiUxDraftPanel } from './UIUXDraftPanel';
 
 interface ProjectDashboardProps {
   project: Project | null;
@@ -772,6 +773,25 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
                         The Database Design Draft is stored locally for this project only — approving it never generates
                         SQL, connects to Supabase, or creates a database.
+                      </div>
+                    </div>
+
+                    {/* UI/UX Design — Sprint 16 */}
+                    <div>
+                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                        UI / UX Design
+                      </h2>
+                      <div
+                        className={classNames(
+                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                        )}
+                      >
+                        <UiUxDraftPanel project={project} />
+                      </div>
+                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                        The UI/UX Draft is stored locally for this project only — approving it never generates HTML,
+                        CSS, Tailwind, React, Figma files, or images.
                       </div>
                     </div>
 

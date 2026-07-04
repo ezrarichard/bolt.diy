@@ -1,24 +1,13 @@
-import { useState } from 'react';
-import { toast } from 'react-toastify';
 import { classNames } from '~/utils/classNames';
-import { addProjectArtifact, getProjectArtifacts, updateProjectArtifact, type Project } from '~/lib/stores/projects';
-import {
-  ARTIFACT_STATUS_META,
-  ARTIFACT_TYPES,
-  formatArtifactTimestamp,
-  getLatestArtifact,
-  parseArtifactContent,
-  type ProjectArtifact,
-} from '~/lib/projects/artifacts';
+import { type Project } from '~/lib/stores/projects';
+import { ARTIFACT_TYPES, formatArtifactTimestamp } from '~/lib/projects/artifacts';
 import { databaseDesignerEngine } from '~/lib/projects/databaseDesignerEngine';
 import { DATABASE_DRAFT_FIELDS, type DatabaseDraft } from '~/lib/projects/prompts/database';
-import { useGenerateText } from '~/lib/hooks/useGenerateText';
+import { useDraftPanel } from '~/lib/hooks/useDraftPanel';
 
 interface DatabaseDraftPanelProps {
   project: Project;
 }
-
-type Phase = 'idle' | 'confirm' | 'generating' | 'error';
 
 const ARTIFACT_TYPE = ARTIFACT_TYPES.DATABASE_DRAFT;
 
@@ -44,77 +33,35 @@ const MAX_OUTPUT_TOKENS = 8192;
  * the Architecture Draft has been approved
  * (`databaseDesignerEngine.canGenerateDatabase`). All context
  * gathering/prompt building/parsing goes through `databaseDesignerEngine`;
- * this component only orchestrates calling it and persisting the result.
+ * this component only orchestrates calling it and persisting the result —
+ * the state machine itself lives in app/lib/hooks/useDraftPanel.ts (Sprint
+ * 16), shared with every other status-only-approval draft panel.
  */
 export function DatabaseDraftPanel({ project }: DatabaseDraftPanelProps) {
-  const [phase, setPhase] = useState<Phase>('idle');
-  const [errorMessage, setErrorMessage] = useState('');
-  const { generate, isGenerating } = useGenerateText();
-
-  const canGenerate = databaseDesignerEngine.canGenerateDatabase(project);
-  const latest = getLatestArtifact(getProjectArtifacts(project), ARTIFACT_TYPE);
-  const latestDraft = latest ? parseArtifactContent<DatabaseDraft>(latest.content) : undefined;
-  const isPreviewing = latest?.status === 'draft' && latestDraft;
-
-  const runGeneration = async (regenerateArtifact?: ProjectArtifact) => {
-    setPhase('generating');
-    setErrorMessage('');
-
-    const context = databaseDesignerEngine.buildDatabaseContext(project);
-    const { system, prompt } = databaseDesignerEngine.buildDatabasePrompt(context);
-    const result = await generate(system, prompt, { maxTokens: MAX_OUTPUT_TOKENS });
-
-    if (!result.ok) {
-      setErrorMessage(result.error);
-      setPhase('error');
-
-      return;
-    }
-
-    const parsed = databaseDesignerEngine.parseDraft(result.text);
-
-    if (!parsed.ok) {
-      setErrorMessage(parsed.error);
-      setPhase('error');
-
-      return;
-    }
-
-    if (regenerateArtifact) {
-      const nextVersion = (regenerateArtifact.version ?? 1) + 1;
-      updateProjectArtifact(project.id, regenerateArtifact.id, {
-        title: `Database Design Draft v${nextVersion}`,
-        content: JSON.stringify(parsed.draft, null, 2),
-        version: nextVersion,
-        status: 'draft',
-      });
-    } else {
-      const nextVersion = (latest?.version ?? 0) + 1;
-      addProjectArtifact(project.id, databaseDesignerEngine.createDraftArtifact(parsed.draft, nextVersion));
-    }
-
-    setPhase('idle');
-  };
-
-  const handleApprove = () => {
-    if (!latest) {
-      return;
-    }
-
-    updateProjectArtifact(project.id, latest.id, { status: 'approved' });
-    toast.success('Database Design Draft approved');
-  };
-
-  const handleDiscard = () => {
-    if (!latest) {
-      return;
-    }
-
-    updateProjectArtifact(project.id, latest.id, { status: 'discarded' });
-    toast.info('Database Design Draft discarded');
-  };
-
-  const statusMeta = latest ? ARTIFACT_STATUS_META[latest.status as keyof typeof ARTIFACT_STATUS_META] : undefined;
+  const {
+    phase,
+    setPhase,
+    errorMessage,
+    isGenerating,
+    canGenerate,
+    latest,
+    latestDraft,
+    isPreviewing,
+    statusMeta,
+    runGeneration,
+    handleApprove,
+    handleDiscard,
+  } = useDraftPanel<DatabaseDraft, ReturnType<typeof databaseDesignerEngine.buildDatabaseContext>>({
+    project,
+    artifactType: ARTIFACT_TYPE,
+    titlePrefix: 'Database Design Draft',
+    maxOutputTokens: MAX_OUTPUT_TOKENS,
+    canGenerate: databaseDesignerEngine.canGenerateDatabase,
+    buildContext: databaseDesignerEngine.buildDatabaseContext,
+    buildPrompt: databaseDesignerEngine.buildDatabasePrompt,
+    parseDraft: databaseDesignerEngine.parseDraft,
+    createDraftArtifact: databaseDesignerEngine.createDraftArtifact,
+  });
 
   if (!canGenerate && !latest) {
     return (

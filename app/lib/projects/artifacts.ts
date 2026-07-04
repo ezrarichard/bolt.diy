@@ -93,6 +93,7 @@ export const ARTIFACT_TYPES = {
   REQUIREMENTS_DRAFT: 'requirements-draft',
   ARCHITECTURE_DRAFT: 'architecture-draft',
   DATABASE_DRAFT: 'database-draft',
+  UIUX_DRAFT: 'uiux-draft',
 } as const;
 
 /**
@@ -120,6 +121,26 @@ export function parseArtifactContent<T>(content: string): T | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Sprint 16 — "read the latest artifact of `type`, but only if it's been
+ * approved" — the exact check every gated AI role needs before it can run
+ * (Database Designer gating on an approved Architecture Draft, UI/UX
+ * Designer gating on an approved Database Design Draft, and future roles
+ * gating on whichever draft precedes them). Extracted out of
+ * databaseDesignerEngine.ts so it's defined once rather than re-implemented
+ * per engine. Returns undefined for "doesn't exist yet", "still a draft",
+ * and "discarded" alike — callers only care about the approved case.
+ */
+export function getApprovedArtifactContent<T>(artifacts: ProjectArtifact[], type: string): T | undefined {
+  const latest = getLatestArtifact(artifacts, type);
+
+  if (!latest || latest.status !== 'approved') {
+    return undefined;
+  }
+
+  return parseArtifactContent<T>(latest.content);
 }
 
 /** Sprint 14 — shared timestamp formatting for artifact status lines. */

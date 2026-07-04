@@ -12,34 +12,30 @@ import {
   type Project,
 } from '~/lib/stores/projects';
 import type { ArchitectureDraft } from './prompts/architecture';
-import {
-  buildDatabaseUserPrompt,
-  DATABASE_DESIGNER_SYSTEM_PROMPT,
-  DATABASE_DRAFT_FIELDS,
-  type DatabaseDraft,
-} from './prompts/database';
+import type { DatabaseDraft } from './prompts/database';
+import { buildUIUXUserPrompt, UIUX_DESIGNER_SYSTEM_PROMPT, UIUX_DRAFT_FIELDS, type UIUXDraft } from './prompts/uiux';
 
 /**
- * Database Designer Engine — Sprint 15, built on the Sprint 14 Solution
- * Architect pattern.
+ * UI/UX Designer Engine — Sprint 16, built on the Sprint 15 Database
+ * Designer pattern.
  *
  *   Blueprint -> Requirements -> Project Knowledge -> Roadmap -> Tasks
  *     -> Execution -> Review -> Approval -> Artifacts
- *       -> Business Analyst -> Solution Architect -> Database Designer Engine (this file)
- *         -> AI Generation
+ *       -> Business Analyst -> Solution Architect -> Database Designer
+ *         -> UI/UX Designer Engine (this file) -> AI Generation
  *
- * Same shape as app/lib/projects/solutionArchitectEngine.ts: pure
+ * Same shape as app/lib/projects/databaseDesignerEngine.ts: pure
  * orchestration (context gathering, prompt building, parsing) with no LLM
  * call and no knowledge of which provider/model is in use — see
  * app/lib/hooks/useGenerateText.ts and app/routes/api.generate-text.ts for
- * that (both reused unchanged). Approving a Database Design Draft never
- * generates SQL, never connects to Supabase, never creates a database or
- * table, and never mutates Project Knowledge or the Architecture Draft — it
- * only marks this artifact approved. No React, no UI, no prompt strings
- * inlined here — those live in app/lib/projects/prompts/database.ts.
+ * that (both reused unchanged). Approving a UI/UX Draft never generates
+ * HTML, CSS, Tailwind, React, Figma files, or images, and never mutates
+ * Project Knowledge, the Architecture Draft, or the Database Design Draft —
+ * it only marks this artifact approved. No React, no UI, no prompt strings
+ * inlined here — those live in app/lib/projects/prompts/uiux.ts.
  */
 
-export interface DatabaseContext {
+export interface UIUXContext {
   project: { name: string; description?: string; icon: string };
   blueprint: {
     id: string;
@@ -52,49 +48,54 @@ export interface DatabaseContext {
   knowledge: ProjectKnowledge | undefined;
   knowledgeCompletion: number;
   architecture: ArchitectureDraft | undefined;
+  database: DatabaseDraft | undefined;
   roadmap: { title: string; description: string; status: string }[];
   tasks: { title: string; category: string; status: string }[];
   existingArtifacts: { title: string; type: string; status: string }[];
   existingNotes: string;
 }
 
-export type ParsedDatabaseDraft = ParsedDraftResult<DatabaseDraft>;
+export type ParsedUIUXDraft = ParsedDraftResult<UIUXDraft>;
 
-const GENERATOR_NAME = 'AI Database Designer';
-const ARTIFACT_TYPE = ARTIFACT_TYPES.DATABASE_DRAFT;
+const GENERATOR_NAME = 'AI UI/UX Designer';
+const ARTIFACT_TYPE = ARTIFACT_TYPES.UIUX_DRAFT;
 
 /**
  * Every blueprint's task registry guarantees a `requirements` task exists
- * (see app/lib/projects/taskRegistry.ts) — same anchor Requirements Draft
- * and Architecture Draft artifacts use, since all three are project-level
- * deliverables rather than task-specific ones.
+ * (see app/lib/projects/taskRegistry.ts) — same anchor Requirements Draft,
+ * Architecture Draft, and Database Design Draft artifacts use, since all
+ * four are project-level deliverables rather than task-specific ones.
  */
 const ARTIFACT_TASK_ID = 'requirements';
 
-/** Reads the latest Architecture Draft artifact and returns its parsed content only if it has been approved — undefined otherwise. */
-function getApprovedArchitecture(project: Project): ArchitectureDraft | undefined {
-  return getApprovedArtifactContent<ArchitectureDraft>(getProjectArtifacts(project), ARTIFACT_TYPES.ARCHITECTURE_DRAFT);
-}
-
 /**
- * Database Design can only be generated once the Architecture Draft has
- * been approved — the Database Design Panel gates on this and explains why
- * the button is disabled otherwise.
+ * UI/UX Design can only be generated once the Database Design Draft has
+ * been approved — the UI/UX Design Panel gates on this and explains why the
+ * button is disabled otherwise.
  */
-function canGenerateDatabase(project: Project): boolean {
-  return getApprovedArchitecture(project) !== undefined;
+function canGenerateUIUX(project: Project): boolean {
+  return (
+    getApprovedArtifactContent<DatabaseDraft>(getProjectArtifacts(project), ARTIFACT_TYPES.DATABASE_DRAFT) !== undefined
+  );
 }
 
 /**
  * Gathers Project + Blueprint + approved Requirements/Project Knowledge +
- * approved Architecture Draft + Roadmap + Current Tasks + existing
- * Artifacts + Notes into one structured context object — same pattern as
- * solutionArchitectEngine.buildArchitectureContext.
+ * approved Architecture Draft + approved Database Design Draft + Roadmap +
+ * Current Tasks + existing Artifacts + Notes into one structured context
+ * object — same pattern as databaseDesignerEngine.buildDatabaseContext.
  */
-function buildDatabaseContext(project: Project): DatabaseContext {
+function buildUIUXContext(project: Project): UIUXContext {
   const blueprint = blueprintEngine.getBlueprint(project.blueprintId) ?? blueprintEngine.getDefaultBlueprint();
   const knowledge = getProjectKnowledge(project);
-  const architecture = getApprovedArchitecture(project);
+  const architecture = getApprovedArtifactContent<ArchitectureDraft>(
+    getProjectArtifacts(project),
+    ARTIFACT_TYPES.ARCHITECTURE_DRAFT,
+  );
+  const database = getApprovedArtifactContent<DatabaseDraft>(
+    getProjectArtifacts(project),
+    ARTIFACT_TYPES.DATABASE_DRAFT,
+  );
 
   const roadmap = blueprintEngine.getRoadmap(blueprint.id).map((item) => ({
     title: item.title,
@@ -129,6 +130,7 @@ function buildDatabaseContext(project: Project): DatabaseContext {
     knowledge,
     knowledgeCompletion: projectKnowledgeEngine.getCompletion(knowledge).overall,
     architecture,
+    database,
     roadmap,
     tasks,
     existingArtifacts,
@@ -136,33 +138,33 @@ function buildDatabaseContext(project: Project): DatabaseContext {
   };
 }
 
-/** Builds the system+user prompt pair from an already-gathered context. Delegates all prompt text to prompts/database.ts — no prompt strings live here. */
-function buildDatabasePrompt(context: DatabaseContext): { system: string; prompt: string } {
+/** Builds the system+user prompt pair from an already-gathered context. Delegates all prompt text to prompts/uiux.ts — no prompt strings live here. */
+function buildUIUXPrompt(context: UIUXContext): { system: string; prompt: string } {
   return {
-    system: DATABASE_DESIGNER_SYSTEM_PROMPT,
-    prompt: buildDatabaseUserPrompt(context),
+    system: UIUX_DESIGNER_SYSTEM_PROMPT,
+    prompt: buildUIUXUserPrompt(context),
   };
 }
 
 /**
- * Parses the AI's raw text response into a `DatabaseDraft` via the shared
+ * Parses the AI's raw text response into a `UIUXDraft` via the shared
  * generic parser (app/lib/projects/draftParsing.ts), validated field-by-field
- * against DATABASE_DRAFT_FIELDS.
+ * against UIUX_DRAFT_FIELDS.
  */
-function parseDraft(rawText: string): ParsedDatabaseDraft {
-  return parseStructuredDraft<DatabaseDraft>(rawText, DATABASE_DRAFT_FIELDS);
+function parseDraft(rawText: string): ParsedUIUXDraft {
+  return parseStructuredDraft<UIUXDraft>(rawText, UIUX_DRAFT_FIELDS);
 }
 
 /**
- * Builds a Database Design Draft artifact holding the parsed draft as JSON.
- * Approving this artifact only ever changes its own `status` — it never
- * generates SQL, never connects to Supabase, and never mutates Project
- * Knowledge or the Architecture Draft.
+ * Builds a UI/UX Draft artifact holding the parsed draft as JSON. Approving
+ * this artifact only ever changes its own `status` — it never generates
+ * HTML, CSS, Tailwind, React, Figma files, or images, and never mutates
+ * Project Knowledge, the Architecture Draft, or the Database Design Draft.
  */
-function createDraftArtifact(draft: DatabaseDraft, version: number): ProjectArtifact {
+function createDraftArtifact(draft: UIUXDraft, version: number): ProjectArtifact {
   return createArtifact({
     taskId: ARTIFACT_TASK_ID,
-    title: `Database Design Draft v${version}`,
+    title: `UI/UX Draft v${version}`,
     type: ARTIFACT_TYPE,
     content: JSON.stringify(draft, null, 2),
     status: 'draft',
@@ -171,10 +173,10 @@ function createDraftArtifact(draft: DatabaseDraft, version: number): ProjectArti
   });
 }
 
-export const databaseDesignerEngine = {
-  canGenerateDatabase,
-  buildDatabaseContext,
-  buildDatabasePrompt,
+export const uiuxDesignerEngine = {
+  canGenerateUIUX,
+  buildUIUXContext,
+  buildUIUXPrompt,
   parseDraft,
   createDraftArtifact,
 };
