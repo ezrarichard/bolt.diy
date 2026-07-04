@@ -97,6 +97,7 @@ export const ARTIFACT_TYPES = {
   BACKEND_DRAFT: 'backend-draft',
   FRONTEND_DRAFT: 'frontend-draft',
   QA_DRAFT: 'qa-draft',
+  DEVOPS_DRAFT: 'devops-draft',
 } as const;
 
 /**

@@ -16,28 +16,28 @@ import { UIUX_DRAFT_FIELDS, type UIUXDraft } from './prompts/uiux';
 import { BACKEND_DRAFT_FIELDS, type BackendDraft } from './prompts/backend';
 import { FRONTEND_DRAFT_FIELDS, type FrontendDraft } from './prompts/frontend';
 import { QA_DRAFT_FIELDS, type QADraft } from './prompts/qa';
+import { DEVOPS_DRAFT_FIELDS, type DevOpsDraft } from './prompts/devops';
 import { formatDraftFields, formatList, formatProjectKnowledge } from './prompts/shared';
 
 /**
  * Context Engine — Sprint 17, extended Sprint 19 for the real Backend
- * Engineer, Sprint 20 for the real Frontend Engineer, and Sprint 21 for the
- * real QA Engineer.
+ * Engineer, Sprint 20 for the real Frontend Engineer, Sprint 21 for the
+ * real QA Engineer, and Sprint 22 for the real DevOps Engineer — the full
+ * pipeline this engine was designed for.
  *
  *   Blueprint -> Requirements -> Project Knowledge -> Roadmap -> Tasks
  *     -> Execution -> Review -> Approval -> Artifacts
  *       -> Business Analyst -> Solution Architect -> Database Designer
  *         -> UI/UX Designer -> Backend Engineer -> Frontend Engineer
- *           -> QA Engineer -> Context Engine (this file)
- *             -> DevOps Engineer (future)
+ *           -> QA Engineer -> DevOps Engineer -> Context Engine (this file)
  *
- * Every AI role built so far (businessAnalystEngine.ts,
- * solutionArchitectEngine.ts, databaseDesignerEngine.ts,
- * uiuxDesignerEngine.ts, backendEngineerEngine.ts, frontendEngineerEngine.ts,
- * qaEngineerEngine.ts) hand-assembles its own full context object and hands
- * the whole thing to the prompt builder — fine when there are seven roles
- * reading a handful of small drafts, but a future DevOps Engineer would
- * otherwise receive full
- * requirements+architecture+database+UI/UX+backend+frontend+qa+roadmap+tasks+notes
+ * Every AI role (businessAnalystEngine.ts, solutionArchitectEngine.ts,
+ * databaseDesignerEngine.ts, uiuxDesignerEngine.ts, backendEngineerEngine.ts,
+ * frontendEngineerEngine.ts, qaEngineerEngine.ts, devopsEngineerEngine.ts)
+ * hand-assembles its own full context object and hands the whole thing to
+ * the prompt builder — without this engine deciding which sections apply,
+ * every one of those eight roles would receive full
+ * requirements+architecture+database+UI/UX+backend+frontend+qa+devops+roadmap+tasks+notes
  * on every call, which is both expensive and dilutes the prompt with
  * irrelevant detail (a Backend Engineer doesn't need animation timing; a
  * Frontend Engineer doesn't need index/constraint detail).
@@ -116,6 +116,7 @@ type ContextSectionId =
   | 'approved-backend-draft'
   | 'approved-frontend-draft'
   | 'approved-qa-draft'
+  | 'approved-devops-draft'
   | 'roadmap'
   | 'tasks'
   | 'notes';
@@ -269,6 +270,22 @@ export function summarizeQA(draft: QADraft | undefined): string {
   );
 }
 
+export function summarizeDevOps(draft: DevOpsDraft | undefined): string {
+  if (!draft) {
+    return 'No approved DevOps Draft yet.';
+  }
+
+  return (
+    joinTruthy([
+      draft.devopsOverview && `Overview: ${draft.devopsOverview}`,
+      draft.deploymentStrategy && `Deployment: ${draft.deploymentStrategy}`,
+      draft.hostingRecommendation && `Hosting: ${draft.hostingRecommendation}`,
+      draft.buildersDbStrategy && `BuildersDB: ${draft.buildersDbStrategy}`,
+      draft.applicationDatabaseStrategy && `Application database: ${draft.applicationDatabaseStrategy}`,
+    ]) ?? 'No approved DevOps Draft yet.'
+  );
+}
+
 /** Everything a section builder needs, gathered once per buildContextBundle() call so no builder re-reads the store. */
 interface SectionContext {
   project: Project;
@@ -281,6 +298,7 @@ interface SectionContext {
   backend: BackendDraft | undefined;
   frontend: FrontendDraft | undefined;
   qa: QADraft | undefined;
+  devops: DevOpsDraft | undefined;
   roadmap: { title: string; description: string; status: string }[];
   tasks: ProjectTaskExecution[];
   notesText: string;
@@ -485,6 +503,15 @@ const SECTION_DEFS: Record<
           : summarizeQA(ctx.qa)
         : undefined,
   },
+  'approved-devops-draft': {
+    label: 'Approved DevOps Draft',
+    build: (ctx) =>
+      ctx.devops
+        ? ctx.includeFullArtifacts
+          ? formatDraftFields(ctx.devops, DEVOPS_DRAFT_FIELDS)
+          : summarizeDevOps(ctx.devops)
+        : undefined,
+  },
   roadmap: {
     label: 'Roadmap',
     build: (ctx) => bulletList(ctx.roadmap.map((item) => `${item.title} (${item.status}): ${item.description}`)),
@@ -533,6 +560,7 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       { id: 'approved-backend-draft', reason: 'Backend implementation detail is not relevant to this role.' },
       { id: 'approved-frontend-draft', reason: 'Frontend implementation detail is not relevant to this role.' },
       { id: 'approved-qa-draft', reason: 'QA planning is not relevant to this role.' },
+      { id: 'approved-devops-draft', reason: 'DevOps planning is not relevant to this role.' },
     ],
     taskCategories: ['planning'],
     requiredUpstream: [],
@@ -563,6 +591,7 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       { id: 'approved-backend-draft', reason: 'Backend implementation detail is not relevant to this role.' },
       { id: 'approved-frontend-draft', reason: 'Frontend implementation detail is not relevant to this role.' },
       { id: 'approved-qa-draft', reason: 'QA planning is not relevant to this role.' },
+      { id: 'approved-devops-draft', reason: 'DevOps planning is not relevant to this role.' },
     ],
     taskCategories: ['planning', 'design'],
     requiredUpstream: [],
@@ -593,6 +622,7 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       { id: 'approved-backend-draft', reason: 'Backend implementation detail is not relevant to this role.' },
       { id: 'approved-frontend-draft', reason: 'Frontend implementation detail is not relevant to this role.' },
       { id: 'approved-qa-draft', reason: 'QA planning is not relevant to this role.' },
+      { id: 'approved-devops-draft', reason: 'DevOps planning is not relevant to this role.' },
     ],
     taskCategories: ['database'],
     requiredUpstream: [
@@ -628,6 +658,7 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       { id: 'approved-backend-draft', reason: 'Backend implementation detail is not relevant to this role.' },
       { id: 'approved-frontend-draft', reason: 'Frontend implementation detail is not relevant to this role.' },
       { id: 'approved-qa-draft', reason: 'QA planning is not relevant to this role.' },
+      { id: 'approved-devops-draft', reason: 'DevOps planning is not relevant to this role.' },
     ],
     taskCategories: ['design'],
     requiredUpstream: [
@@ -663,6 +694,7 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       { id: 'animations-motion', reason: 'UI animations are not relevant to Backend Engineer.' },
       { id: 'approved-frontend-draft', reason: 'Frontend design has not happened yet.' },
       { id: 'approved-qa-draft', reason: 'QA planning has not happened yet.' },
+      { id: 'approved-devops-draft', reason: 'DevOps planning has not happened yet.' },
     ],
     taskCategories: ['backend', 'integration'],
     requiredUpstream: [
@@ -702,6 +734,7 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
           "Low-level database security/retention detail is not needed unless explicitly required (see the 'include full artifacts' option).",
       },
       { id: 'approved-qa-draft', reason: 'QA planning has not happened yet.' },
+      { id: 'approved-devops-draft', reason: 'DevOps planning has not happened yet.' },
     ],
     taskCategories: ['frontend', 'design'],
     requiredUpstream: [
@@ -737,6 +770,7 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       { id: 'component-guidance', reason: 'Component implementation detail is not relevant to test planning.' },
       { id: 'page-layouts', reason: 'Layout detail is not relevant to test planning.' },
       { id: 'animations-motion', reason: 'Motion/animation detail is not relevant to test planning.' },
+      { id: 'approved-devops-draft', reason: 'DevOps planning has not happened yet.' },
     ],
     taskCategories: [],
     requiredUpstream: [
@@ -750,16 +784,20 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
     label: CONTEXT_ROLE_LABELS['devops-engineer'],
     sectionIds: [
       'project-summary',
+      'requirements-summary',
       'architecture-summary',
       'database-summary',
+      'uiux-summary',
+      'approved-backend-draft',
+      'approved-frontend-draft',
+      'approved-qa-draft',
+      'approved-devops-draft',
       'auth-strategy',
       'roadmap',
       'tasks',
       'notes',
     ],
     hardExcludedIds: [
-      { id: 'requirements-summary', reason: 'Already reflected in Architecture/Database Summary.' },
-      { id: 'uiux-summary', reason: 'Not relevant to deployment/infrastructure.' },
       { id: 'user-flows', reason: 'Not relevant to deployment/infrastructure.' },
       { id: 'pages-screens', reason: 'Not relevant to deployment/infrastructure.' },
       { id: 'user-roles', reason: 'Not relevant to deployment/infrastructure.' },
@@ -769,15 +807,12 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       { id: 'animations-motion', reason: 'Not relevant to deployment/infrastructure.' },
       { id: 'entities', reason: 'Full schema detail is covered by Database Summary already.' },
       { id: 'compliance-payments-security', reason: 'Covered by Architecture/Database Summary already.' },
-      { id: 'approved-backend-draft', reason: 'Backend implementation detail is not relevant to this role.' },
-      { id: 'approved-frontend-draft', reason: 'Not relevant to deployment/infrastructure.' },
-      { id: 'approved-qa-draft', reason: 'Not relevant to deployment/infrastructure.' },
     ],
     taskCategories: ['deployment'],
     requiredUpstream: [
       {
-        check: (ctx) => Boolean(ctx.architecture),
-        message: 'Architecture Draft is not approved yet — DevOps Engineer context will be incomplete.',
+        check: (ctx) => Boolean(ctx.qa),
+        message: 'QA Draft is not approved yet — DevOps Engineer context will be incomplete.',
       },
     ],
   },
@@ -816,6 +851,7 @@ export function buildContextBundle(
   const backend = getApprovedArtifactContent<BackendDraft>(artifacts, ARTIFACT_TYPES.BACKEND_DRAFT);
   const frontend = getApprovedArtifactContent<FrontendDraft>(artifacts, ARTIFACT_TYPES.FRONTEND_DRAFT);
   const qa = getApprovedArtifactContent<QADraft>(artifacts, ARTIFACT_TYPES.QA_DRAFT);
+  const devops = getApprovedArtifactContent<DevOpsDraft>(artifacts, ARTIFACT_TYPES.DEVOPS_DRAFT);
 
   const roadmap = blueprintEngine.getRoadmap(blueprint.id).map((item) => ({
     title: item.title,
@@ -840,6 +876,7 @@ export function buildContextBundle(
     backend,
     frontend,
     qa,
+    devops,
     roadmap,
     tasks,
     notesText,
@@ -937,4 +974,5 @@ export const contextEngine = {
   summarizeBackend,
   summarizeFrontend,
   summarizeQA,
+  summarizeDevOps,
 };

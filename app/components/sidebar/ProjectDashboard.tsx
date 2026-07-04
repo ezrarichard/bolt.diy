@@ -23,6 +23,7 @@ import { UiUxDraftPanel } from './UIUXDraftPanel';
 import { BackendDraftPanel } from './BackendDraftPanel';
 import { FrontendDraftPanel } from './FrontendDraftPanel';
 import { QaDraftPanel } from './QADraftPanel';
+import { DevOpsDraftPanel } from './DevOpsDraftPanel';
 import { ContextPreviewPanel } from './ContextPreviewPanel';
 
 interface ProjectDashboardProps {
@@ -853,6 +854,26 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
                         The QA Draft is stored locally for this project only — approving it never generates test code,
                         connects to GitHub, or deploys anything.
+                      </div>
+                    </div>
+
+                    {/* DevOps Strategy — Sprint 22 */}
+                    <div>
+                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                        DevOps Strategy
+                      </h2>
+                      <div
+                        className={classNames(
+                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                        )}
+                      >
+                        <DevOpsDraftPanel project={project} />
+                      </div>
+                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                        The DevOps Draft is stored locally for this project only — approving it never generates a
+                        Dockerfile, GitHub Actions workflow, Kubernetes manifest, Terraform configuration, or shell
+                        script, and never deploys or provisions anything.
                       </div>
                     </div>
 
