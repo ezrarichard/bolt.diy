@@ -18,22 +18,23 @@ import { formatDraftFields, formatList, formatProjectKnowledge } from './prompts
 
 /**
  * Context Engine — Sprint 17, extended Sprint 19 for the real Backend
- * Engineer.
+ * Engineer and Sprint 20 for the real Frontend Engineer.
  *
  *   Blueprint -> Requirements -> Project Knowledge -> Roadmap -> Tasks
  *     -> Execution -> Review -> Approval -> Artifacts
  *       -> Business Analyst -> Solution Architect -> Database Designer
- *         -> UI/UX Designer -> Backend Engineer -> Context Engine (this file)
- *           -> Frontend/QA/DevOps Engineers (future)
+ *         -> UI/UX Designer -> Backend Engineer -> Frontend Engineer
+ *           -> Context Engine (this file) -> QA/DevOps Engineers (future)
  *
  * Every AI role built so far (businessAnalystEngine.ts,
  * solutionArchitectEngine.ts, databaseDesignerEngine.ts,
- * uiuxDesignerEngine.ts, backendEngineerEngine.ts) hand-assembles its own
- * full context object and hands the whole thing to the prompt builder —
- * fine when there are five roles reading a handful of small drafts, but
- * future roles (Frontend, QA, DevOps) would otherwise receive full
- * requirements+architecture+database+UI/UX+backend+roadmap+tasks+notes on
- * every call, which is both expensive and dilutes the prompt with
+ * uiuxDesignerEngine.ts, backendEngineerEngine.ts,
+ * frontendEngineerEngine.ts) hand-assembles its own full context object and
+ * hands the whole thing to the prompt builder — fine when there are six
+ * roles reading a handful of small drafts, but future roles (QA, DevOps)
+ * would otherwise receive full
+ * requirements+architecture+database+UI/UX+backend+frontend+roadmap+tasks+notes
+ * on every call, which is both expensive and dilutes the prompt with
  * irrelevant detail (a Backend Engineer doesn't need animation timing; a
  * Frontend Engineer doesn't need index/constraint detail).
  *
@@ -606,43 +607,36 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
     label: CONTEXT_ROLE_LABELS['frontend-engineer'],
     sectionIds: [
       'project-summary',
-      'uiux-summary',
+      'requirements-summary',
       'architecture-summary',
+      'database-summary',
+      'uiux-summary',
       'approved-backend-draft',
+      'entities',
+      'user-flows',
+      'user-roles',
+      'auth-strategy',
       'pages-screens',
       'component-guidance',
       'page-layouts',
       'animations-motion',
       'brand-design-preferences',
-      'user-flows',
-      'user-roles',
-      'auth-strategy',
       'roadmap',
       'tasks',
       'notes',
     ],
     hardExcludedIds: [
       {
-        id: 'database-summary',
-        reason:
-          "Database internals are not needed unless explicitly required (see the 'include full artifacts' option).",
-      },
-      {
-        id: 'entities',
-        reason:
-          "Database internals are not needed unless explicitly required (see the 'include full artifacts' option).",
-      },
-      {
         id: 'compliance-payments-security',
-        reason: 'Backend/database concern, not relevant to frontend implementation.',
+        reason:
+          "Low-level database security/retention detail is not needed unless explicitly required (see the 'include full artifacts' option).",
       },
-      { id: 'requirements-summary', reason: 'Already reflected in the approved UI/UX Draft and Architecture Summary.' },
     ],
     taskCategories: ['frontend', 'design'],
     requiredUpstream: [
       {
-        check: (ctx) => Boolean(ctx.uiux),
-        message: 'UI/UX Draft is not approved yet — Frontend Engineer context will be incomplete.',
+        check: (ctx) => Boolean(ctx.backend),
+        message: 'Backend Draft is not approved yet — Frontend Engineer context will be incomplete.',
       },
     ],
   },
@@ -769,22 +763,7 @@ export function buildContextBundle(
     includeFullArtifacts,
   };
 
-  /*
-   * Frontend Engineer's "database internals unless required" rule — the
-   * only place a caller-supplied option (rather than the role alone)
-   * changes which sections apply. Promoting these two out of
-   * hardExcludedIds and into the priority list is the deterministic
-   * reading of "required" for this sprint.
-   */
-  let sectionIds = [...roleConfig.sectionIds];
-  let hardExcludedIds = roleConfig.hardExcludedIds;
-
-  if (role === 'frontend-engineer' && includeFullArtifacts) {
-    const promoted = new Set<ContextSectionId>(['database-summary', 'entities']);
-    sectionIds = [...sectionIds, ...hardExcludedIds.filter((entry) => promoted.has(entry.id)).map((entry) => entry.id)];
-    hardExcludedIds = hardExcludedIds.filter((entry) => !promoted.has(entry.id));
-  }
-
+  const { sectionIds, hardExcludedIds } = roleConfig;
   const priorityIds: ContextSectionId[] = currentTask ? ['current-task', ...sectionIds] : sectionIds;
 
   const candidates: ContextSection[] = [];

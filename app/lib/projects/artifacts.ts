@@ -95,6 +95,7 @@ export const ARTIFACT_TYPES = {
   DATABASE_DRAFT: 'database-draft',
   UIUX_DRAFT: 'uiux-draft',
   BACKEND_DRAFT: 'backend-draft',
+  FRONTEND_DRAFT: 'frontend-draft',
 } as const;
 
 /**
