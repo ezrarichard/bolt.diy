@@ -2,8 +2,9 @@ import { blueprintEngine } from '~/lib/blueprints';
 import { executionEngine } from './executionEngine';
 import { projectKnowledgeEngine } from './projectKnowledgeEngine';
 import type { ProjectKnowledge } from './knowledge';
-import { createArtifact, type ProjectArtifact } from './artifacts';
+import { ARTIFACT_TYPES, createArtifact, type ProjectArtifact } from './artifacts';
 import { getProjectKnowledge, getRoadmapItemStatus, getTaskNotes, type Project } from '~/lib/stores/projects';
+import { parseStructuredDraft, type ParsedDraftResult } from './draftParsing';
 import {
   BUSINESS_ANALYST_SYSTEM_PROMPT,
   buildRequirementsUserPrompt,
@@ -52,10 +53,10 @@ export interface RequirementsContext {
   existingNotes: string;
 }
 
-export type ParsedDraft = { ok: true; draft: RequirementsDraft } | { ok: false; error: string };
+export type ParsedDraft = ParsedDraftResult<RequirementsDraft>;
 
 const GENERATOR_NAME = 'AI Business Analyst';
-const ARTIFACT_TYPE = 'requirements-draft';
+const ARTIFACT_TYPE = ARTIFACT_TYPES.REQUIREMENTS_DRAFT;
 const ARTIFACT_TASK_ID = 'requirements';
 
 /**
@@ -116,64 +117,13 @@ function buildBusinessPrompt(context: RequirementsContext): { system: string; pr
   };
 }
 
-/** Pulls a JSON object out of a raw AI response, tolerating markdown code fences or stray text around it. */
-function extractJsonPayload(rawText: string): string {
-  const fenced = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
-
-  if (fenced) {
-    return fenced[1].trim();
-  }
-
-  const start = rawText.indexOf('{');
-  const end = rawText.lastIndexOf('}');
-
-  if (start !== -1 && end !== -1 && end > start) {
-    return rawText.slice(start, end + 1);
-  }
-
-  return rawText.trim();
-}
-
 /**
- * Parses the AI's raw text response into a `RequirementsDraft`, validating
- * field-by-field against REQUIREMENTS_DRAFT_FIELDS (text fields must be
- * non-empty strings, list fields must be arrays of non-empty strings —
- * anything else for a given key is silently dropped rather than failing
- * the whole draft). Returns a discriminated result rather than throwing.
+ * Parses the AI's raw text response into a `RequirementsDraft` via the
+ * shared generic parser (app/lib/projects/draftParsing.ts), validated
+ * field-by-field against REQUIREMENTS_DRAFT_FIELDS.
  */
 function parseDraft(rawText: string): ParsedDraft {
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(extractJsonPayload(rawText));
-  } catch {
-    return { ok: false, error: 'The AI response was not valid JSON.' };
-  }
-
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { ok: false, error: 'The AI response was not a JSON object.' };
-  }
-
-  const source = parsed as Record<string, unknown>;
-  const draft: RequirementsDraft = {};
-
-  for (const field of REQUIREMENTS_DRAFT_FIELDS) {
-    const value = source[field.key];
-
-    if (field.kind === 'list') {
-      if (Array.isArray(value)) {
-        const items = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
-
-        if (items.length > 0) {
-          (draft as Record<string, string[]>)[field.key] = items;
-        }
-      }
-    } else if (typeof value === 'string' && value.trim().length > 0) {
-      (draft as Record<string, string>)[field.key] = value.trim();
-    }
-  }
-
-  return { ok: true, draft };
+  return parseStructuredDraft<RequirementsDraft>(rawText, REQUIREMENTS_DRAFT_FIELDS);
 }
 
 /** Builds a Requirements Draft artifact holding the parsed draft as JSON. Never overwrites Project Knowledge — that only happens on explicit approval. */

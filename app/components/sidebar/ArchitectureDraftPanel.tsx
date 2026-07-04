@@ -1,14 +1,7 @@
 import { useState } from 'react';
 import { toast } from 'react-toastify';
 import { classNames } from '~/utils/classNames';
-import {
-  addProjectArtifact,
-  getProjectArtifacts,
-  getProjectKnowledge,
-  updateProjectArtifact,
-  updateProjectKnowledge,
-  type Project,
-} from '~/lib/stores/projects';
+import { addProjectArtifact, getProjectArtifacts, updateProjectArtifact, type Project } from '~/lib/stores/projects';
 import {
   ARTIFACT_STATUS_META,
   ARTIFACT_TYPES,
@@ -17,44 +10,59 @@ import {
   parseArtifactContent,
   type ProjectArtifact,
 } from '~/lib/projects/artifacts';
-import { businessAnalystEngine } from '~/lib/projects/businessAnalystEngine';
-import { REQUIREMENTS_DRAFT_FIELDS, type RequirementsDraft } from '~/lib/projects/prompts/requirements';
+import { solutionArchitectEngine } from '~/lib/projects/solutionArchitectEngine';
+import { ARCHITECTURE_DRAFT_FIELDS, type ArchitectureDraft } from '~/lib/projects/prompts/architecture';
 import { useGenerateText } from '~/lib/hooks/useGenerateText';
 
-interface RequirementsDraftPanelProps {
+interface ArchitectureDraftPanelProps {
   project: Project;
 }
 
 type Phase = 'idle' | 'confirm' | 'generating' | 'error';
 
-const ARTIFACT_TYPE = ARTIFACT_TYPES.REQUIREMENTS_DRAFT;
+const ARTIFACT_TYPE = ARTIFACT_TYPES.ARCHITECTURE_DRAFT;
 
 /**
- * Sprint 13 — the Requirements Draft feature end to end: a "Generate Draft
- * Requirements" button (replacing the old disabled placeholder), a
+ * Sprint 14 fix — the Architecture Draft asks for many free-text fields
+ * (frontend/backend/database/auth/payment/compliance/deployment
+ * architecture, scalability plan) and was getting cut off before its
+ * closing JSON brace under the default output limit. Requesting more room
+ * up front is the actual fix; app/routes/api.generate-text.ts fails
+ * gracefully (a clear 400 message surfaced via `errorMessage`) if the
+ * selected model can't support this many output tokens.
+ */
+const MAX_OUTPUT_TOKENS = 8192;
+
+/**
+ * Sprint 14 — the Architecture Draft feature, built on the exact Sprint 13
+ * RequirementsDraftPanel pattern: a "Generate Architecture Draft" button, a
  * confirm step, a loading state, a structured preview with
  * Approve/Discard/Regenerate, and a persistent status line once a draft
- * exists (Task: Dashboard). Project Knowledge is only ever updated from
- * Approve — Discard and a fresh Generate never touch it. All context
- * gathering/prompt building/parsing goes through `businessAnalystEngine`;
- * this component only orchestrates calling it and persisting the result.
+ * exists. Unlike the Requirements Draft, Approve here only ever changes
+ * this artifact's own `status` — it never touches Project Knowledge or any
+ * database/frontend/backend artifact. Generation is disabled until
+ * requirements/Project Knowledge exist (`solutionArchitectEngine.canGenerateArchitecture`).
+ * All context gathering/prompt building/parsing goes through
+ * `solutionArchitectEngine`; this component only orchestrates calling it
+ * and persisting the result.
  */
-export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps) {
+export function ArchitectureDraftPanel({ project }: ArchitectureDraftPanelProps) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const { generate, isGenerating } = useGenerateText();
 
+  const canGenerate = solutionArchitectEngine.canGenerateArchitecture(project);
   const latest = getLatestArtifact(getProjectArtifacts(project), ARTIFACT_TYPE);
-  const latestDraft = latest ? parseArtifactContent<RequirementsDraft>(latest.content) : undefined;
+  const latestDraft = latest ? parseArtifactContent<ArchitectureDraft>(latest.content) : undefined;
   const isPreviewing = latest?.status === 'draft' && latestDraft;
 
   const runGeneration = async (regenerateArtifact?: ProjectArtifact) => {
     setPhase('generating');
     setErrorMessage('');
 
-    const context = businessAnalystEngine.buildRequirementsContext(project);
-    const { system, prompt } = businessAnalystEngine.buildBusinessPrompt(context);
-    const result = await generate(system, prompt);
+    const context = solutionArchitectEngine.buildArchitectureContext(project);
+    const { system, prompt } = solutionArchitectEngine.buildArchitecturePrompt(context);
+    const result = await generate(system, prompt, { maxTokens: MAX_OUTPUT_TOKENS });
 
     if (!result.ok) {
       setErrorMessage(result.error);
@@ -63,7 +71,7 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
       return;
     }
 
-    const parsed = businessAnalystEngine.parseDraft(result.text);
+    const parsed = solutionArchitectEngine.parseDraft(result.text);
 
     if (!parsed.ok) {
       setErrorMessage(parsed.error);
@@ -75,28 +83,26 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
     if (regenerateArtifact) {
       const nextVersion = (regenerateArtifact.version ?? 1) + 1;
       updateProjectArtifact(project.id, regenerateArtifact.id, {
-        title: `Requirements Draft v${nextVersion}`,
+        title: `Architecture Draft v${nextVersion}`,
         content: JSON.stringify(parsed.draft, null, 2),
         version: nextVersion,
         status: 'draft',
       });
     } else {
       const nextVersion = (latest?.version ?? 0) + 1;
-      addProjectArtifact(project.id, businessAnalystEngine.createDraftArtifact(parsed.draft, nextVersion));
+      addProjectArtifact(project.id, solutionArchitectEngine.createDraftArtifact(parsed.draft, nextVersion));
     }
 
     setPhase('idle');
   };
 
   const handleApprove = () => {
-    if (!latest || !latestDraft) {
+    if (!latest) {
       return;
     }
 
-    const knowledgeUpdate = businessAnalystEngine.summarizeRequirements(latestDraft, getProjectKnowledge(project));
-    updateProjectKnowledge(project.id, knowledgeUpdate);
     updateProjectArtifact(project.id, latest.id, { status: 'approved' });
-    toast.success('Requirements Draft approved — Project Knowledge updated');
+    toast.success('Architecture Draft approved');
   };
 
   const handleDiscard = () => {
@@ -105,10 +111,27 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
     }
 
     updateProjectArtifact(project.id, latest.id, { status: 'discarded' });
-    toast.info('Requirements Draft discarded — Project Knowledge unchanged');
+    toast.info('Architecture Draft discarded');
   };
 
   const statusMeta = latest ? ARTIFACT_STATUS_META[latest.status as keyof typeof ARTIFACT_STATUS_META] : undefined;
+
+  if (!canGenerate && !latest) {
+    return (
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          disabled
+          title="Complete requirements first."
+          className="flex gap-2 items-center bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary cursor-not-allowed opacity-60 rounded-lg px-4 py-2"
+        >
+          <span className="inline-block i-ph:sparkle h-4 w-4" />
+          <span className="text-sm font-medium">Generate Architecture Draft</span>
+        </button>
+        <span className="text-xs text-bolt-elements-textTertiary">Complete requirements first.</span>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -121,7 +144,7 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
         >
           <div className="flex items-center justify-between mb-3">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-purple-600 dark:text-purple-300">
-              Requirements Draft Preview
+              Architecture Draft Preview
             </div>
             <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-purple-500/30 text-purple-600 dark:text-purple-300">
               v{latest?.version ?? 1}
@@ -129,7 +152,7 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {REQUIREMENTS_DRAFT_FIELDS.map((field) => {
+            {ARCHITECTURE_DRAFT_FIELDS.map((field) => {
               const value = latestDraft?.[field.key];
               const display = Array.isArray(value) ? value.join(', ') : value;
 
@@ -176,8 +199,8 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
       ) : phase === 'confirm' ? (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-bolt-elements-borderColor/60 p-3">
           <span className="text-xs text-bolt-elements-textTertiary">
-            The AI Business Analyst will draft a requirements document from your current project context. Nothing is
-            saved until you approve it.
+            The AI Solution Architect will draft a technical architecture from your approved requirements and current
+            project context. Nothing is saved until you approve it.
           </span>
           <div className="flex gap-2 ml-auto shrink-0">
             <button
@@ -199,7 +222,7 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
       ) : phase === 'generating' || isGenerating ? (
         <div className="flex items-center gap-2 text-xs text-bolt-elements-textTertiary px-1">
           <span className="i-svg-spinners:90-ring-with-bg w-3.5 h-3.5 text-purple-500" />
-          The AI Business Analyst is drafting requirements…
+          The AI Solution Architect is drafting the architecture…
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-3">
@@ -209,7 +232,7 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
             className="flex gap-2 items-center bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-500/20 rounded-lg px-4 py-2 transition-colors"
           >
             <span className="inline-block i-ph:sparkle h-4 w-4" />
-            <span className="text-sm font-medium">Generate Draft Requirements</span>
+            <span className="text-sm font-medium">Generate Architecture Draft</span>
           </button>
           {phase === 'error' && (
             <span className="text-xs text-red-500">{errorMessage || 'Draft generation failed.'}</span>
@@ -219,7 +242,7 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
 
       {latest && !isPreviewing && statusMeta && (
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-bolt-elements-textTertiary px-1">
-          <span className="font-medium text-bolt-elements-textSecondary">Requirements Draft</span>
+          <span className="font-medium text-bolt-elements-textSecondary">Architecture Draft</span>
           <span
             className={classNames(
               'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0',

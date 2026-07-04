@@ -16,8 +16,16 @@ export interface GenerateTextError {
   error: string;
 }
 
+export interface GenerateTextOptions {
+  /** Optional output token ceiling — passed straight through to app/routes/api.generate-text.ts. Omit to use the provider's default. */
+  maxTokens?: number;
+}
+
 /**
- * Generic, provider-agnostic one-shot text generation — Sprint 13.
+ * Generic, provider-agnostic one-shot text generation — Sprint 13, extended
+ * Sprint 14 with an optional `maxTokens` so callers whose expected output is
+ * naturally long (e.g. the Architecture Draft's many free-text fields) can
+ * ask for more room without every caller having to.
  *
  * Reads whichever model/provider/API keys the user has already selected in
  * Chat (same cookies Chat.client.tsx reads: `selectedModel`,
@@ -26,8 +34,9 @@ export interface GenerateTextError {
  * "Business Analyst" or any other AI role — it's the one piece of client
  * plumbing every future AI-role UI (Solution Architect, Database Designer,
  * UI Designer, Backend Engineer) can reuse unchanged; only the
- * system/prompt text passed in differs, and that text always comes from a
- * `prompts/*.ts` + `*Engine.ts` pair, never written inline in a component.
+ * system/prompt text (and, optionally, `maxTokens`) passed in differs, and
+ * that text always comes from a `prompts/*.ts` + `*Engine.ts` pair, never
+ * written inline in a component.
  */
 export function useGenerateText() {
   const [isGenerating, setIsGenerating] = useState(false);
@@ -35,6 +44,7 @@ export function useGenerateText() {
   const generate = async (
     system: string | undefined,
     prompt: string,
+    options?: GenerateTextOptions,
   ): Promise<GenerateTextResult | GenerateTextError> => {
     setIsGenerating(true);
 
@@ -47,7 +57,7 @@ export function useGenerateText() {
       const response = await fetch('/api/generate-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system, prompt, model, provider }),
+        body: JSON.stringify({ system, prompt, model, provider, maxTokens: options?.maxTokens }),
       });
 
       if (!response.ok) {
@@ -55,7 +65,7 @@ export function useGenerateText() {
         return { ok: false, error: message || `Request failed with status ${response.status}` };
       }
 
-      const data = await response.json<{ text: string }>();
+      const data = await response.json<{ text: string; finishReason?: string }>();
 
       return { ok: true, text: data.text };
     } catch (error) {

@@ -1,6 +1,7 @@
 import { blueprintEngine } from '~/lib/blueprints';
-import { getProjectKnowledge, getRoadmapItemStatus, type Project } from '~/lib/stores/projects';
+import { getProjectArtifacts, getProjectKnowledge, getRoadmapItemStatus, type Project } from '~/lib/stores/projects';
 import type { ProjectKnowledge } from './knowledge';
+import { ARTIFACT_TYPES, getLatestArtifact } from './artifacts';
 
 /**
  * Project Knowledge Engine — Phase 2 Sprint 10 ("AI Project Manager /
@@ -259,7 +260,7 @@ function getMissingFields(
     .filter((field): field is KnowledgeFieldConfig => Boolean(field));
 }
 
-export type ReadinessStageStatus = 'not-started' | 'in-progress' | 'completed';
+export type ReadinessStageStatus = 'not-started' | 'in-progress' | 'in-review' | 'completed';
 
 export interface ReadinessStage {
   id: string;
@@ -269,11 +270,35 @@ export interface ReadinessStage {
 }
 
 /**
+ * Sprint 14 — the Architecture stage of Project Readiness, driven by the
+ * latest 'architecture-draft' artifact (see
+ * app/lib/projects/solutionArchitectEngine.ts): no artifact yet reads "Not
+ * Started", a pending draft reads "In Review", and an approved draft reads
+ * "Completed" (a discarded draft falls back to "Not Started" — nothing to
+ * show for it). This is the only readiness row Sprint 14 changes; every
+ * other row here is untouched.
+ */
+function getArchitectureReadinessStatus(project: Project): ReadinessStageStatus {
+  const architectureArtifact = getLatestArtifact(getProjectArtifacts(project), ARTIFACT_TYPES.ARCHITECTURE_DRAFT);
+
+  if (architectureArtifact?.status === 'approved') {
+    return 'completed';
+  }
+
+  if (architectureArtifact?.status === 'draft') {
+    return 'in-review';
+  }
+
+  return 'not-started';
+}
+
+/**
  * Task 5 — Project Readiness, the high-level progress indicator for the
  * whole project lifecycle. Requirements and Roadmap are computed from real
- * local data; Design/Database/Frontend/Backend/Deployment have no data
- * source yet (no such systems exist in this sprint) so they always read
- * "Not Started" — future sprints can wire real signals into those stages
+ * local data; Architecture (Sprint 14) reflects the latest architecture
+ * draft artifact; Design/Database/Frontend/Backend/Deployment have no data
+ * source yet (no such systems exist yet) so they always read "Not
+ * Started" — future sprints can wire real signals into those stages
  * without changing this function's shape.
  */
 function getReadiness(project: Project): ReadinessStage[] {
@@ -299,6 +324,7 @@ function getReadiness(project: Project): ReadinessStage[] {
       status: statusForPercent(roadmapPercent),
       percent: roadmapPercent,
     },
+    { id: 'architecture', label: 'Architecture', status: getArchitectureReadinessStatus(project) },
     { id: 'design', label: 'Design', status: 'not-started' },
     { id: 'database', label: 'Database', status: 'not-started' },
     { id: 'frontend', label: 'Frontend', status: 'not-started' },

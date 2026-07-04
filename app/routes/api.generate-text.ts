@@ -12,26 +12,30 @@ export async function action(args: ActionFunctionArgs) {
 }
 
 /**
- * Generic, provider-agnostic one-shot text generation endpoint — Sprint 13.
+ * Generic, provider-agnostic one-shot text generation endpoint — Sprint 13,
+ * extended Sprint 14 with an optional output token limit.
  *
  * This route contains no business logic of its own. It exists purely so
- * server-only engines (app/lib/projects/businessAnalystEngine.ts today;
- * future AI Solution Architect / Database Designer / UI Designer / Backend
- * Engineer engines later) can ask "run this system+prompt through whichever
- * provider/model the user has selected" without importing the LLM provider
- * abstraction (app/lib/modules/llm/) themselves. Every future AI role
- * reuses this exact route unchanged — only the caller's prompt/context
- * building differs. Mirrors api.enhancer.ts's provider resolution and
- * cookie handling, but returns the full generated text as JSON (not a
- * stream), since callers need the complete response before parsing it as
- * structured data.
+ * server-only engines (app/lib/projects/businessAnalystEngine.ts,
+ * app/lib/projects/solutionArchitectEngine.ts today; future AI roles later)
+ * can ask "run this system+prompt through whichever provider/model the user
+ * has selected" without importing the LLM provider abstraction
+ * (app/lib/modules/llm/) themselves. Every future AI role reuses this exact
+ * route unchanged — only the caller's prompt/context building (and,
+ * optionally, how large a response it expects) differs. `maxTokens` is
+ * accepted generically for that reason — this file has no notion of
+ * "Architecture" or any other specific role. Mirrors api.enhancer.ts's
+ * provider resolution and cookie handling, but returns the full generated
+ * text as JSON (not a stream), since callers need the complete response
+ * before parsing it as structured data.
  */
 async function generateTextAction({ context, request }: ActionFunctionArgs) {
-  const { system, prompt, model, provider } = await request.json<{
+  const { system, prompt, model, provider, maxTokens } = await request.json<{
     system?: string;
     prompt: string;
     model: string;
     provider: ProviderInfo;
+    maxTokens?: number;
   }>();
 
   if (!prompt || typeof prompt !== 'string') {
@@ -56,6 +60,7 @@ async function generateTextAction({ context, request }: ActionFunctionArgs) {
     const result = await generateText({
       system,
       prompt,
+      ...(typeof maxTokens === 'number' && maxTokens > 0 ? { maxTokens } : {}),
       model: resolvedProvider.getModelInstance({
         model,
         serverEnv: context.cloudflare?.env as any,
@@ -64,12 +69,19 @@ async function generateTextAction({ context, request }: ActionFunctionArgs) {
       }),
     });
 
-    return Response.json({ text: result.text });
+    return Response.json({ text: result.text, finishReason: result.finishReason });
   } catch (error: unknown) {
     logger.error('Text generation failed:', error);
 
     if (error instanceof Error && error.message?.includes('API key')) {
       throw new Response('Invalid or missing API key', { status: 401, statusText: 'Unauthorized' });
+    }
+
+    if (error instanceof Error && /max.?tokens|context length|token limit/i.test(error.message)) {
+      throw new Response(
+        'The selected model does not support the requested output length. Try a different model or a shorter request.',
+        { status: 400, statusText: 'Bad Request' },
+      );
     }
 
     throw new Response(null, { status: 500, statusText: 'Internal Server Error' });

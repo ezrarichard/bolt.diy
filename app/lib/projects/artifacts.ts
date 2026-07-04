@@ -82,3 +82,60 @@ export function createArtifact(input: {
     version: input.version,
   };
 }
+
+/**
+ * Sprint 14 — canonical artifact `type` values for every AI-role draft, so
+ * no engine/component hand-types the string more than once. Add one entry
+ * here per future AI role (Database Designer, UI Designer, Backend
+ * Engineer, ...).
+ */
+export const ARTIFACT_TYPES = {
+  REQUIREMENTS_DRAFT: 'requirements-draft',
+  ARCHITECTURE_DRAFT: 'architecture-draft',
+} as const;
+
+/**
+ * Sprint 14 — shared by every "*DraftPanel" component (RequirementsDraftPanel,
+ * ArchitectureDraftPanel, and future AI-role panels) so "which artifact of
+ * this type is the current one" is answered exactly once. Ties break toward
+ * the higher version.
+ */
+export function getLatestArtifact(artifacts: ProjectArtifact[], type: string): ProjectArtifact | undefined {
+  const matching = artifacts.filter((artifact) => artifact.type === type);
+
+  if (matching.length === 0) {
+    return undefined;
+  }
+
+  return matching.reduce((latest, candidate) =>
+    (candidate.version ?? 0) > (latest.version ?? 0) ? candidate : latest,
+  );
+}
+
+/** Sprint 14 — parses an artifact's JSON `content` back into its draft shape. Returns undefined rather than throwing on malformed content. */
+export function parseArtifactContent<T>(content: string): T | undefined {
+  try {
+    return JSON.parse(content) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Sprint 14 — shared timestamp formatting for artifact status lines. */
+export function formatArtifactTimestamp(at: string): string {
+  const date = new Date(at);
+  return Number.isNaN(date.getTime()) ? at : date.toLocaleString();
+}
+
+/** Sprint 14 — shared badge styling for an AI draft artifact's review status, used by every "*DraftPanel" component. */
+export const ARTIFACT_STATUS_META: Record<'draft' | 'approved' | 'discarded', { label: string; className: string }> = {
+  draft: { label: 'Draft', className: 'text-purple-600 dark:text-purple-400 border-purple-500/30 bg-purple-500/10' },
+  approved: {
+    label: 'Approved',
+    className: 'text-green-600 dark:text-green-400 border-green-500/30 bg-green-500/10',
+  },
+  discarded: {
+    label: 'Discarded',
+    className: 'text-bolt-elements-textTertiary border-bolt-elements-borderColor/50',
+  },
+};

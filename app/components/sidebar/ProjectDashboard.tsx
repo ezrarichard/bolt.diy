@@ -17,6 +17,7 @@ import { ProjectTaskCard, TASK_STATUS_META, formatEstimatedMinutes } from './Pro
 import { TaskDetailsDialog } from './TaskDetailsDialog';
 import { ReviewQueueCard } from './ReviewComponents';
 import { RequirementsDraftPanel } from './RequirementsDraftPanel';
+import { ArchitectureDraftPanel } from './ArchitectureDraftPanel';
 
 interface ProjectDashboardProps {
   project: Project | null;
@@ -212,6 +213,11 @@ const READINESS_STATUS_META: Record<
     icon: 'i-ph:circle-half-duotone',
     className: 'text-amber-600 dark:text-amber-400',
     label: (percent) => `${percent ?? 0}%`,
+  },
+  'in-review': {
+    icon: 'i-ph:magnifying-glass-duotone',
+    className: 'text-purple-600 dark:text-purple-400',
+    label: () => 'In Review',
   },
   completed: {
     icon: 'i-ph:check-circle-duotone',
@@ -727,6 +733,25 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
                         Requirements are stored locally for this project only — nothing here is sent to AI or generated
                         automatically yet.
+                      </div>
+                    </div>
+
+                    {/* Architecture — Sprint 14 */}
+                    <div>
+                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                        Architecture
+                      </h2>
+                      <div
+                        className={classNames(
+                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                        )}
+                      >
+                        <ArchitectureDraftPanel project={project} />
+                      </div>
+                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                        The Architecture Draft is stored locally for this project only — approving it never updates
+                        Project Knowledge or generates a database, frontend, or backend.
                       </div>
                     </div>
 

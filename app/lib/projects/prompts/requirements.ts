@@ -1,4 +1,5 @@
 import type { RequirementsContext } from '~/lib/projects/businessAnalystEngine';
+import { formatList, formatProjectKnowledge } from './shared';
 
 /**
  * Business Analyst prompt — Sprint 13.
@@ -79,38 +80,6 @@ Rules:
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty — but list genuine uncertainties under "openQuestions" instead of guessing wildly.
 - Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.`;
 
-function formatList(items: string[] | undefined, fallback = 'None specified'): string {
-  return items && items.length > 0 ? items.join(', ') : fallback;
-}
-
-function formatKnowledge(context: RequirementsContext): string {
-  const knowledge = context.knowledge;
-
-  if (!knowledge) {
-    return 'Nothing captured yet.';
-  }
-
-  const lines = [
-    knowledge.projectVision && `Vision: ${knowledge.projectVision}`,
-    knowledge.industry && `Industry: ${knowledge.industry}`,
-    knowledge.businessModel && `Business model: ${knowledge.businessModel}`,
-    knowledge.targetUsers && `Target users: ${knowledge.targetUsers}`,
-    knowledge.location && `Region: ${knowledge.location}`,
-    knowledge.coreFeatures?.length && `Core features: ${formatList(knowledge.coreFeatures)}`,
-    knowledge.pagesOrScreens?.length && `Pages/screens: ${formatList(knowledge.pagesOrScreens)}`,
-    knowledge.userRoles?.length && `User roles: ${formatList(knowledge.userRoles)}`,
-    knowledge.integrations?.length && `Integrations: ${formatList(knowledge.integrations)}`,
-    knowledge.paymentNeeds?.length && `Payments: ${formatList(knowledge.paymentNeeds)}`,
-    knowledge.complianceNeeds?.length && `Compliance: ${formatList(knowledge.complianceNeeds)}`,
-    knowledge.shippingNeeds?.length && `Shipping: ${formatList(knowledge.shippingNeeds)}`,
-    knowledge.languages?.length && `Languages: ${formatList(knowledge.languages)}`,
-    knowledge.brandTone && `Brand tone: ${knowledge.brandTone}`,
-    knowledge.technicalPreferences && `Technical preferences: ${knowledge.technicalPreferences}`,
-  ].filter(Boolean);
-
-  return lines.length > 0 ? lines.join('\n') : 'Nothing captured yet.';
-}
-
 const JSON_SHAPE = `{
 ${REQUIREMENTS_DRAFT_FIELDS.map((field) => `  "${field.key}": ${field.kind === 'list' ? 'string[]' : 'string'}`).join(',\n')}
 }`;
@@ -129,7 +98,7 @@ Recommended stack: ${formatList(context.blueprint.recommendedStack)}
 Recommended integrations: ${formatList(context.blueprint.recommendedIntegrations)}
 
 Existing Project Knowledge (${context.knowledgeCompletion}% complete):
-${formatKnowledge(context)}
+${formatProjectKnowledge(context.knowledge)}
 
 Recommended fields still missing: ${formatList(context.missingInformation, 'None')}
 
