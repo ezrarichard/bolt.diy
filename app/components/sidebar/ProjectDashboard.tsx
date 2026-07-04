@@ -24,6 +24,7 @@ import { BackendDraftPanel } from './BackendDraftPanel';
 import { FrontendDraftPanel } from './FrontendDraftPanel';
 import { QaDraftPanel } from './QADraftPanel';
 import { DevOpsDraftPanel } from './DevOpsDraftPanel';
+import { ProjectManagerPanel } from './ProjectManagerPanel';
 import { ContextPreviewPanel } from './ContextPreviewPanel';
 
 interface ProjectDashboardProps {
@@ -874,6 +875,26 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                         The DevOps Draft is stored locally for this project only — approving it never generates a
                         Dockerfile, GitHub Actions workflow, Kubernetes manifest, Terraform configuration, or shell
                         script, and never deploys or provisions anything.
+                      </div>
+                    </div>
+
+                    {/* Project Manager — Sprint 23 */}
+                    <div>
+                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                        Project Manager
+                      </h2>
+                      <div
+                        className={classNames(
+                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                        )}
+                      >
+                        <ProjectManagerPanel project={project} />
+                      </div>
+                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                        Computed locally from every artifact, task, review, and roadmap status above — no AI call, no
+                        code generation. This is orchestration only: it decides whether the project is ready, never what
+                        to build.
                       </div>
                     </div>
 

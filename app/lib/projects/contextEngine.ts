@@ -60,7 +60,8 @@ export type ContextRole =
   | 'backend-engineer'
   | 'frontend-engineer'
   | 'qa-engineer'
-  | 'devops-engineer';
+  | 'devops-engineer'
+  | 'project-manager';
 
 export const CONTEXT_ROLES: ContextRole[] = [
   'business-analyst',
@@ -71,6 +72,7 @@ export const CONTEXT_ROLES: ContextRole[] = [
   'frontend-engineer',
   'qa-engineer',
   'devops-engineer',
+  'project-manager',
 ];
 
 export const CONTEXT_ROLE_LABELS: Record<ContextRole, string> = {
@@ -82,6 +84,7 @@ export const CONTEXT_ROLE_LABELS: Record<ContextRole, string> = {
   'frontend-engineer': 'Frontend Engineer',
   'qa-engineer': 'QA Engineer',
   'devops-engineer': 'DevOps Engineer',
+  'project-manager': 'AI Project Manager',
 };
 
 export type ContextBudget = 'small' | 'medium' | 'large' | 'full';
@@ -816,6 +819,45 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       },
     ],
   },
+  'project-manager': {
+    label: CONTEXT_ROLE_LABELS['project-manager'],
+
+    /**
+     * Every section, in the same priority order as the richest downstream
+     * role (QA Engineer) plus the sections no other role includes
+     * (approved-devops-draft) — deliberately no `hardExcludedIds`. This is
+     * the only role meant to see the complete engineering picture at once,
+     * so nothing is filtered out for relevance the way it is for every
+     * other role above.
+     */
+    sectionIds: [
+      'project-summary',
+      'requirements-summary',
+      'architecture-summary',
+      'database-summary',
+      'uiux-summary',
+      'auth-strategy',
+      'entities',
+      'compliance-payments-security',
+      'user-flows',
+      'pages-screens',
+      'user-roles',
+      'brand-design-preferences',
+      'component-guidance',
+      'page-layouts',
+      'animations-motion',
+      'approved-backend-draft',
+      'approved-frontend-draft',
+      'approved-qa-draft',
+      'approved-devops-draft',
+      'roadmap',
+      'tasks',
+      'notes',
+    ],
+    hardExcludedIds: [],
+    taskCategories: [],
+    requiredUpstream: [],
+  },
 };
 
 export interface BuildContextBundleOptions {
@@ -831,16 +873,24 @@ export interface BuildContextBundleOptions {
  * summarizers above. Sections are considered in the role's priority order;
  * once adding the next section would exceed the budget, it and everything
  * after it are excluded as budget-trimmed rather than included.
+ *
+ * `project-manager` is the one exception: it defaults to the `full` budget
+ * and full artifact detail, and — regardless of which budget is passed in —
+ * is never trimmed for size (see `noTrim` below). It is the only role meant
+ * to see the complete engineering picture rather than a relevance-filtered,
+ * token-budgeted slice of it.
  */
 export function buildContextBundle(
   project: Project,
   role: ContextRole,
   options: BuildContextBundleOptions = {},
 ): ContextBundle {
-  const budget = options.budget ?? 'medium';
+  const isProjectManager = role === 'project-manager';
+  const budget = options.budget ?? (isProjectManager ? 'full' : 'medium');
   const budgetLimit = CONTEXT_BUDGET_LIMITS[budget];
+  const noTrim = isProjectManager;
   const roleConfig = ROLE_CONFIGS[role];
-  const includeFullArtifacts = options.includeFullArtifacts ?? false;
+  const includeFullArtifacts = options.includeFullArtifacts ?? isProjectManager;
 
   const blueprint = blueprintEngine.getBlueprint(project.blueprintId) ?? blueprintEngine.getDefaultBlueprint();
   const knowledge = getProjectKnowledge(project);
@@ -906,7 +956,7 @@ export function buildContextBundle(
   let runningTotal = 0;
 
   for (const candidate of candidates) {
-    if (runningTotal + candidate.estimatedTokens <= budgetLimit) {
+    if (noTrim || runningTotal + candidate.estimatedTokens <= budgetLimit) {
       includedSections.push(candidate);
       runningTotal += candidate.estimatedTokens;
     } else {
