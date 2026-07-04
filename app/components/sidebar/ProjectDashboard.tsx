@@ -22,6 +22,7 @@ import { DatabaseDraftPanel } from './DatabaseDraftPanel';
 import { UiUxDraftPanel } from './UIUXDraftPanel';
 import { BackendDraftPanel } from './BackendDraftPanel';
 import { FrontendDraftPanel } from './FrontendDraftPanel';
+import { QaDraftPanel } from './QADraftPanel';
 import { ContextPreviewPanel } from './ContextPreviewPanel';
 
 interface ProjectDashboardProps {
@@ -833,6 +834,25 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
                         The Frontend Draft is stored locally for this project only — approving it never generates React,
                         Next.js, Remix, Vue, Angular, Flutter, HTML, CSS, or Tailwind code.
+                      </div>
+                    </div>
+
+                    {/* QA Strategy — Sprint 21 */}
+                    <div>
+                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                        QA Strategy
+                      </h2>
+                      <div
+                        className={classNames(
+                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                        )}
+                      >
+                        <QaDraftPanel project={project} />
+                      </div>
+                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                        The QA Draft is stored locally for this project only — approving it never generates test code,
+                        connects to GitHub, or deploys anything.
                       </div>
                     </div>
 

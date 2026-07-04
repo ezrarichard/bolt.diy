@@ -14,26 +14,30 @@ import { ARCHITECTURE_DRAFT_FIELDS, type ArchitectureDraft } from './prompts/arc
 import { DATABASE_DRAFT_FIELDS, type DatabaseDraft } from './prompts/database';
 import { UIUX_DRAFT_FIELDS, type UIUXDraft } from './prompts/uiux';
 import { BACKEND_DRAFT_FIELDS, type BackendDraft } from './prompts/backend';
+import { FRONTEND_DRAFT_FIELDS, type FrontendDraft } from './prompts/frontend';
+import { QA_DRAFT_FIELDS, type QADraft } from './prompts/qa';
 import { formatDraftFields, formatList, formatProjectKnowledge } from './prompts/shared';
 
 /**
  * Context Engine — Sprint 17, extended Sprint 19 for the real Backend
- * Engineer and Sprint 20 for the real Frontend Engineer.
+ * Engineer, Sprint 20 for the real Frontend Engineer, and Sprint 21 for the
+ * real QA Engineer.
  *
  *   Blueprint -> Requirements -> Project Knowledge -> Roadmap -> Tasks
  *     -> Execution -> Review -> Approval -> Artifacts
  *       -> Business Analyst -> Solution Architect -> Database Designer
  *         -> UI/UX Designer -> Backend Engineer -> Frontend Engineer
- *           -> Context Engine (this file) -> QA/DevOps Engineers (future)
+ *           -> QA Engineer -> Context Engine (this file)
+ *             -> DevOps Engineer (future)
  *
  * Every AI role built so far (businessAnalystEngine.ts,
  * solutionArchitectEngine.ts, databaseDesignerEngine.ts,
- * uiuxDesignerEngine.ts, backendEngineerEngine.ts,
- * frontendEngineerEngine.ts) hand-assembles its own full context object and
- * hands the whole thing to the prompt builder — fine when there are six
- * roles reading a handful of small drafts, but future roles (QA, DevOps)
- * would otherwise receive full
- * requirements+architecture+database+UI/UX+backend+frontend+roadmap+tasks+notes
+ * uiuxDesignerEngine.ts, backendEngineerEngine.ts, frontendEngineerEngine.ts,
+ * qaEngineerEngine.ts) hand-assembles its own full context object and hands
+ * the whole thing to the prompt builder — fine when there are seven roles
+ * reading a handful of small drafts, but a future DevOps Engineer would
+ * otherwise receive full
+ * requirements+architecture+database+UI/UX+backend+frontend+qa+roadmap+tasks+notes
  * on every call, which is both expensive and dilutes the prompt with
  * irrelevant detail (a Backend Engineer doesn't need animation timing; a
  * Frontend Engineer doesn't need index/constraint detail).
@@ -110,6 +114,8 @@ type ContextSectionId =
   | 'page-layouts'
   | 'animations-motion'
   | 'approved-backend-draft'
+  | 'approved-frontend-draft'
+  | 'approved-qa-draft'
   | 'roadmap'
   | 'tasks'
   | 'notes';
@@ -232,6 +238,37 @@ export function summarizeBackend(draft: BackendDraft | undefined): string {
   );
 }
 
+export function summarizeFrontend(draft: FrontendDraft | undefined): string {
+  if (!draft) {
+    return 'No approved Frontend Draft yet.';
+  }
+
+  return (
+    joinTruthy([
+      draft.frontendOverview && `Overview: ${draft.frontendOverview}`,
+      draft.pageHierarchy?.length && `Pages: ${formatList(draft.pageHierarchy)}`,
+      draft.apiIntegrationStrategy && `API integration: ${draft.apiIntegrationStrategy}`,
+      draft.stateManagement && `State management: ${draft.stateManagement}`,
+      draft.authenticationUX && `Authentication UX: ${draft.authenticationUX}`,
+    ]) ?? 'No approved Frontend Draft yet.'
+  );
+}
+
+export function summarizeQA(draft: QADraft | undefined): string {
+  if (!draft) {
+    return 'No approved QA Draft yet.';
+  }
+
+  return (
+    joinTruthy([
+      draft.qaOverview && `Overview: ${draft.qaOverview}`,
+      draft.qualityObjectives?.length && `Quality objectives: ${formatList(draft.qualityObjectives)}`,
+      draft.acceptanceCriteria?.length && `Acceptance criteria: ${formatList(draft.acceptanceCriteria)}`,
+      draft.knownQualityRisks?.length && `Known risks: ${formatList(draft.knownQualityRisks)}`,
+    ]) ?? 'No approved QA Draft yet.'
+  );
+}
+
 /** Everything a section builder needs, gathered once per buildContextBundle() call so no builder re-reads the store. */
 interface SectionContext {
   project: Project;
@@ -242,6 +279,8 @@ interface SectionContext {
   database: DatabaseDraft | undefined;
   uiux: UIUXDraft | undefined;
   backend: BackendDraft | undefined;
+  frontend: FrontendDraft | undefined;
+  qa: QADraft | undefined;
   roadmap: { title: string; description: string; status: string }[];
   tasks: ProjectTaskExecution[];
   notesText: string;
@@ -335,6 +374,8 @@ const SECTION_DEFS: Record<
       joinTruthy([
         ctx.architecture?.authenticationStrategy && `Authentication: ${ctx.architecture.authenticationStrategy}`,
         ctx.architecture?.authorizationRoles?.length && `Roles: ${formatList(ctx.architecture.authorizationRoles)}`,
+        ctx.backend?.authenticationFlow && `Auth flow: ${ctx.backend.authenticationFlow}`,
+        ctx.backend?.authorizationStrategy && `Authorization: ${ctx.backend.authorizationStrategy}`,
         ctx.database?.securityModel && `Security model: ${ctx.database.securityModel}`,
       ]),
   },
@@ -426,6 +467,24 @@ const SECTION_DEFS: Record<
           : summarizeBackend(ctx.backend)
         : undefined,
   },
+  'approved-frontend-draft': {
+    label: 'Approved Frontend Draft',
+    build: (ctx) =>
+      ctx.frontend
+        ? ctx.includeFullArtifacts
+          ? formatDraftFields(ctx.frontend, FRONTEND_DRAFT_FIELDS)
+          : summarizeFrontend(ctx.frontend)
+        : undefined,
+  },
+  'approved-qa-draft': {
+    label: 'Approved QA Draft',
+    build: (ctx) =>
+      ctx.qa
+        ? ctx.includeFullArtifacts
+          ? formatDraftFields(ctx.qa, QA_DRAFT_FIELDS)
+          : summarizeQA(ctx.qa)
+        : undefined,
+  },
   roadmap: {
     label: 'Roadmap',
     build: (ctx) => bulletList(ctx.roadmap.map((item) => `${item.title} (${item.status}): ${item.description}`)),
@@ -472,6 +531,8 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       { id: 'compliance-payments-security', reason: 'Covered at a business level via Requirements Summary already.' },
       { id: 'brand-design-preferences', reason: 'Visual brand detail is not relevant to requirements gathering.' },
       { id: 'approved-backend-draft', reason: 'Backend implementation detail is not relevant to this role.' },
+      { id: 'approved-frontend-draft', reason: 'Frontend implementation detail is not relevant to this role.' },
+      { id: 'approved-qa-draft', reason: 'QA planning is not relevant to this role.' },
     ],
     taskCategories: ['planning'],
     requiredUpstream: [],
@@ -500,6 +561,8 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       { id: 'page-layouts', reason: 'Layout detail is not relevant to architecture.' },
       { id: 'animations-motion', reason: 'Motion/animation detail is not relevant to architecture.' },
       { id: 'approved-backend-draft', reason: 'Backend implementation detail is not relevant to this role.' },
+      { id: 'approved-frontend-draft', reason: 'Frontend implementation detail is not relevant to this role.' },
+      { id: 'approved-qa-draft', reason: 'QA planning is not relevant to this role.' },
     ],
     taskCategories: ['planning', 'design'],
     requiredUpstream: [],
@@ -528,6 +591,8 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       { id: 'page-layouts', reason: 'Layout detail is not relevant to database design.' },
       { id: 'animations-motion', reason: 'Motion/animation detail is not relevant to database design.' },
       { id: 'approved-backend-draft', reason: 'Backend implementation detail is not relevant to this role.' },
+      { id: 'approved-frontend-draft', reason: 'Frontend implementation detail is not relevant to this role.' },
+      { id: 'approved-qa-draft', reason: 'QA planning is not relevant to this role.' },
     ],
     taskCategories: ['database'],
     requiredUpstream: [
@@ -561,6 +626,8 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       { id: 'compliance-payments-security', reason: 'Not relevant to UI/UX design.' },
       { id: 'auth-strategy', reason: 'Technical auth implementation is not relevant to UI/UX design.' },
       { id: 'approved-backend-draft', reason: 'Backend implementation detail is not relevant to this role.' },
+      { id: 'approved-frontend-draft', reason: 'Frontend implementation detail is not relevant to this role.' },
+      { id: 'approved-qa-draft', reason: 'QA planning is not relevant to this role.' },
     ],
     taskCategories: ['design'],
     requiredUpstream: [
@@ -594,6 +661,8 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       { id: 'component-guidance', reason: 'UI component detail is not relevant to Backend Engineer.' },
       { id: 'page-layouts', reason: 'Frontend layout detail is not relevant to Backend Engineer.' },
       { id: 'animations-motion', reason: 'UI animations are not relevant to Backend Engineer.' },
+      { id: 'approved-frontend-draft', reason: 'Frontend design has not happened yet.' },
+      { id: 'approved-qa-draft', reason: 'QA planning has not happened yet.' },
     ],
     taskCategories: ['backend', 'integration'],
     requiredUpstream: [
@@ -612,6 +681,7 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       'database-summary',
       'uiux-summary',
       'approved-backend-draft',
+      'approved-frontend-draft',
       'entities',
       'user-flows',
       'user-roles',
@@ -631,6 +701,7 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
         reason:
           "Low-level database security/retention detail is not needed unless explicitly required (see the 'include full artifacts' option).",
       },
+      { id: 'approved-qa-draft', reason: 'QA planning has not happened yet.' },
     ],
     taskCategories: ['frontend', 'design'],
     requiredUpstream: [
@@ -648,25 +719,32 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       'architecture-summary',
       'database-summary',
       'uiux-summary',
+      'approved-backend-draft',
+      'approved-frontend-draft',
+      'entities',
       'user-flows',
       'pages-screens',
       'user-roles',
       'auth-strategy',
       'compliance-payments-security',
+      'approved-qa-draft',
       'roadmap',
       'tasks',
       'notes',
     ],
     hardExcludedIds: [
-      { id: 'entities', reason: 'Low-level schema detail is not needed for test planning; see Database Summary.' },
       { id: 'brand-design-preferences', reason: 'Visual brand detail is not relevant to test planning.' },
       { id: 'component-guidance', reason: 'Component implementation detail is not relevant to test planning.' },
       { id: 'page-layouts', reason: 'Layout detail is not relevant to test planning.' },
       { id: 'animations-motion', reason: 'Motion/animation detail is not relevant to test planning.' },
-      { id: 'approved-backend-draft', reason: 'Backend implementation detail is not relevant to this role.' },
     ],
     taskCategories: [],
-    requiredUpstream: [],
+    requiredUpstream: [
+      {
+        check: (ctx) => Boolean(ctx.frontend),
+        message: 'Frontend Draft is not approved yet — QA Engineer context will be incomplete.',
+      },
+    ],
   },
   'devops-engineer': {
     label: CONTEXT_ROLE_LABELS['devops-engineer'],
@@ -692,6 +770,8 @@ const ROLE_CONFIGS: Record<ContextRole, RoleConfig> = {
       { id: 'entities', reason: 'Full schema detail is covered by Database Summary already.' },
       { id: 'compliance-payments-security', reason: 'Covered by Architecture/Database Summary already.' },
       { id: 'approved-backend-draft', reason: 'Backend implementation detail is not relevant to this role.' },
+      { id: 'approved-frontend-draft', reason: 'Not relevant to deployment/infrastructure.' },
+      { id: 'approved-qa-draft', reason: 'Not relevant to deployment/infrastructure.' },
     ],
     taskCategories: ['deployment'],
     requiredUpstream: [
@@ -734,6 +814,8 @@ export function buildContextBundle(
   const database = getApprovedArtifactContent<DatabaseDraft>(artifacts, ARTIFACT_TYPES.DATABASE_DRAFT);
   const uiux = getApprovedArtifactContent<UIUXDraft>(artifacts, ARTIFACT_TYPES.UIUX_DRAFT);
   const backend = getApprovedArtifactContent<BackendDraft>(artifacts, ARTIFACT_TYPES.BACKEND_DRAFT);
+  const frontend = getApprovedArtifactContent<FrontendDraft>(artifacts, ARTIFACT_TYPES.FRONTEND_DRAFT);
+  const qa = getApprovedArtifactContent<QADraft>(artifacts, ARTIFACT_TYPES.QA_DRAFT);
 
   const roadmap = blueprintEngine.getRoadmap(blueprint.id).map((item) => ({
     title: item.title,
@@ -756,6 +838,8 @@ export function buildContextBundle(
     database,
     uiux,
     backend,
+    frontend,
+    qa,
     roadmap,
     tasks,
     notesText,
@@ -851,4 +935,6 @@ export const contextEngine = {
   summarizeDatabase,
   summarizeUIUX,
   summarizeBackend,
+  summarizeFrontend,
+  summarizeQA,
 };
