@@ -1,6 +1,8 @@
 import { atom } from 'nanostores';
 import type { RoadmapItemStatus } from '~/lib/blueprints';
 import type { ProjectKnowledge } from '~/lib/projects/knowledge';
+import type { ProjectTaskStatus } from '~/lib/projects/executionEngine';
+import type { ProjectArtifact } from '~/lib/projects/artifacts';
 
 /**
  * Project data model — Sprint 1 (UI-only).
@@ -49,6 +51,37 @@ export interface Project {
    * user saves the Requirements dialog at least once.
    */
   projectKnowledge?: ProjectKnowledge;
+
+  /**
+   * Sprint 11 — manual execution stage per task id (see
+   * app/lib/projects/executionEngine.ts for the resolved-status
+   * computation and app/lib/projects/taskEngine.ts for what a task id
+   * refers to). This is a *different, more granular* signal than
+   * `roadmapStatus` above: roadmapStatus tracks coarse per-roadmap-step
+   * progress, this tracks exactly where the user is in a single task's
+   * Start -> Pause -> Submit for Review -> Completed lifecycle — the two
+   * are intentionally not merged. Absent entries default to "not-started";
+   * "ready" and "blocked" are normally computed by executionEngine rather
+   * than written here. Local-only (localStorage via persist()), same as
+   * the rest of Project — no backend, no IndexedDB.
+   */
+  taskStatus?: Record<string, ProjectTaskStatus>;
+
+  /**
+   * Sprint 11 — free-form markdown notes per task id, authored by the user
+   * in the Task Details dialog. Nothing reads these yet; they exist so a
+   * future AI Project Manager has task-level context to read. Local-only,
+   * same persistence as the rest of Project.
+   */
+  taskNotes?: Record<string, string>;
+
+  /**
+   * Sprint 11 — placeholder output artifacts (see
+   * app/lib/projects/artifacts.ts). Nothing generates real artifact
+   * content yet; every artifact created this sprint is an empty
+   * placeholder. Local-only, same persistence as the rest of Project.
+   */
+  artifacts?: ProjectArtifact[];
 
   // Future fields — intentionally unset in Sprint 1.
   githubRepo?: string;
@@ -225,6 +258,75 @@ export function setRoadmapItemStatus(projectId: string, itemKey: string, status:
       project.id === projectId
         ? { ...project, roadmapStatus: { ...project.roadmapStatus, [itemKey]: status } }
         : project,
+    );
+  projectsStore.set(next);
+  persist(next);
+}
+
+/**
+ * Sprint 11 — read a task's raw manual execution stage. Returns undefined
+ * when nothing has been recorded yet (see executionEngine.ts, which treats
+ * a missing entry as "not-started" and resolves the task's actual display
+ * status from there).
+ */
+export function getStoredTaskStatus(project: Project, taskId: string): ProjectTaskStatus | undefined {
+  return project.taskStatus?.[taskId];
+}
+
+/**
+ * Sprint 11 — set a task's manual execution stage. Local-only (localStorage
+ * via persist()), same pattern as setRoadmapItemStatus. Typically only
+ * called with 'not-started' | 'in-progress' | 'needs-review' | 'completed'
+ * (Start/Pause/Submit for Review/a future review-approval step) — 'ready'
+ * and 'blocked' are normally left for executionEngine to compute.
+ */
+export function setTaskStatus(projectId: string, taskId: string, status: ProjectTaskStatus): void {
+  const next = projectsStore
+    .get()
+    .map((project) =>
+      project.id === projectId ? { ...project, taskStatus: { ...project.taskStatus, [taskId]: status } } : project,
+    );
+  projectsStore.set(next);
+  persist(next);
+}
+
+/** Sprint 11 — read a task's notes. Defaults to '' when nothing has been saved yet. */
+export function getTaskNotes(project: Project, taskId: string): string {
+  return project.taskNotes?.[taskId] ?? '';
+}
+
+/**
+ * Sprint 11 — save a task's notes. Local-only (localStorage via persist()),
+ * same pattern as updateProjectKnowledge. Plain markdown text, not parsed
+ * or sent anywhere — a future AI Project Manager is the intended reader.
+ */
+export function setTaskNotes(projectId: string, taskId: string, notes: string): void {
+  const next = projectsStore
+    .get()
+    .map((project) =>
+      project.id === projectId ? { ...project, taskNotes: { ...project.taskNotes, [taskId]: notes } } : project,
+    );
+  projectsStore.set(next);
+  persist(next);
+}
+
+/** Sprint 11 — a project's artifacts (see app/lib/projects/artifacts.ts). Empty array when none exist yet. */
+export function getProjectArtifacts(project: Project): ProjectArtifact[] {
+  return project.artifacts ?? [];
+}
+
+/**
+ * Sprint 11 — append an artifact to a project. Local-only (localStorage via
+ * persist()). Nothing calls this yet — the architecture is ready for a
+ * future AI generation sprint to create real artifacts via the same setter,
+ * with no data-model change (see createPlaceholderArtifact in
+ * app/lib/projects/artifacts.ts for building the placeholder shape).
+ */
+export function addProjectArtifact(projectId: string, artifact: ProjectArtifact): void {
+  const next = projectsStore
+    .get()
+    .map((project) =>
+      project.id === projectId ? { ...project, artifacts: [...(project.artifacts ?? []), artifact] } : project,
     );
   projectsStore.set(next);
   persist(next);
