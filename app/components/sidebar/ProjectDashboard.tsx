@@ -16,6 +16,7 @@ import { ProjectRequirementsDialog } from './ProjectRequirementsDialog';
 import { ProjectTaskCard, TASK_STATUS_META, formatEstimatedMinutes } from './ProjectTaskCard';
 import { TaskDetailsDialog } from './TaskDetailsDialog';
 import { ReviewQueueCard } from './ReviewComponents';
+import { RequirementsDraftPanel } from './RequirementsDraftPanel';
 
 interface ProjectDashboardProps {
   project: Project | null;
@@ -676,7 +677,9 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                               <span className="inline-block i-ph:plus-circle h-4 w-4" />
                               <span className="text-sm font-medium">Add Requirements</span>
                             </button>
-                            <ActionButton icon="i-ph:sparkle" label="Generate Draft Requirements" />
+                          </div>
+                          <div className="mt-4 w-full max-w-2xl mx-auto text-left">
+                            <RequirementsDraftPanel project={project} />
                           </div>
                         </div>
                       ) : (
@@ -714,7 +717,9 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                               <span className="inline-block i-ph:pencil-simple h-4 w-4" />
                               <span className="text-sm font-medium">Edit Requirements</span>
                             </button>
-                            <ActionButton icon="i-ph:sparkle" label="Generate Draft Requirements" />
+                          </div>
+                          <div className="mt-4 pt-4 border-t border-bolt-elements-borderColor/30">
+                            <RequirementsDraftPanel project={project} />
                           </div>
                         </div>
                       )}

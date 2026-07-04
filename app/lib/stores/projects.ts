@@ -384,6 +384,29 @@ export function addProjectArtifact(projectId: string, artifact: ProjectArtifact)
   persist(next);
 }
 
+/**
+ * Sprint 13 — update fields on an existing artifact by id (status, content,
+ * version, etc.), e.g. moving a Requirements Draft from 'draft' to
+ * 'approved'/'discarded', or bumping its content+version on regenerate.
+ * `updatedAt` is always refreshed. Local-only (localStorage via persist()).
+ */
+export function updateProjectArtifact(projectId: string, artifactId: string, partial: Partial<ProjectArtifact>): void {
+  const next = projectsStore.get().map((project) => {
+    if (project.id !== projectId) {
+      return project;
+    }
+
+    return {
+      ...project,
+      artifacts: (project.artifacts ?? []).map((artifact) =>
+        artifact.id === artifactId ? { ...artifact, ...partial, updatedAt: new Date().toISOString() } : artifact,
+      ),
+    };
+  });
+  projectsStore.set(next);
+  persist(next);
+}
+
 /** Sprint 12 — a task's latest review verdict. Returns undefined when it has never been reviewed. */
 export function getTaskReview(project: Project, taskId: string): TaskReviewRecord | undefined {
   return project.taskReview?.[taskId];
