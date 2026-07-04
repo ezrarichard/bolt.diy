@@ -1,10 +1,20 @@
 import { useEffect, useState } from 'react';
 import * as RadixDialog from '@radix-ui/react-dialog';
 import { classNames } from '~/utils/classNames';
-import { getTaskNotes, setTaskNotes, setTaskStatus, type Project } from '~/lib/stores/projects';
+import {
+  applyReviewDecision,
+  getTaskHistory,
+  getTaskNotes,
+  getTaskReview,
+  setTaskNotes,
+  setTaskStatus,
+  type Project,
+} from '~/lib/stores/projects';
 import type { BlockingTask, ProjectTaskExecution } from '~/lib/projects/executionEngine';
+import { reviewEngine } from '~/lib/projects/reviewEngine';
 import { projectKnowledgeEngine, type KnowledgeFieldKey } from '~/lib/projects/projectKnowledgeEngine';
 import { formatEstimatedMinutes, TASK_STATUS_META } from './ProjectTaskCard';
+import { ReviewBadge, ReviewTimeline } from './ReviewComponents';
 
 interface TaskDetailsDialogProps {
   project: Project | null;
@@ -53,10 +63,12 @@ export function TaskDetailsDialog({
   onClose,
 }: TaskDetailsDialogProps) {
   const [notes, setNotes] = useState('');
+  const [reviewComment, setReviewComment] = useState('');
 
   useEffect(() => {
     if (open && project && task) {
       setNotes(getTaskNotes(project, task.id));
+      setReviewComment('');
     }
   }, [open, project, task]);
 
@@ -65,6 +77,8 @@ export function TaskDetailsDialog({
   }
 
   const meta = TASK_STATUS_META[task.status];
+  const latestReview = getTaskReview(project, task.id);
+  const history = getTaskHistory(project, task.id);
 
   const saveNotes = () => {
     setTaskNotes(project.id, task.id, notes);
@@ -73,6 +87,30 @@ export function TaskDetailsDialog({
   const handleStart = () => setTaskStatus(project.id, task.id, 'in-progress');
   const handlePause = () => setTaskStatus(project.id, task.id, 'not-started');
   const handleSubmitForReview = () => setTaskStatus(project.id, task.id, 'needs-review');
+
+  /**
+   * Sprint 12 — Approve/Request Changes compute their decision purely via
+   * reviewEngine (task becomes Completed + roadmap auto-completed +
+   * artifact placeholder created, or task returns to In Progress), then
+   * hand that decision to the store to persist in one atomic update.
+   */
+  const handleApprove = () => {
+    const decision = reviewEngine.approveTask(project, task.id, reviewComment.trim() || undefined);
+
+    if (decision) {
+      applyReviewDecision(project.id, decision);
+      setReviewComment('');
+    }
+  };
+
+  const handleRequestChanges = () => {
+    const decision = reviewEngine.rejectTask(project, task.id, reviewComment.trim() || undefined);
+
+    if (decision) {
+      applyReviewDecision(project.id, decision);
+      setReviewComment('');
+    }
+  };
 
   return (
     <RadixDialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
@@ -175,6 +213,49 @@ export function TaskDetailsDialog({
                   </div>
                 )}
 
+                {/* Latest Review — Sprint 12 */}
+                {latestReview && (
+                  <div
+                    className={classNames(
+                      'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4',
+                      'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                    )}
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary">
+                        Latest Review
+                      </div>
+                      <ReviewBadge status={latestReview.reviewStatus} />
+                    </div>
+                    <div className="text-xs text-bolt-elements-textTertiary">
+                      {latestReview.reviewedBy} · {new Date(latestReview.reviewedAt).toLocaleString()}
+                    </div>
+                    {latestReview.reviewNotes && (
+                      <div className="text-sm text-bolt-elements-textSecondary mt-2">{latestReview.reviewNotes}</div>
+                    )}
+                  </div>
+                )}
+
+                {/* Reviewer Comments — Sprint 12, shown while a decision can be made */}
+                {reviewEngine.canApprove(project, task.id) && (
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1.5">
+                      Reviewer Comments
+                    </div>
+                    <textarea
+                      className={classNames(
+                        'w-full bg-gray-50 dark:bg-bolt-elements-background-depth-2 px-3 py-2 rounded-lg',
+                        'focus:outline-none focus:ring-1 focus:ring-purple-500/50 text-sm min-h-[72px] resize-y',
+                        'text-gray-900 dark:text-bolt-elements-textPrimary placeholder-gray-500 dark:placeholder-bolt-elements-textTertiary',
+                        'border border-gray-200 dark:border-bolt-elements-borderColor',
+                      )}
+                      placeholder="Optional — recorded with your Approve or Request Changes decision."
+                      value={reviewComment}
+                      onChange={(event) => setReviewComment(event.target.value)}
+                    />
+                  </div>
+                )}
+
                 <div>
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1.5">
                     Notes
@@ -191,6 +272,14 @@ export function TaskDetailsDialog({
                     onChange={(event) => setNotes(event.target.value)}
                     onBlur={saveNotes}
                   />
+                </div>
+
+                {/* History — Sprint 12, Task 4 */}
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+                    History
+                  </div>
+                  <ReviewTimeline events={history} />
                 </div>
               </div>
 
@@ -219,6 +308,22 @@ export function TaskDetailsDialog({
                   >
                     Submit for Review
                   </button>
+                )}
+                {task.status === 'needs-review' && (
+                  <>
+                    <button
+                      onClick={handleRequestChanges}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/50 text-bolt-elements-textSecondary hover:text-bolt-elements-textPrimary"
+                    >
+                      Request Changes
+                    </button>
+                    <button
+                      onClick={handleApprove}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors bg-purple-500 text-white hover:bg-purple-600"
+                    >
+                      Approve
+                    </button>
+                  </>
                 )}
                 <button
                   onClick={onClose}

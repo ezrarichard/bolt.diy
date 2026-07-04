@@ -3,6 +3,12 @@ import type { RoadmapItemStatus } from '~/lib/blueprints';
 import type { ProjectKnowledge } from '~/lib/projects/knowledge';
 import type { ProjectTaskStatus } from '~/lib/projects/executionEngine';
 import type { ProjectArtifact } from '~/lib/projects/artifacts';
+import type {
+  ReviewDecision,
+  TaskHistoryEvent,
+  TaskHistoryEventType,
+  TaskReviewRecord,
+} from '~/lib/projects/reviewEngine';
 
 /**
  * Project data model — Sprint 1 (UI-only).
@@ -82,6 +88,23 @@ export interface Project {
    * placeholder. Local-only, same persistence as the rest of Project.
    */
   artifacts?: ProjectArtifact[];
+
+  /**
+   * Sprint 12 — the latest review verdict per task id (see
+   * app/lib/projects/reviewEngine.ts). Only ever written by
+   * applyReviewDecision below (itself only called after
+   * reviewEngine.approveTask/rejectTask) — nothing else sets a task's
+   * manual stage to "completed". Local-only, no backend.
+   */
+  taskReview?: Record<string, TaskReviewRecord>;
+
+  /**
+   * Sprint 12 — chronological lifecycle history per task id (Started,
+   * Paused, Submitted for Review, Approved, Requested Changes), each with
+   * a timestamp and optional note. Powers the ReviewTimeline component
+   * (app/components/sidebar/ReviewComponents.tsx). Local-only, no backend.
+   */
+  taskHistory?: Record<string, TaskHistoryEvent[]>;
 
   // Future fields — intentionally unset in Sprint 1.
   githubRepo?: string;
@@ -274,18 +297,47 @@ export function getStoredTaskStatus(project: Project, taskId: string): ProjectTa
 }
 
 /**
+ * Sprint 12 — which lifecycle history event (if any) a plain setTaskStatus
+ * transition represents. 'completed' is deliberately absent: that stage is
+ * only ever reached via applyReviewDecision (approveTask), which logs its
+ * own 'approved' history event.
+ */
+const HISTORY_EVENT_FOR_STATUS: Partial<Record<ProjectTaskStatus, TaskHistoryEventType>> = {
+  'in-progress': 'started',
+  'not-started': 'paused',
+  'needs-review': 'submitted-for-review',
+};
+
+/**
  * Sprint 11 — set a task's manual execution stage. Local-only (localStorage
- * via persist()), same pattern as setRoadmapItemStatus. Typically only
- * called with 'not-started' | 'in-progress' | 'needs-review' | 'completed'
- * (Start/Pause/Submit for Review/a future review-approval step) — 'ready'
- * and 'blocked' are normally left for executionEngine to compute.
+ * via persist()), same pattern as setRoadmapItemStatus. Called with
+ * 'in-progress' | 'not-started' | 'needs-review' for the Start/Pause/Submit
+ * for Review actions — 'ready' and 'blocked' are left for executionEngine
+ * to compute, and 'completed' is only ever reached via applyReviewDecision
+ * (Sprint 12's Approve action), never through this setter. Each transition
+ * here also appends a Sprint 12 history event (see taskHistory above) so
+ * the ReviewTimeline component has a full Started/Paused/Submitted record.
  */
 export function setTaskStatus(projectId: string, taskId: string, status: ProjectTaskStatus): void {
-  const next = projectsStore
-    .get()
-    .map((project) =>
-      project.id === projectId ? { ...project, taskStatus: { ...project.taskStatus, [taskId]: status } } : project,
-    );
+  const historyEvent = HISTORY_EVENT_FOR_STATUS[status];
+
+  const next = projectsStore.get().map((project) => {
+    if (project.id !== projectId) {
+      return project;
+    }
+
+    const updated: Project = { ...project, taskStatus: { ...project.taskStatus, [taskId]: status } };
+
+    if (historyEvent) {
+      updated.taskHistory = {
+        ...project.taskHistory,
+        [taskId]: [...(project.taskHistory?.[taskId] ?? []), { event: historyEvent, at: new Date().toISOString() }],
+      };
+    }
+
+    return updated;
+  });
+
   projectsStore.set(next);
   persist(next);
 }
@@ -328,6 +380,58 @@ export function addProjectArtifact(projectId: string, artifact: ProjectArtifact)
     .map((project) =>
       project.id === projectId ? { ...project, artifacts: [...(project.artifacts ?? []), artifact] } : project,
     );
+  projectsStore.set(next);
+  persist(next);
+}
+
+/** Sprint 12 — a task's latest review verdict. Returns undefined when it has never been reviewed. */
+export function getTaskReview(project: Project, taskId: string): TaskReviewRecord | undefined {
+  return project.taskReview?.[taskId];
+}
+
+/** Sprint 12 — a task's chronological lifecycle history. Empty array when nothing has happened yet. */
+export function getTaskHistory(project: Project, taskId: string): TaskHistoryEvent[] {
+  return project.taskHistory?.[taskId] ?? [];
+}
+
+/**
+ * Sprint 12 — applies a `ReviewDecision` already computed by
+ * reviewEngine.approveTask/rejectTask (app/lib/projects/reviewEngine.ts).
+ * This is the only place `taskStatus` is ever set to 'completed', the only
+ * place `taskReview` is written, and the only place an approval's roadmap
+ * completion / artifact placeholder are applied — all in one atomic
+ * update. Local-only (localStorage via persist()); does not touch GitHub,
+ * Supabase, or IndexedDB. The caller (TaskDetailsDialog) computes the
+ * decision via reviewEngine, then hands it here — keeping reviewEngine
+ * itself free of any store/persistence dependency.
+ */
+export function applyReviewDecision(projectId: string, decision: ReviewDecision): void {
+  const next = projectsStore.get().map((project) => {
+    if (project.id !== projectId) {
+      return project;
+    }
+
+    const updated: Project = {
+      ...project,
+      taskStatus: { ...project.taskStatus, [decision.taskId]: decision.taskStatus },
+      taskReview: { ...project.taskReview, [decision.taskId]: decision.review },
+      taskHistory: {
+        ...project.taskHistory,
+        [decision.taskId]: [...(project.taskHistory?.[decision.taskId] ?? []), decision.historyEvent],
+      },
+    };
+
+    if (decision.roadmapKey) {
+      updated.roadmapStatus = { ...project.roadmapStatus, [decision.roadmapKey]: 'completed' };
+    }
+
+    if (decision.artifact) {
+      updated.artifacts = [...(project.artifacts ?? []), decision.artifact];
+    }
+
+    return updated;
+  });
+
   projectsStore.set(next);
   persist(next);
 }

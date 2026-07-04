@@ -1,11 +1,12 @@
 import { projectTaskEngine, type ProjectTask } from './taskEngine';
-import { getStoredTaskStatus, type Project } from '~/lib/stores/projects';
+import { getStoredTaskStatus, getTaskReview, type Project } from '~/lib/stores/projects';
 
 /**
- * Execution Engine — Sprint 11.
+ * Execution Engine — Sprint 11, extended Sprint 12 (Review & Approval).
  *
  *   Blueprint -> Requirements -> Project Knowledge -> Roadmap
- *     -> Project Task Engine -> Execution Engine (this file) -> AI Generation
+ *     -> Project Task Engine -> Execution Engine (this file)
+ *       -> Review Engine -> AI Generation
  *
  * The Project Task Engine (taskEngine.ts) only knows the *static* shape of
  * a blueprint's tasks (dependencies, required knowledge, output type,
@@ -17,16 +18,17 @@ import { getStoredTaskStatus, type Project } from '~/lib/stores/projects';
  * `ProjectTaskStatus` is a different, more granular signal than a
  * blueprint's RoadmapItemStatus (project.roadmapStatus) — roadmap status
  * tracks coarse per-step progress; this tracks exactly where a single task
- * sits in its own Start -> Pause -> Submit for Review -> Completed
- * lifecycle. The two are intentionally not merged.
+ * sits in its own Start -> Pause -> Submit for Review -> Approve ->
+ * Completed lifecycle (the Approve step lives in
+ * app/lib/projects/reviewEngine.ts, built on top of this file). The two
+ * are intentionally not merged.
  *
  * Every function here is a pure read: it takes a `Project` (plus, where
  * needed, a task id) and returns a derived value. Nothing calls an LLM,
  * generates code, writes a prompt, or touches a store/atom directly — the
- * only thing imported from app/lib/stores/projects is the trivial
- * `getStoredTaskStatus` accessor (itself a pure read over the `Project`
- * object passed in), the same pattern taskEngine.ts already used for
- * roadmap status. No React, no stores, no side effects.
+ * only things imported from app/lib/stores/projects are trivial accessors
+ * (`getStoredTaskStatus`, `getTaskReview`), themselves pure reads over the
+ * `Project` object passed in. No React, no stores, no side effects.
  */
 
 /**
@@ -77,13 +79,22 @@ function resolveManualStage(project: Project, taskId: string): ProjectTaskStatus
 
 /**
  * Depth-first status resolution with memoization and cycle protection.
- * A task is `completed` once its own manual stage says so (a completed
- * task stays completed regardless of its dependencies). Otherwise it's
- * `blocked` unless every dependency has resolved to `completed`, in which
- * case its manual stage (`in-progress` / `needs-review` / anything else)
- * decides the rest — absence of progress resolves to `ready`.
- * `visiting` guards against a cycle (the registry is static/acyclic and
- * should never actually produce one).
+ *
+ * Sprint 12 — a task is `completed` once it's been *approved* (see
+ * app/lib/projects/reviewEngine.ts), not simply once it reaches
+ * `needs-review`. In practice `approveTask` always sets the manual stage
+ * to `completed` directly, so checking `manualStage` alone would already
+ * be correct — the explicit `taskReview` check here is a defensive,
+ * belt-and-suspenders reading of "completed means approved" so this
+ * function's completion signal is never accidentally out of sync with the
+ * review verdict, even if something else someday writes `taskStatus`
+ * without going through the review engine.
+ *
+ * Otherwise a task is `blocked` unless every dependency has resolved to
+ * `completed`, in which case its manual stage (`in-progress` /
+ * `needs-review` / anything else) decides the rest — absence of progress
+ * resolves to `ready`. `visiting` guards against a cycle (the registry is
+ * static/acyclic and should never actually produce one).
  */
 function computeStatus(
   project: Project,
@@ -99,8 +110,9 @@ function computeStatus(
   }
 
   const manualStage = resolveManualStage(project, task.id);
+  const isApproved = getTaskReview(project, task.id)?.reviewStatus === 'approved';
 
-  if (manualStage === 'completed') {
+  if (manualStage === 'completed' || isApproved) {
     memo.set(task.id, 'completed');
     return 'completed';
   }

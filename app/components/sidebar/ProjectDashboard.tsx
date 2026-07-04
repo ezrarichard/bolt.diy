@@ -2,7 +2,7 @@ import { useState } from 'react';
 import * as RadixDialog from '@radix-ui/react-dialog';
 import { useNavigate } from '@remix-run/react';
 import { classNames } from '~/utils/classNames';
-import { requestChatInputFocus, getRoadmapItemStatus, getProjectKnowledge } from '~/lib/stores/projects';
+import { requestChatInputFocus, getRoadmapItemStatus, getProjectKnowledge, getTaskReview } from '~/lib/stores/projects';
 import type { Project } from '~/lib/stores/projects';
 import { PROJECT_COLOR_CLASSES } from './ProjectListItem';
 import BackgroundRays from '~/components/ui/BackgroundRays';
@@ -11,9 +11,11 @@ import { isRequirementsCaptured } from '~/lib/projects/knowledge';
 import { projectKnowledgeEngine, type ReadinessStageStatus } from '~/lib/projects/projectKnowledgeEngine';
 import { projectTaskEngine } from '~/lib/projects/taskEngine';
 import { executionEngine } from '~/lib/projects/executionEngine';
+import { reviewEngine } from '~/lib/projects/reviewEngine';
 import { ProjectRequirementsDialog } from './ProjectRequirementsDialog';
 import { ProjectTaskCard, TASK_STATUS_META, formatEstimatedMinutes } from './ProjectTaskCard';
 import { TaskDetailsDialog } from './TaskDetailsDialog';
+import { ReviewQueueCard } from './ReviewComponents';
 
 interface ProjectDashboardProps {
   project: Project | null;
@@ -339,9 +341,19 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
    */
   const executionTasks = executionEngine.getExecutionTasks(project);
   const executionProgress = executionEngine.getExecutionProgress(project);
-  const recommendedTask = executionEngine.getNextRecommendedTask(project);
 
   const selectedTask = selectedTaskId ? (executionTasks.find((task) => task.id === selectedTaskId) ?? null) : null;
+
+  /*
+   * Sprint 12 — Review Queue + Recommended Next Action. reviewSummary feeds
+   * the Review Queue panel (Task 6); recommendedAction replaces Sprint
+   * 11's direct executionEngine call so that a pending review always wins
+   * over a fresh "start this task" suggestion — reviewEngine only falls
+   * back to executionEngine.getNextRecommendedTask once the review queue
+   * is empty (see reviewEngine.getRecommendedNextAction).
+   */
+  const reviewSummary = reviewEngine.getReviewSummary(project);
+  const recommendedAction = reviewEngine.getRecommendedNextAction(project);
 
   /*
    * Phase 2 Sprint 9 — Requirements & Knowledge. Read straight off the
@@ -425,8 +437,8 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                   </div>
 
                   <div className="flex-1 px-8 py-6 space-y-8">
-                    {/* Recommended Next Task — Sprint 11 */}
-                    {recommendedTask && (
+                    {/* Recommended Next Action — Sprint 11, review-aware since Sprint 12 */}
+                    {recommendedAction && (
                       <div
                         className={classNames(
                           'rounded-xl border border-purple-500/30 p-5',
@@ -434,28 +446,30 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                         )}
                       >
                         <div className="text-[11px] font-semibold uppercase tracking-wide text-purple-600 dark:text-purple-300 mb-2">
-                          Recommended Next Task
+                          Recommended Next Action
                         </div>
                         <div className="flex flex-wrap items-center gap-2.5">
-                          <span className="text-sm text-bolt-elements-textTertiary">Continue</span>
+                          <span className="text-sm text-bolt-elements-textTertiary">
+                            {recommendedAction.kind === 'review' ? 'Review' : 'Continue'}
+                          </span>
                           <span className="text-base font-semibold text-bolt-elements-textPrimary">
-                            {recommendedTask.task.title}
+                            {recommendedAction.task.title}
                           </span>
                           <span
                             className={classNames(
                               'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0',
-                              TASK_STATUS_META[recommendedTask.task.status].badgeClass,
+                              TASK_STATUS_META[recommendedAction.task.status].badgeClass,
                             )}
                           >
-                            {TASK_STATUS_META[recommendedTask.task.status].label}
+                            {TASK_STATUS_META[recommendedAction.task.status].label}
                           </span>
                           <span className="text-xs text-bolt-elements-textTertiary">
-                            {formatEstimatedMinutes(recommendedTask.task.estimatedMinutes)}
+                            {formatEstimatedMinutes(recommendedAction.task.estimatedMinutes)}
                           </span>
                         </div>
                         <div className="mt-2.5 text-xs text-bolt-elements-textTertiary">
                           <span className="font-medium text-bolt-elements-textSecondary">Because </span>
-                          {recommendedTask.reasons.join(' · ')}
+                          {recommendedAction.reasons.join(' · ')}
                         </div>
                       </div>
                     )}
@@ -776,6 +790,9 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                         </span>
                       </div>
 
+                      {/* Review Queue — Sprint 12 */}
+                      <ReviewQueueCard summary={reviewSummary} />
+
                       {/* Execution Progress */}
                       <div
                         className={classNames(
@@ -823,6 +840,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                 .getDependencies(project.blueprintId, task.id)
                                 .map((dependency) => dependency.title)}
                               blockedBy={executionEngine.getBlockedReason(project, task.id)}
+                              latestReview={getTaskReview(project, task.id)}
                               onOpenDetails={() => setSelectedTaskId(task.id)}
                             />
                           ))}
@@ -835,7 +853,8 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
 
                       <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
                         Task status is stored locally for this project only — nothing here is generated by AI yet. This
-                        is the execution model future AI generation will use.
+                        is the execution model future AI generation will use. Completed tasks reflect an approved review
+                        — see Review Queue above.
                       </div>
                     </div>
 

@@ -1,7 +1,9 @@
 import { classNames } from '~/utils/classNames';
 import { setTaskStatus } from '~/lib/stores/projects';
 import type { BlockingTask, ProjectTaskExecution, ProjectTaskStatus } from '~/lib/projects/executionEngine';
+import type { TaskReviewRecord } from '~/lib/projects/reviewEngine';
 import { projectKnowledgeEngine, type KnowledgeFieldKey } from '~/lib/projects/projectKnowledgeEngine';
+import { ReviewBadge } from './ReviewComponents';
 
 /**
  * Sprint 11 — status metadata shared by ProjectTaskCard, TaskDetailsDialog,
@@ -63,6 +65,7 @@ interface ProjectTaskCardProps {
   task: ProjectTaskExecution;
   dependencyTitles: string[];
   blockedBy: BlockingTask[];
+  latestReview?: TaskReviewRecord;
   onOpenDetails: () => void;
 }
 
@@ -73,7 +76,14 @@ interface ProjectTaskCardProps {
  * Details dialog (Task 3); action buttons stop propagation so they don't
  * also trigger that.
  */
-export function ProjectTaskCard({ projectId, task, dependencyTitles, blockedBy, onOpenDetails }: ProjectTaskCardProps) {
+export function ProjectTaskCard({
+  projectId,
+  task,
+  dependencyTitles,
+  blockedBy,
+  latestReview,
+  onOpenDetails,
+}: ProjectTaskCardProps) {
   const meta = TASK_STATUS_META[task.status];
 
   const handleStart = (event: React.MouseEvent) => {
@@ -118,14 +128,19 @@ export function ProjectTaskCard({ projectId, task, dependencyTitles, blockedBy, 
           <span className={classNames('w-2 h-2 rounded-full shrink-0', meta.dotClass)} />
           <span className="text-sm font-medium text-bolt-elements-textPrimary truncate">{task.title}</span>
         </div>
-        <span
-          className={classNames(
-            'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0',
-            meta.badgeClass,
+        <div className="flex items-center gap-1.5 shrink-0">
+          {task.status === 'in-progress' && latestReview?.reviewStatus === 'changes-requested' && (
+            <ReviewBadge status="changes-requested" />
           )}
-        >
-          {meta.label}
-        </span>
+          <span
+            className={classNames(
+              'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0',
+              meta.badgeClass,
+            )}
+          >
+            {meta.label}
+          </span>
+        </div>
       </div>
 
       <div className="text-xs text-bolt-elements-textTertiary mb-3">{task.description}</div>
