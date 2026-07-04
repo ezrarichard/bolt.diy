@@ -20,6 +20,7 @@ import { RequirementsDraftPanel } from './RequirementsDraftPanel';
 import { ArchitectureDraftPanel } from './ArchitectureDraftPanel';
 import { DatabaseDraftPanel } from './DatabaseDraftPanel';
 import { UiUxDraftPanel } from './UIUXDraftPanel';
+import { ContextPreviewPanel } from './ContextPreviewPanel';
 
 interface ProjectDashboardProps {
   project: Project | null;
@@ -792,6 +793,30 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
                         The UI/UX Draft is stored locally for this project only — approving it never generates HTML,
                         CSS, Tailwind, React, Figma files, or images.
+                      </div>
+                    </div>
+
+                    {/* Context Preview — Sprint 17, internal/team tool only */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-4">
+                        <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">
+                          Context Preview
+                        </h2>
+                        <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary">
+                          Internal
+                        </span>
+                      </div>
+                      <div
+                        className={classNames(
+                          'rounded-xl border border-dashed border-bolt-elements-borderColor/50 p-5',
+                          'bg-[#F7F7F8]/60 dark:bg-[#161616]/60 backdrop-blur-md',
+                        )}
+                      >
+                        <ContextPreviewPanel project={project} />
+                      </div>
+                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                        Preview of what the Context Engine would send a given AI role — computed locally, no AI call.
+                        For the Builders team only; not part of the project workflow.
                       </div>
                     </div>
 
