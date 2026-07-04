@@ -14,6 +14,38 @@ export function formatList(items: string[] | undefined, fallback = 'None specifi
   return items && items.length > 0 ? items.join(', ') : fallback;
 }
 
+/**
+ * Sprint 15 — generic "describe an already-parsed AI draft to another AI
+ * role" formatter, extracted so app/lib/projects/prompts/database.ts can
+ * describe the approved Architecture Draft to the Database Designer without
+ * hand-rolling architecture-specific formatting. Reusable by any future
+ * prompt that needs to feed one AI role's draft into another's context.
+ */
+export function formatDraftFields<T>(
+  draft: T | undefined,
+  fields: { key: keyof T; label: string; kind: 'text' | 'list' }[],
+): string {
+  if (!draft) {
+    return 'Not available yet.';
+  }
+
+  const lines = fields
+    .map((field) => {
+      const value = draft[field.key];
+
+      if (!value) {
+        return undefined;
+      }
+
+      const display = Array.isArray(value) ? formatList(value as string[]) : (value as string);
+
+      return `${field.label}: ${display}`;
+    })
+    .filter((line): line is string => Boolean(line));
+
+  return lines.length > 0 ? lines.join('\n') : 'Not available yet.';
+}
+
 export function formatProjectKnowledge(knowledge: ProjectKnowledge | undefined): string {
   if (!knowledge) {
     return 'Nothing captured yet.';

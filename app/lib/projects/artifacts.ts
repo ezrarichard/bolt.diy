@@ -92,6 +92,7 @@ export function createArtifact(input: {
 export const ARTIFACT_TYPES = {
   REQUIREMENTS_DRAFT: 'requirements-draft',
   ARCHITECTURE_DRAFT: 'architecture-draft',
+  DATABASE_DRAFT: 'database-draft',
 } as const;
 
 /**
