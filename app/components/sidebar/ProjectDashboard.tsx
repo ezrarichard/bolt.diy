@@ -20,6 +20,7 @@ import { RequirementsDraftPanel } from './RequirementsDraftPanel';
 import { ArchitectureDraftPanel } from './ArchitectureDraftPanel';
 import { DatabaseDraftPanel } from './DatabaseDraftPanel';
 import { UiUxDraftPanel } from './UIUXDraftPanel';
+import { BackendDraftPanel } from './BackendDraftPanel';
 import { ContextPreviewPanel } from './ContextPreviewPanel';
 
 interface ProjectDashboardProps {
@@ -793,6 +794,25 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
                         The UI/UX Draft is stored locally for this project only — approving it never generates HTML,
                         CSS, Tailwind, React, Figma files, or images.
+                      </div>
+                    </div>
+
+                    {/* Backend Design — Sprint 19 */}
+                    <div>
+                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                        Backend Design
+                      </h2>
+                      <div
+                        className={classNames(
+                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                        )}
+                      >
+                        <BackendDraftPanel project={project} />
+                      </div>
+                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                        The Backend Draft is stored locally for this project only — approving it never generates backend
+                        code, SQL, Prisma/Drizzle/Supabase schemas, connects to GitHub, or deploys anything.
                       </div>
                     </div>
 

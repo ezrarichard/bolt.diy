@@ -9,6 +9,7 @@ import type {
   TaskHistoryEventType,
   TaskReviewRecord,
 } from '~/lib/projects/reviewEngine';
+import { createProjectRepository } from '~/lib/builders-db/repositories/projectsRepository';
 
 /**
  * Project data model — Sprint 1 (UI-only).
@@ -68,8 +69,9 @@ export interface Project {
    * Start -> Pause -> Submit for Review -> Completed lifecycle — the two
    * are intentionally not merged. Absent entries default to "not-started";
    * "ready" and "blocked" are normally computed by executionEngine rather
-   * than written here. Local-only (localStorage via persist()), same as
-   * the rest of Project — no backend, no IndexedDB.
+   * than written here. Persisted via the ProjectRepository (see
+   * app/lib/builders-db/), same as the rest of Project — no backend API,
+   * no IndexedDB.
    */
   taskStatus?: Record<string, ProjectTaskStatus>;
 
@@ -117,63 +119,21 @@ export interface Project {
   knowledgeBase?: string[];
 }
 
-const STORAGE_KEY = 'builder_projects';
-
 /**
- * Sprint 9 — ids of the Sprint 1-era mock/demo projects (Builders Platform,
- * LocalShop India, AI Advertising, Company Website, Mobile App). They used
- * to be the in-memory fallback returned by loadProjects() whenever
- * localStorage was empty; because addProject() built new arrays off of
- * whatever loadProjects() returned, creating your very first real project
- * would silently persist these mock entries alongside it, making them look
- * like real user projects forever after. They are stripped out below (both
- * from the fallback and from anything already persisted) — this does not
- * touch blueprint definitions (app/lib/blueprints/registry.ts), which are
- * unrelated and still power the New Project blueprint picker.
+ * Sprint 18 — the Store's only connection to persistence. Everything below
+ * that used to read/write `localStorage` directly (the Sprint 9
+ * legacy-mock-project cleanup included) now goes through this repository;
+ * see app/lib/builders-db/ for the repository interface, the Local
+ * provider (today's only active backend, wrapping the exact same
+ * localStorage logic that used to live here), and the Supabase provider
+ * skeleton for a future cloud backend. Only
+ * app/lib/builders-db/repositories/projectsRepository.ts's
+ * createProjectRepository() decides which provider backs this — the Store
+ * itself has no opinion.
  */
-const LEGACY_MOCK_PROJECT_IDS = new Set([
-  'proj-builders-platform',
-  'proj-localshop-india',
-  'proj-ai-advertising',
-  'proj-company-website',
-  'proj-mobile-app',
-]);
+const projectRepository = createProjectRepository();
 
-function loadProjects(): Project[] {
-  if (typeof window === 'undefined') {
-    return [];
-  }
-
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-
-    if (stored) {
-      const parsed = JSON.parse(stored);
-
-      if (Array.isArray(parsed)) {
-        const cleaned = parsed.filter(
-          (project) => project && typeof project.id === 'string' && !LEGACY_MOCK_PROJECT_IDS.has(project.id),
-        );
-
-        if (cleaned.length !== parsed.length) {
-          /*
-           * One-time cleanup — re-persist without the legacy mock entries so
-           * they don't reappear on the next load.
-           */
-          persist(cleaned);
-        }
-
-        return cleaned;
-      }
-    }
-  } catch (error) {
-    console.error('Failed to load projects from localStorage:', error);
-  }
-
-  return [];
-}
-
-export const projectsStore = atom<Project[]>(loadProjects());
+export const projectsStore = atom<Project[]>(projectRepository.loadProjects());
 
 /**
  * The "Current Project" — Sprint 2 concept. Set when a project is opened
@@ -206,12 +166,6 @@ export function requestChatInputFocus() {
   focusChatInputRequestStore.set(focusChatInputRequestStore.get() + 1);
 }
 
-function persist(projects: Project[]) {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
-  }
-}
-
 export function addProject(input: {
   name: string;
   icon: string;
@@ -229,9 +183,8 @@ export function addProject(input: {
     createdAt: new Date().toISOString(),
   };
 
-  const next = [...projectsStore.get(), project];
-  projectsStore.set(next);
-  persist(next);
+  projectsStore.set([...projectsStore.get(), project]);
+  projectRepository.saveProject(project);
 
   return project;
 }
@@ -240,17 +193,16 @@ export function addProject(input: {
  * Sprint 9 — remove a project from the local project store only.
  *
  * This never touches chat history/persistence, GitHub, Supabase, or any
- * deployment — it only filters projectsStore and re-persists to
- * localStorage, exactly like every other write in this file. If the
+ * deployment — it only filters projectsStore and tells the repository to
+ * delete the project, exactly like every other write in this file. If the
  * deleted project was the active one, the active-project selection (and
  * the Project Dashboard, if it happened to be open for this project) is
  * cleared so the UI doesn't end up pointing at a project that no longer
  * exists.
  */
 export function deleteProject(projectId: string): void {
-  const next = projectsStore.get().filter((project) => project.id !== projectId);
-  projectsStore.set(next);
-  persist(next);
+  projectsStore.set(projectsStore.get().filter((project) => project.id !== projectId));
+  projectRepository.deleteProject(projectId);
 
   if (currentProjectIdStore.get() === projectId) {
     currentProjectIdStore.set(null);
@@ -268,8 +220,8 @@ export function getRoadmapItemStatus(project: Project, itemKey: string): Roadmap
 }
 
 /**
- * Sprint 8 — set a roadmap item's status for a project. Local-only
- * (localStorage via the existing persist()), no backend, no IndexedDB.
+ * Sprint 8 — set a roadmap item's status for a project. Persisted via the
+ * ProjectRepository (see app/lib/builders-db/), no backend, no IndexedDB.
  * Not wired to any UI control yet — this sprint only needs the roadmap to
  * be readable and its progress calculable; this setter exists so a future
  * sprint can let users change status without another store change.
@@ -283,7 +235,7 @@ export function setRoadmapItemStatus(projectId: string, itemKey: string, status:
         : project,
     );
   projectsStore.set(next);
-  persist(next);
+  projectRepository.saveProjects(next);
 }
 
 /**
@@ -309,14 +261,15 @@ const HISTORY_EVENT_FOR_STATUS: Partial<Record<ProjectTaskStatus, TaskHistoryEve
 };
 
 /**
- * Sprint 11 — set a task's manual execution stage. Local-only (localStorage
- * via persist()), same pattern as setRoadmapItemStatus. Called with
- * 'in-progress' | 'not-started' | 'needs-review' for the Start/Pause/Submit
- * for Review actions — 'ready' and 'blocked' are left for executionEngine
- * to compute, and 'completed' is only ever reached via applyReviewDecision
- * (Sprint 12's Approve action), never through this setter. Each transition
- * here also appends a Sprint 12 history event (see taskHistory above) so
- * the ReviewTimeline component has a full Started/Paused/Submitted record.
+ * Sprint 11 — set a task's manual execution stage. Persisted via the
+ * ProjectRepository (see app/lib/builders-db/), same pattern as
+ * setRoadmapItemStatus. Called with 'in-progress' | 'not-started' |
+ * 'needs-review' for the Start/Pause/Submit for Review actions — 'ready'
+ * and 'blocked' are left for executionEngine to compute, and 'completed' is
+ * only ever reached via applyReviewDecision (Sprint 12's Approve action),
+ * never through this setter. Each transition here also appends a Sprint 12
+ * history event (see taskHistory above) so the ReviewTimeline component has
+ * a full Started/Paused/Submitted record.
  */
 export function setTaskStatus(projectId: string, taskId: string, status: ProjectTaskStatus): void {
   const historyEvent = HISTORY_EVENT_FOR_STATUS[status];
@@ -339,7 +292,7 @@ export function setTaskStatus(projectId: string, taskId: string, status: Project
   });
 
   projectsStore.set(next);
-  persist(next);
+  projectRepository.updateTasks(next);
 }
 
 /** Sprint 11 — read a task's notes. Defaults to '' when nothing has been saved yet. */
@@ -348,9 +301,10 @@ export function getTaskNotes(project: Project, taskId: string): string {
 }
 
 /**
- * Sprint 11 — save a task's notes. Local-only (localStorage via persist()),
- * same pattern as updateProjectKnowledge. Plain markdown text, not parsed
- * or sent anywhere — a future AI Project Manager is the intended reader.
+ * Sprint 11 — save a task's notes. Persisted via the ProjectRepository (see
+ * app/lib/builders-db/), same pattern as updateProjectKnowledge. Plain
+ * markdown text, not parsed or sent anywhere — a future AI Project Manager
+ * is the intended reader.
  */
 export function setTaskNotes(projectId: string, taskId: string, notes: string): void {
   const next = projectsStore
@@ -359,7 +313,7 @@ export function setTaskNotes(projectId: string, taskId: string, notes: string): 
       project.id === projectId ? { ...project, taskNotes: { ...project.taskNotes, [taskId]: notes } } : project,
     );
   projectsStore.set(next);
-  persist(next);
+  projectRepository.updateTasks(next);
 }
 
 /** Sprint 11 — a project's artifacts (see app/lib/projects/artifacts.ts). Empty array when none exist yet. */
@@ -368,11 +322,12 @@ export function getProjectArtifacts(project: Project): ProjectArtifact[] {
 }
 
 /**
- * Sprint 11 — append an artifact to a project. Local-only (localStorage via
- * persist()). Nothing calls this yet — the architecture is ready for a
- * future AI generation sprint to create real artifacts via the same setter,
- * with no data-model change (see createPlaceholderArtifact in
- * app/lib/projects/artifacts.ts for building the placeholder shape).
+ * Sprint 11 — append an artifact to a project. Persisted via the
+ * ProjectRepository (see app/lib/builders-db/). Nothing calls this yet —
+ * the architecture is ready for a future AI generation sprint to create
+ * real artifacts via the same setter, with no data-model change (see
+ * createPlaceholderArtifact in app/lib/projects/artifacts.ts for building
+ * the placeholder shape).
  */
 export function addProjectArtifact(projectId: string, artifact: ProjectArtifact): void {
   const next = projectsStore
@@ -381,14 +336,15 @@ export function addProjectArtifact(projectId: string, artifact: ProjectArtifact)
       project.id === projectId ? { ...project, artifacts: [...(project.artifacts ?? []), artifact] } : project,
     );
   projectsStore.set(next);
-  persist(next);
+  projectRepository.updateArtifacts(next);
 }
 
 /**
  * Sprint 13 — update fields on an existing artifact by id (status, content,
  * version, etc.), e.g. moving a Requirements Draft from 'draft' to
  * 'approved'/'discarded', or bumping its content+version on regenerate.
- * `updatedAt` is always refreshed. Local-only (localStorage via persist()).
+ * `updatedAt` is always refreshed. Persisted via the ProjectRepository (see
+ * app/lib/builders-db/).
  */
 export function updateProjectArtifact(projectId: string, artifactId: string, partial: Partial<ProjectArtifact>): void {
   const next = projectsStore.get().map((project) => {
@@ -404,7 +360,7 @@ export function updateProjectArtifact(projectId: string, artifactId: string, par
     };
   });
   projectsStore.set(next);
-  persist(next);
+  projectRepository.updateArtifacts(next);
 }
 
 /** Sprint 12 — a task's latest review verdict. Returns undefined when it has never been reviewed. */
@@ -423,10 +379,11 @@ export function getTaskHistory(project: Project, taskId: string): TaskHistoryEve
  * This is the only place `taskStatus` is ever set to 'completed', the only
  * place `taskReview` is written, and the only place an approval's roadmap
  * completion / artifact placeholder are applied — all in one atomic
- * update. Local-only (localStorage via persist()); does not touch GitHub,
- * Supabase, or IndexedDB. The caller (TaskDetailsDialog) computes the
- * decision via reviewEngine, then hands it here — keeping reviewEngine
- * itself free of any store/persistence dependency.
+ * update. Persisted via the ProjectRepository (see app/lib/builders-db/);
+ * does not touch GitHub, Supabase, or IndexedDB. The caller
+ * (TaskDetailsDialog) computes the decision via reviewEngine, then hands it
+ * here — keeping reviewEngine itself free of any store/persistence
+ * dependency.
  */
 export function applyReviewDecision(projectId: string, decision: ReviewDecision): void {
   const next = projectsStore.get().map((project) => {
@@ -456,7 +413,7 @@ export function applyReviewDecision(projectId: string, decision: ReviewDecision)
   });
 
   projectsStore.set(next);
-  persist(next);
+  projectRepository.updateReviews(next);
 }
 
 /**
@@ -469,7 +426,7 @@ export function getProjectKnowledge(project: Project): ProjectKnowledge | undefi
 
 /**
  * Phase 2 Sprint 9 — merge partial Project Knowledge into a project and
- * persist it. Local-only (localStorage via the existing persist()), same
+ * persist it via the ProjectRepository (see app/lib/builders-db/), same
  * pattern as setRoadmapItemStatus/addProject. A shallow merge is
  * intentional: array fields (coreFeatures, pagesOrScreens, etc.) are
  * replaced wholesale by whatever the Requirements dialog submits, not
@@ -488,7 +445,7 @@ export function updateProjectKnowledge(projectId: string, partialKnowledge: Part
       : project,
   );
   projectsStore.set(next);
-  persist(next);
+  projectRepository.updateKnowledge(next);
 }
 
 /**
@@ -507,7 +464,7 @@ export function clearProjectKnowledge(projectId: string): void {
     return rest;
   });
   projectsStore.set(next);
-  persist(next);
+  projectRepository.updateKnowledge(next);
 }
 
 export const PROJECT_COLOR_OPTIONS = ['purple', 'blue', 'green', 'orange', 'pink', 'teal'] as const;
