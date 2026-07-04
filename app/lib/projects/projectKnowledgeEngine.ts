@@ -142,6 +142,18 @@ function getFieldConfig(key: KnowledgeFieldKey): KnowledgeFieldConfig | undefine
 }
 
 /**
+ * Phase 3 (Task Engine) — a `ProjectKnowledge` field's display label, e.g.
+ * "projectVision" -> "Project Vision". Added so the Task Execution Plan's
+ * "Knowledge Required" badges (ProjectDashboard) can render human-readable
+ * labels for `ProjectTask.requiredKnowledge` entries without re-deriving the
+ * section/field list that already lives here. Falls back to the raw key for
+ * anything not found in KNOWLEDGE_SECTIONS (should not happen in practice).
+ */
+function getFieldLabel(key: KnowledgeFieldKey): string {
+  return getFieldConfig(key)?.label ?? key;
+}
+
+/**
  * Task 4 — recommended (not required) fields per blueprint. `ProjectKnowledge`
  * intentionally stays one generic shape across every blueprint (see
  * knowledge.ts), so "recommended fields" maps the sprint spec's example
@@ -327,4 +339,5 @@ export const projectKnowledgeEngine = {
   getMissingFields,
   getReadiness,
   getSummary,
+  getFieldLabel,
 };

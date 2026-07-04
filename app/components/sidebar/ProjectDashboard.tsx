@@ -8,7 +8,12 @@ import { PROJECT_COLOR_CLASSES } from './ProjectListItem';
 import BackgroundRays from '~/components/ui/BackgroundRays';
 import { blueprintEngine, type RoadmapItemStatus } from '~/lib/blueprints';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
-import { projectKnowledgeEngine, type ReadinessStageStatus } from '~/lib/projects/projectKnowledgeEngine';
+import {
+  projectKnowledgeEngine,
+  type KnowledgeFieldKey,
+  type ReadinessStageStatus,
+} from '~/lib/projects/projectKnowledgeEngine';
+import { projectTaskEngine, type ProjectTaskStatus, type ProjectTaskWithStatus } from '~/lib/projects/taskEngine';
 import { ProjectRequirementsDialog } from './ProjectRequirementsDialog';
 
 interface ProjectDashboardProps {
@@ -144,6 +149,121 @@ function RoadmapItemCard({ title, description, status }: RoadmapItemCardProps) {
       >
         {meta.label}
       </span>
+    </div>
+  );
+}
+
+/**
+ * Phase 3 — status metadata for the Task Execution Plan. Purely
+ * presentational; the status itself always comes from
+ * projectTaskEngine.getTasksWithStatus(project), computed from the same
+ * project.roadmapStatus data the Project Roadmap section reads — no
+ * separate/manual task status is ever stored.
+ */
+const TASK_STATUS_META: Record<ProjectTaskStatus, { label: string; dotClass: string; badgeClass: string }> = {
+  ready: {
+    label: 'Ready',
+    dotClass: 'bg-blue-500',
+    badgeClass: 'text-blue-600 dark:text-blue-400 border-blue-500/30',
+  },
+  blocked: {
+    label: 'Blocked',
+    dotClass: 'bg-red-500',
+    badgeClass: 'text-red-600 dark:text-red-400 border-red-500/30',
+  },
+  completed: {
+    label: 'Completed',
+    dotClass: 'bg-green-500',
+    badgeClass: 'text-green-600 dark:text-green-400 border-green-500/30',
+  },
+  future: {
+    label: 'Future',
+    dotClass: 'bg-bolt-elements-textTertiary/50',
+    badgeClass: 'text-bolt-elements-textTertiary border-bolt-elements-borderColor/50',
+  },
+};
+
+function formatEstimatedMinutes(minutes: number | undefined): string {
+  if (!minutes) {
+    return 'Not estimated';
+  }
+
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainderMinutes = minutes % 60;
+
+  return remainderMinutes > 0 ? `${hours}h ${remainderMinutes}m` : `${hours}h`;
+}
+
+interface TaskCardProps {
+  task: ProjectTaskWithStatus;
+  dependencyTitles: string[];
+}
+
+/** One Task Execution Plan card — title, category, dependencies, required knowledge, output type, estimate, computed status. */
+function TaskCard({ task, dependencyTitles }: TaskCardProps) {
+  const meta = TASK_STATUS_META[task.status];
+
+  return (
+    <div
+      className={classNames(
+        'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4',
+        'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+        'hover:border-purple-500/25 dark:hover:border-purple-500/20 transition-colors duration-200',
+      )}
+    >
+      <div className="flex items-start justify-between gap-3 mb-2.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={classNames('w-2 h-2 rounded-full shrink-0', meta.dotClass)} />
+          <span className="text-sm font-medium text-bolt-elements-textPrimary truncate">{task.title}</span>
+        </div>
+        <span
+          className={classNames(
+            'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0',
+            meta.badgeClass,
+          )}
+        >
+          {meta.label}
+        </span>
+      </div>
+
+      <div className="text-xs text-bolt-elements-textTertiary mb-3">{task.description}</div>
+
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+        <div>
+          <span className="text-bolt-elements-textTertiary">Category: </span>
+          <span className="text-bolt-elements-textSecondary capitalize">{task.category}</span>
+        </div>
+        <div>
+          <span className="text-bolt-elements-textTertiary">Output: </span>
+          <span className="text-bolt-elements-textSecondary">{task.outputType}</span>
+        </div>
+        <div className="col-span-2">
+          <span className="text-bolt-elements-textTertiary">Estimated: </span>
+          <span className="text-bolt-elements-textSecondary">{formatEstimatedMinutes(task.estimatedMinutes)}</span>
+        </div>
+        <div className="col-span-2">
+          <span className="text-bolt-elements-textTertiary">Dependencies: </span>
+          <span className="text-bolt-elements-textSecondary">
+            {dependencyTitles.length > 0 ? dependencyTitles.join(', ') : 'None'}
+          </span>
+        </div>
+        {task.requiredKnowledge.length > 0 && (
+          <div className="col-span-2 flex flex-wrap gap-1.5 mt-1">
+            {task.requiredKnowledge.map((key) => (
+              <span
+                key={key}
+                className="text-[10px] px-2 py-0.5 rounded-full border border-purple-500/30 text-purple-600 dark:text-purple-300"
+              >
+                {projectKnowledgeEngine.getFieldLabel(key as KnowledgeFieldKey)}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -304,6 +424,16 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
     status: getRoadmapItemStatus(project, item.key),
   }));
   const completedRoadmapCount = roadmapWithStatus.filter((item) => item.status === 'completed').length;
+
+  /*
+   * Phase 3 — Task Execution Plan. Task definitions (title/category/
+   * dependencies/required knowledge/output type/estimate) always come from
+   * projectTaskEngine, never a registry import. Status is computed purely
+   * from the same project.roadmapStatus data the Project Roadmap section
+   * above reads — no separate task-status field exists on Project.
+   */
+  const tasksWithStatus = projectTaskEngine.getTasksWithStatus(project);
+  const taskCompletion = projectTaskEngine.getCompletion(project);
 
   /*
    * Phase 2 Sprint 9 — Requirements & Knowledge. Read straight off the
@@ -689,6 +819,42 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
                         Roadmap status is stored locally for this project only — nothing here is generated, connected,
                         or deployed automatically.
+                      </div>
+                    </div>
+
+                    {/* Task Execution Plan — Phase 3 */}
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">
+                          Task Execution Plan
+                        </h2>
+                        <span className="text-[11px] font-medium text-bolt-elements-textTertiary">
+                          {taskCompletion.completedCount} / {taskCompletion.totalCount} Completed (
+                          {taskCompletion.overall}%)
+                        </span>
+                      </div>
+
+                      {tasksWithStatus.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {tasksWithStatus.map((task) => (
+                            <TaskCard
+                              key={task.id}
+                              task={task}
+                              dependencyTitles={projectTaskEngine
+                                .getDependencies(project.blueprintId, task.id)
+                                .map((dependency) => dependency.title)}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-bolt-elements-textTertiary">
+                          No tasks defined for this blueprint yet
+                        </div>
+                      )}
+
+                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                        Status is computed from Project Roadmap progress — nothing here is generated by AI yet. This is
+                        the execution model future AI generation will use.
                       </div>
                     </div>
 
