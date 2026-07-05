@@ -9,6 +9,7 @@ import type {
   TaskHistoryEventType,
   TaskReviewRecord,
 } from '~/lib/projects/reviewEngine';
+import type { GenerationSession } from '~/lib/projects/generationSessionEngine';
 import { createProjectRepository } from '~/lib/builders-db/repositories/projectsRepository';
 
 /**
@@ -107,6 +108,20 @@ export interface Project {
    * (app/components/sidebar/ReviewComponents.tsx). Local-only, no backend.
    */
   taskHistory?: Record<string, TaskHistoryEvent[]>;
+
+  /**
+   * Sprint 28 — a simulated generation runtime session (see
+   * app/lib/projects/generationSessionEngine.ts). Undefined until a session
+   * is explicitly created and persisted; nothing calls the setter below
+   * yet — there is no Start button this sprint, so this stays unset for
+   * every project today. Persisted via the ProjectRepository's generic
+   * saveProjects() (see app/lib/builders-db/), same as the rest of
+   * Project — no repository changes needed, and no BuildersDB-specific
+   * code anywhere in this file. A future sprint that adds real
+   * start/pause/resume/cancel actions will read/write this field through
+   * getGenerationSession/setGenerationSession below.
+   */
+  generationSession?: GenerationSession;
 
   // Future fields — intentionally unset in Sprint 1.
   githubRepo?: string;
@@ -478,6 +493,28 @@ export function clearProjectKnowledge(projectId: string): void {
   });
   projectsStore.set(next);
   projectRepository.updateKnowledge(next);
+}
+
+/** Sprint 28 — a project's generation session (see app/lib/projects/generationSessionEngine.ts). Undefined until one is explicitly created and persisted. */
+export function getGenerationSession(project: Project): GenerationSession | undefined {
+  return project.generationSession;
+}
+
+/**
+ * Sprint 28 — persists a generation session snapshot. Uses the
+ * ProjectRepository's generic saveProjects() (see app/lib/builders-db/) —
+ * every other "update" / "save" method on that interface is already an
+ * alias for the same "write the whole project list" operation, so this
+ * adds no new repository surface. Nothing calls this yet; it exists so a
+ * future sprint's Start/Pause/Resume/Cancel actions have a setter ready to
+ * call.
+ */
+export function setGenerationSession(projectId: string, session: GenerationSession | undefined): void {
+  const next = projectsStore
+    .get()
+    .map((project) => (project.id === projectId ? { ...project, generationSession: session } : project));
+  projectsStore.set(next);
+  projectRepository.saveProjects(next);
 }
 
 export const PROJECT_COLOR_OPTIONS = ['purple', 'blue', 'green', 'orange', 'pink', 'teal'] as const;

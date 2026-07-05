@@ -1,8 +1,9 @@
 import { classNames } from '~/utils/classNames';
-import type { Project } from '~/lib/stores/projects';
+import { getGenerationSession, type Project } from '~/lib/stores/projects';
 import { generationPlannerEngine, RECOMMENDED_MODEL_LABELS } from '~/lib/projects/generationPlannerEngine';
 import { generationQueueEngine, type GenerationQueueStatus } from '~/lib/projects/generationQueueEngine';
 import { generationExecutionEngine, type ExecutionStrategy } from '~/lib/projects/generationExecutionEngine';
+import { generationSessionEngine, type GenerationSessionStepStatus } from '~/lib/projects/generationSessionEngine';
 import { formatEstimatedMinutes } from './ProjectTaskCard';
 
 interface GenerationPlanPanelProps {
@@ -82,6 +83,46 @@ const EXECUTION_STRATEGY_LABELS: Record<ExecutionStrategy, string> = {
 
 const EXECUTION_STRATEGY_ORDER: ExecutionStrategy[] = ['review-first', 'iterative', 'parallel-safe', 'single-shot'];
 
+/**
+ * Sprint 28 — badge styling shared by session-level and step-level status,
+ * since `GenerationSessionStepStatus` is a superset of `GenerationSessionStatus`
+ * (it adds `blocked`/`waiting`/`skipped` on top of the same seven session
+ * values) — one map safely covers both.
+ */
+const SESSION_STATUS_META: Record<GenerationSessionStepStatus, { label: string; className: string }> = {
+  idle: { label: 'Idle', className: 'text-bolt-elements-textTertiary border-bolt-elements-borderColor/50' },
+  blocked: { label: 'Blocked', className: 'text-red-600 dark:text-red-400 border-red-500/30 bg-red-500/10' },
+  waiting: { label: 'Waiting', className: 'text-amber-600 dark:text-amber-400 border-amber-500/30 bg-amber-500/10' },
+  ready: { label: 'Ready', className: 'text-blue-600 dark:text-blue-400 border-blue-500/30 bg-blue-500/10' },
+  running: {
+    label: 'Running',
+    className: 'text-purple-600 dark:text-purple-400 border-purple-500/30 bg-purple-500/10',
+  },
+  paused: { label: 'Paused', className: 'text-amber-600 dark:text-amber-400 border-amber-500/30 bg-amber-500/10' },
+  completed: {
+    label: 'Completed',
+    className: 'text-green-600 dark:text-green-400 border-green-500/30 bg-green-500/10',
+  },
+  failed: { label: 'Failed', className: 'text-red-600 dark:text-red-400 border-red-500/30 bg-red-500/10' },
+  skipped: { label: 'Skipped', className: 'text-bolt-elements-textTertiary border-bolt-elements-borderColor/50' },
+  cancelled: { label: 'Cancelled', className: 'text-bolt-elements-textTertiary border-bolt-elements-borderColor/50' },
+};
+
+function SessionStatusBadge({ status }: { status: GenerationSessionStepStatus }) {
+  const meta = SESSION_STATUS_META[status];
+
+  return (
+    <span
+      className={classNames(
+        'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0',
+        meta.className,
+      )}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
 interface TagListProps {
   entries: [string, number][];
 }
@@ -119,6 +160,10 @@ export function GenerationPlanPanel({ project }: GenerationPlanPanelProps) {
   const queue = generationQueueEngine.buildGenerationQueue(project);
   const nextItem = generationQueueEngine.getNextQueueItem(queue);
   const executionPlan = generationExecutionEngine.buildGenerationExecutionPlan(project);
+  const persistedSession = getGenerationSession(project);
+  const session = persistedSession ?? generationSessionEngine.createSession(project, executionPlan);
+  const currentStep = generationSessionEngine.getCurrentStep(session);
+  const remainingSteps = session.summary.waitingCount + session.summary.runningCount;
 
   return (
     <div className="space-y-5">
@@ -392,6 +437,70 @@ export function GenerationPlanPanel({ project }: GenerationPlanPanelProps) {
         <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
           Read-only execution plan — no model has been called, no prompt has been created, and no file has been
           generated. There is no Start button yet.
+        </div>
+      </div>
+
+      {/* Execution Session — Sprint 28, read-only session preview */}
+      <div className="pt-5 border-t border-bolt-elements-borderColor/30">
+        <div className="flex items-center gap-2 mb-4">
+          <div className="text-sm font-semibold text-bolt-elements-textPrimary">Execution Session</div>
+          <SessionStatusBadge status={session.status} />
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          <Stat label="Progress" value={session.overallProgress} valueClassName="text-blue-600 dark:text-blue-400" />
+          <Stat
+            label="Completed"
+            value={session.summary.completedCount}
+            valueClassName="text-green-600 dark:text-green-400"
+          />
+          <Stat label="Remaining" value={remainingSteps} />
+          <div
+            className={classNames(
+              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4',
+              'bg-bolt-elements-background-depth-2/60',
+            )}
+          >
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1.5">
+              Est. Remaining
+            </div>
+            <div className="text-2xl font-semibold text-bolt-elements-textPrimary">
+              {formatEstimatedMinutes(session.summary.estimatedRemainingMinutes)}
+            </div>
+          </div>
+        </div>
+
+        {currentStep && (
+          <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 px-3.5 py-2.5 mb-4">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-purple-600 dark:text-purple-300 mb-1">
+              Current Step
+            </div>
+            <div className="text-sm text-bolt-elements-textPrimary font-medium">{currentStep.moduleName}</div>
+            <div className="text-xs text-bolt-elements-textTertiary mt-0.5">{currentStep.lastMessage}</div>
+          </div>
+        )}
+
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+          Session Timeline
+        </div>
+        <ol className="space-y-1.5">
+          {session.steps.map((step, index) => (
+            <li key={step.stepId} className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="w-5 h-5 shrink-0 rounded-full bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/40 flex items-center justify-center text-[10px] text-bolt-elements-textTertiary">
+                {index + 1}
+              </span>
+              <span className="text-bolt-elements-textSecondary font-medium">{step.moduleName}</span>
+              <SessionStatusBadge status={step.status} />
+              <span className="text-bolt-elements-textTertiary">{step.lastMessage}</span>
+            </li>
+          ))}
+        </ol>
+
+        <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+          {persistedSession
+            ? 'Persisted session snapshot.'
+            : 'Live preview — no session has been created or saved yet.'}{' '}
+          Nothing here executes, calls a model, or creates a file. There is no Start, Pause, or Resume button yet.
         </div>
       </div>
     </div>
