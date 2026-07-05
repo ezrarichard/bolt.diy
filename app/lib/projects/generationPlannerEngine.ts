@@ -54,19 +54,25 @@ export type GenerationMode = 'single-file' | 'feature-slice' | 'multi-module' | 
 
 /**
  * Our four primary models (see CLAUDE.md / system model list). Sprint 30.5 —
- * Claude Sonnet 5 is now the platform default for every classification
- * tier, including project-wide/high-complexity work that previously
- * recommended Opus; Haiku is still used for the smallest single-file helper
- * tasks. Fable has no natural trigger in this deterministic engineering
- * pipeline today (there is no creative-copy/marketing phase) — the type
- * still includes Opus and Fable so a future model-selector UI (and a future
+ * Claude Sonnet 5 was the platform default for every classification tier,
+ * including project-wide/high-complexity work that previously recommended
+ * Opus; Haiku is still used for the smallest single-file helper tasks.
+ * Fable has no natural trigger in this deterministic engineering pipeline
+ * today (there is no creative-copy/marketing phase) — the type still
+ * includes Opus and Fable so a future model-selector UI (and a future
  * phase, e.g. marketing copy generation) can classify/select either without
  * widening this union again; see `deriveRecommendedModel` below.
+ *
+ * Sprint 31 — Sonnet 5/Opus 4.8/Fable 5 require the AI SDK modernization
+ * (see AI_SDK_MIGRATION.md) that hasn't landed yet, so the platform default
+ * is temporarily pinned to Sonnet 4.5 instead of Sonnet 5. This only affects
+ * Guided Engineering's internal recommendations — Quick Build's manual
+ * model dropdown (anthropic.ts) is untouched and still lists Sonnet 5.
  */
-export type RecommendedModel = 'claude-sonnet-5' | 'claude-opus-4-8' | 'claude-fable-5' | 'claude-haiku-4-5-20251001';
+export type RecommendedModel = 'claude-sonnet-4-5' | 'claude-opus-4-8' | 'claude-fable-5' | 'claude-haiku-4-5-20251001';
 
 export const RECOMMENDED_MODEL_LABELS: Record<RecommendedModel, string> = {
-  'claude-sonnet-5': 'Claude Sonnet 5',
+  'claude-sonnet-4-5': 'Claude Sonnet 4.5',
   'claude-opus-4-8': 'Claude Opus 4.8',
   'claude-fable-5': 'Claude Fable 5',
   'claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
@@ -396,20 +402,22 @@ function deriveGenerationMode(phaseId: GenerationPhaseId, totalFiles: number): G
  * project-wide/high-complexity tier is kept as its own branch (rather than
  * folded into the final default) so a future model-selector UI still has a
  * distinct classification to map to a non-default model; today it resolves
- * to the same platform default (Sonnet 5) as everything else except the
- * single-file/low-complexity tier below. See the model-strategy note on
- * `RecommendedModel` above for why Fable never appears here.
+ * to the same platform default (Sonnet 4.5, temporarily standing in for
+ * Sonnet 5 per Sprint 31 — see the model-strategy note on `RecommendedModel`
+ * above) as everything else except the single-file/low-complexity tier
+ * below. See the model-strategy note on `RecommendedModel` above for why
+ * Fable never appears here.
  */
 function deriveRecommendedModel(complexity: GenerationComplexity, generationMode: GenerationMode): RecommendedModel {
   if (generationMode === 'project-wide' || (complexity === 'high' && generationMode === 'multi-module')) {
-    return 'claude-sonnet-5';
+    return 'claude-sonnet-4-5';
   }
 
   if (complexity === 'low' && generationMode === 'single-file') {
     return 'claude-haiku-4-5-20251001';
   }
 
-  return 'claude-sonnet-5';
+  return 'claude-sonnet-4-5';
 }
 
 function deriveContextBudget(complexity: GenerationComplexity, generationMode: GenerationMode): ContextBudget {

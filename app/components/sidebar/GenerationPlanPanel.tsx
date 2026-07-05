@@ -311,7 +311,7 @@ export function GenerationPlanPanel({ project }: GenerationPlanPanelProps) {
               </span>
               <span className="text-bolt-elements-textSecondary font-medium">{module.title}</span>
               <span className="text-bolt-elements-textTertiary">
-                {RECOMMENDED_MODEL_LABELS[module.tasks[0]?.recommendedModel ?? 'claude-sonnet-5']}
+                {RECOMMENDED_MODEL_LABELS[module.tasks[0]?.recommendedModel ?? 'claude-sonnet-4-5']}
               </span>
               {module.origin === 'default' && (
                 <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-full border border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary">

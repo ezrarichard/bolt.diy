@@ -235,7 +235,9 @@ function estimateDurationMinutes(
  * branch (rather than folded into the final default) so a future
  * model-selector UI still has a distinct classification to map to a
  * non-default model; today it resolves to the same platform default
- * (Sonnet 5) as everything else except the documentation-dominated and
+ * (Sonnet 4.5, temporarily standing in for Sonnet 5 per Sprint 31 — see
+ * the model-strategy note on `RecommendedModel` in generationPlannerEngine.ts)
+ * as everything else except the documentation-dominated and
  * single-file/low-complexity tiers above/below.
  */
 function deriveRecommendedModel(
@@ -254,14 +256,14 @@ function deriveRecommendedModel(
   }
 
   if (generationMode === 'project-wide' || (complexity === 'high' && generationMode === 'multi-module')) {
-    return 'claude-sonnet-5';
+    return 'claude-sonnet-4-5';
   }
 
   if (complexity === 'low' && generationMode === 'single-file') {
     return 'claude-haiku-4-5-20251001';
   }
 
-  return 'claude-sonnet-5';
+  return 'claude-sonnet-4-5';
 }
 
 function countByLabel(values: string[]): Record<string, number> {
@@ -343,7 +345,7 @@ function buildGenerationExecutionPlan(project: Project): GenerationExecutionPlan
   };
 
   const nextStep = steps.find((step) => step.status === 'ready');
-  const recommendedDefaultModel = nextStep?.recommendedModel ?? 'claude-sonnet-5';
+  const recommendedDefaultModel = nextStep?.recommendedModel ?? 'claude-sonnet-4-5';
   const ready = queue.canStart;
 
   const reason = ready

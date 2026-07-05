@@ -1,5 +1,4 @@
 import type { Project } from '~/lib/stores/projects';
-import { extractJsonPayload } from './draftParsing';
 import { buildContextBundle, formatContextBundleForPrompt } from './contextEngine';
 import { generationPlannerEngine, RECOMMENDED_MODEL_LABELS, type RecommendedModel } from './generationPlannerEngine';
 import { generationExecutionEngine } from './generationExecutionEngine';
@@ -51,7 +50,7 @@ export interface GeneratedFile {
   language: string;
   content: string;
 
-  /** Human-readable model label (e.g. "Claude Sonnet 5") — see RECOMMENDED_MODEL_LABELS. */
+  /** Human-readable model label (e.g. "Claude Sonnet 4.5") — see RECOMMENDED_MODEL_LABELS. */
   generatedBy: string;
   generatedAt: string;
 
@@ -72,6 +71,7 @@ export type GenerationRunErrorCode =
   | 'model-call-failed'
   | 'empty-response'
   | 'invalid-response-shape'
+  | 'truncated-response'
   | 'no-valid-files'
   | 'unexpected-error';
 
@@ -121,43 +121,47 @@ export type GenerateFn = (
 
 const ONLY_SUPPORTED_PHASE: GenerationSessionStep['phase'] = 'foundation';
 
-const FOUNDATION_SYSTEM_PROMPT = `You are a Principal Engineer inside Builders, an AI engineering platform, generating the FOUNDATION scaffold for a brand-new project.
+/**
+ * Sprint 32 — kept deliberately short and bounded. The previous, longer
+ * version of this prompt (8 file categories, an explicit "folder structure
+ * as a tree/outline document" ask, no file-count or length ceiling) reliably
+ * produced enough output — long folder trees, verbose markdown — to run
+ * past whatever token budget was in effect before the closing `]}` arrived,
+ * which the Sprint 31 parser correctly reports as `truncated-response`
+ * rather than silently accepting a broken file. The fix here is to stop
+ * asking Claude for that much output in the first place: a hard 3-5 file
+ * ceiling, an explicit "be concise" instruction, and a folder layout as a
+ * short bullet list instead of a full tree. Prototype Mode's actual rules
+ * (mock data only, no real backend, never hedge) are unchanged from before —
+ * only the surrounding scope/length instructions were tightened.
+ */
+const FOUNDATION_SYSTEM_PROMPT = `You are a Principal Engineer inside Builders, an AI engineering platform, generating a CONCISE Foundation scaffold for a brand-new project.
 
-This project is being built in PROTOTYPE MODE (Flow 1) — the first and always-first flow in Builders. The objective is customer validation: the customer opens a URL, uses the product with realistic dummy/mock data, and gives feedback. There is no real backend behind it yet.
-
-Prototype Mode rules — follow these strictly:
-- Use realistic dummy/mock data conventions only. Never a real database, never Supabase, never PostgreSQL, never MySQL.
+PROTOTYPE MODE (Flow 1) — customer validation only, no real backend yet:
+- Realistic dummy/mock data only. Never a real database, Supabase, PostgreSQL, or MySQL.
 - Never write placeholder environment variables or fake API keys "to fill in later".
-- Never block or hedge your output because a database or credentials are unavailable — that is expected and correct for this mode.
+- Never hedge or block your output because a database or credentials are unavailable — that is expected and correct for this mode.
 
-Your ONLY responsibility right now is the FOUNDATION phase. Generate ONLY:
-- Project folder structure (described as a file, e.g. a tree/outline document)
-- README
-- Project overview
-- Configuration files (e.g. package manifest, tsconfig, editor/lint config)
-- Shared constants
-- High-level architecture notes
-- Folder explanations
-- A basic package manifest
+Generate EXACTLY 3 to 5 files — no more:
+- README.md
+- PROJECT_OVERVIEW.md (brief architecture notes; list the top-level folders as a short bullet list, NOT a full folder tree)
+- The base package manifest (e.g. package.json) for this stack
+- Up to 2 more files ONLY if clearly necessary for this module (e.g. one config file, one shared constants file)
 
 Do NOT generate, under any circumstances:
-- Business logic
-- React pages or components
-- API routes
-- SQL or migrations
-- Authentication code
+- Business logic, React pages or components, API routes, SQL or migrations, authentication code
+
+Be concise. Every file's "content" must be complete and real, but short: a few short paragraphs or a short list per file, never exhaustive documentation.
 
 Respond with a single JSON object and nothing else, in this exact shape:
 {
   "files": [
-    { "path": "relative/file/path.ext", "purpose": "One sentence on why this file exists.", "language": "markdown | json | typescript | ...", "content": "The full file content as a string." }
+    { "path": "relative/file/path.ext", "purpose": "One sentence on why this file exists.", "language": "markdown | json | typescript | ...", "content": "The complete, concise content for this file." }
   ]
-}
-
-Every file's "content" must be the complete, real content for that file — not a placeholder or a description of what it would contain.`;
+}`;
 
 function buildFoundationUserPrompt(module: { title: string; description: string }, contextText: string): string {
-  return `Generate the Foundation-phase files for the module "${module.title}".
+  return `Generate the Foundation-phase files for the module "${module.title}" — 3 to 5 concise files only, per your instructions.
 
 Module intent: ${module.description}
 
@@ -166,6 +170,14 @@ ${contextText}
 
 Return only the JSON object described in your instructions — no surrounding prose, no markdown fences.`;
 }
+
+/**
+ * Sprint 32 — 3-5 short files (a README, an overview, a manifest, at most
+ * two more) fit comfortably in a few thousand output tokens; this ceiling
+ * exists so the model call itself can never run long enough to be cut off
+ * mid-JSON regardless of what the prompt asks for.
+ */
+const FOUNDATION_MAX_OUTPUT_TOKENS = 4000;
 
 /**
  * The current step, only if it is actually runnable right now — status must
@@ -212,55 +224,232 @@ interface ParsedGeneratedFile {
   content: string;
 }
 
-/** Validates one raw parsed entry — non-string/empty fields are dropped rather than thrown on, so one malformed entry never crashes the whole parse. */
-function toValidFile(entry: unknown): ParsedGeneratedFile | undefined {
-  if (!entry || typeof entry !== 'object') {
-    return undefined;
+/**
+ * Sprint 31 — a file path is rejected (not just discarded silently) when it
+ * could write outside the project root: absolute paths (`/etc/...`,
+ * `C:\...`), any `..` path segment, or an empty path after trimming.
+ * Path-only check — this file never writes anything to disk regardless;
+ * this exists so a malicious/careless AI response can't even produce a
+ * `GeneratedFile` that some future writer would blindly trust.
+ */
+function validateFilePath(path: string): { ok: true } | { ok: false; reason: string } {
+  if (!path) {
+    return { ok: false, reason: 'path is empty' };
+  }
+
+  const normalized = path.replace(/\\/g, '/');
+
+  if (normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized)) {
+    return { ok: false, reason: 'absolute paths are not allowed' };
+  }
+
+  if (normalized.split('/').some((segment) => segment === '..')) {
+    return { ok: false, reason: 'paths may not contain ".."' };
+  }
+
+  return { ok: true };
+}
+
+const REQUIRED_TEXT_FIELDS = ['path', 'purpose', 'language'] as const;
+
+/**
+ * Validates one raw parsed entry — every failure discards only this entry
+ * (never throws, never fails the whole parse) and returns a human-readable
+ * warning explaining exactly what was wrong, so `parseGeneratedFiles` can
+ * surface *why* a file was dropped instead of a silent count.
+ */
+function toValidFile(entry: unknown, index: number): { file: ParsedGeneratedFile } | { warning: string } {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    return { warning: `Discarded file at index ${index}: expected an object.` };
   }
 
   const record = entry as Record<string, unknown>;
-  const path = typeof record.path === 'string' ? record.path.trim() : '';
-  const purpose = typeof record.purpose === 'string' ? record.purpose.trim() : '';
-  const language = typeof record.language === 'string' ? record.language.trim() : '';
-  const content = typeof record.content === 'string' ? record.content : '';
+  const rawPath = record.path;
+  const label = typeof rawPath === 'string' && rawPath.trim() ? rawPath.trim() : `file at index ${index}`;
 
-  if (!path || !content) {
-    return undefined;
+  for (const field of REQUIRED_TEXT_FIELDS) {
+    const value = record[field];
+
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      return { warning: `Discarded "${label}": missing or invalid "${field}".` };
+    }
   }
 
-  return { path, purpose: purpose || 'No purpose provided.', language: language || 'text', content };
+  if (typeof record.content !== 'string' || record.content.length === 0) {
+    return { warning: `Discarded "${label}": missing or invalid "content".` };
+  }
+
+  const path = (record.path as string).trim();
+  const pathCheck = validateFilePath(path);
+
+  if (!pathCheck.ok) {
+    return { warning: `Discarded "${label}": unsafe file path (${pathCheck.reason}).` };
+  }
+
+  return {
+    file: {
+      path,
+      purpose: (record.purpose as string).trim(),
+      language: (record.language as string).trim(),
+      content: record.content,
+    },
+  };
 }
 
 /**
- * Parses Claude's raw text response into validated files. Reuses
- * `extractJsonPayload` from draftParsing.ts unchanged (this file asks for a
- * `{"files": [...]}` object specifically so that existing `{`/`}`-based
- * extractor works without modification). Never throws — every failure mode
- * returns a discriminated result.
+ * Sprint 31 — scans raw text for every top-level `{...}` JSON object,
+ * tracking string/escape state so braces that appear *inside* a string
+ * value (most commonly a generated file's own markdown content containing
+ * a ``` code fence, or literal `{`/`}` text) never confuse the brace count.
+ * Markdown fences, leading/trailing prose, and anything else outside a
+ * `{`/`}` pair are simply skipped over rather than matched against — so
+ * this works identically whether the JSON arrived raw, fenced with
+ * ```json, fenced with plain ```, or surrounded by a short explanation.
+ *
+ * This replaces the previous regex-based `extractJsonPayload` (still used
+ * unchanged by other engines via draftParsing.ts) specifically because that
+ * regex's lazy `[\s\S]*?` match stops at the *first* ``` it finds — which
+ * is wrong the moment a generated file's content itself contains a code
+ * fence, truncating the JSON and producing exactly the
+ * `invalid-response-shape` failure this sprint fixes.
+ *
+ * `truncated` is true only when a `{` was opened but never balanced by a
+ * matching `}` before the text ran out — the strongest signal available
+ * that generation was cut off mid-response (hit an output token limit)
+ * rather than genuinely malformed.
  */
-function parseGeneratedFiles(
-  rawText: string,
-): { ok: true; files: ParsedGeneratedFile[]; droppedCount: number } | { ok: false; error: GenerationRunError } {
-  const payload = extractJsonPayload(rawText);
-  let parsed: unknown;
+function extractJsonObjectCandidates(rawText: string): { candidates: string[]; truncated: boolean } {
+  const candidates: string[] = [];
+  let index = 0;
+  let truncated = false;
 
-  try {
-    parsed = JSON.parse(payload);
-  } catch {
-    return { ok: false, error: { code: 'invalid-response-shape', message: 'The AI response was not valid JSON.' } };
+  while (index < rawText.length) {
+    const start = rawText.indexOf('{', index);
+
+    if (start === -1) {
+      break;
+    }
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+
+    for (let cursor = start; cursor < rawText.length; cursor += 1) {
+      const char = rawText[cursor];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === '\\') {
+          escaped = true;
+        } else if (char === '"') {
+          inString = false;
+        }
+
+        continue;
+      }
+
+      if (char === '"') {
+        inString = true;
+      } else if (char === '{') {
+        depth += 1;
+      } else if (char === '}') {
+        depth -= 1;
+
+        if (depth === 0) {
+          end = cursor;
+          break;
+        }
+      }
+    }
+
+    if (end === -1) {
+      truncated = true;
+      break;
+    }
+
+    candidates.push(rawText.slice(start, end + 1));
+    index = end + 1;
   }
 
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray((parsed as any).files)) {
+  return { candidates, truncated };
+}
+
+/**
+ * Parses Claude's raw text response into validated files. Tolerates a raw
+ * JSON object, ```json/``` fences, and small explanations before/after —
+ * see `extractJsonObjectCandidates` above. When more than one balanced
+ * `{...}` candidate is found (e.g. stray braces in surrounding prose), the
+ * first one that parses as an object with a top-level `"files"` array wins;
+ * candidates that parse but aren't shaped that way, and candidates that
+ * fail to parse at all, are skipped in favor of that one. Never throws —
+ * every failure mode returns a discriminated result.
+ */
+/** Not part of this file's public orchestration API — exported only so generationRunner.spec.ts can unit-test the parser directly without building a full session/project fixture. */
+export function parseGeneratedFiles(
+  rawText: string,
+): { ok: true; files: ParsedGeneratedFile[]; warnings: string[] } | { ok: false; error: GenerationRunError } {
+  const { candidates, truncated } = extractJsonObjectCandidates(rawText);
+
+  const truncatedError: GenerationRunError = {
+    code: 'truncated-response',
+    message: 'The AI response appears to be incomplete. Please regenerate.',
+  };
+  const notJsonError: GenerationRunError = {
+    code: 'invalid-response-shape',
+    message: 'The AI response was not valid JSON.',
+  };
+
+  if (candidates.length === 0) {
+    return { ok: false, error: truncated ? truncatedError : notJsonError };
+  }
+
+  let filesPayload: { files: unknown[] } | undefined;
+  let sawAnyValidJson = false;
+
+  for (const candidate of candidates) {
+    let parsed: unknown;
+
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+
+    sawAnyValidJson = true;
+
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Array.isArray((parsed as any).files)) {
+      filesPayload = parsed as { files: unknown[] };
+      break;
+    }
+  }
+
+  if (!filesPayload) {
+    if (!sawAnyValidJson) {
+      return { ok: false, error: truncated ? truncatedError : notJsonError };
+    }
+
     return {
       ok: false,
       error: { code: 'invalid-response-shape', message: 'The AI response was not a JSON object with a "files" array.' },
     };
   }
 
-  const rawFiles = (parsed as { files: unknown[] }).files;
-  const files = rawFiles.map(toValidFile).filter((file): file is ParsedGeneratedFile => Boolean(file));
+  const warnings: string[] = [];
+  const files: ParsedGeneratedFile[] = [];
 
-  return { ok: true, files, droppedCount: rawFiles.length - files.length };
+  filesPayload.files.forEach((entry, index) => {
+    const result = toValidFile(entry, index);
+
+    if ('file' in result) {
+      files.push(result.file);
+    } else {
+      warnings.push(result.warning);
+    }
+  });
+
+  return { ok: true, files, warnings };
 }
 
 export interface RunFoundationGenerationInput {
@@ -320,7 +509,7 @@ async function runFoundationGeneration(input: RunFoundationGenerationInput): Pro
     const prompt = buildFoundationUserPrompt(module, contextText);
 
     const startedAt = Date.now();
-    const outcome = await generate(FOUNDATION_SYSTEM_PROMPT, prompt);
+    const outcome = await generate(FOUNDATION_SYSTEM_PROMPT, prompt, { maxTokens: FOUNDATION_MAX_OUTPUT_TOKENS });
     const duration = Date.now() - startedAt;
 
     if (!outcome.ok) {
@@ -374,7 +563,7 @@ async function runFoundationGeneration(input: RunFoundationGenerationInput): Pro
         modelUsed,
         tokens: 0,
         duration,
-        warnings: contextBundle.warnings,
+        warnings: [...contextBundle.warnings, ...parsedResult.warnings],
         files: [],
         errors: [{ code: 'no-valid-files', message: 'The AI response contained no valid files.' }],
         rawResponseText: outcome.text,
@@ -398,11 +587,7 @@ async function runFoundationGeneration(input: RunFoundationGenerationInput): Pro
       version,
     }));
 
-    const warnings = [...contextBundle.warnings];
-
-    if (parsedResult.droppedCount > 0) {
-      warnings.push(`${parsedResult.droppedCount} file(s) in the AI response were malformed and dropped.`);
-    }
+    const warnings = [...contextBundle.warnings, ...parsedResult.warnings];
 
     return {
       success: true,
