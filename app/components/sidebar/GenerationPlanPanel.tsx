@@ -2,6 +2,8 @@ import { classNames } from '~/utils/classNames';
 import type { Project } from '~/lib/stores/projects';
 import { generationPlannerEngine, RECOMMENDED_MODEL_LABELS } from '~/lib/projects/generationPlannerEngine';
 import { generationQueueEngine, type GenerationQueueStatus } from '~/lib/projects/generationQueueEngine';
+import { generationExecutionEngine, type ExecutionStrategy } from '~/lib/projects/generationExecutionEngine';
+import { formatEstimatedMinutes } from './ProjectTaskCard';
 
 interface GenerationPlanPanelProps {
   project: Project;
@@ -70,6 +72,40 @@ function QueueStatusBadge({ status, size = 'sm' }: QueueStatusBadgeProps) {
   );
 }
 
+/** Sprint 27 — display labels for ExecutionStrategy, presentation only. */
+const EXECUTION_STRATEGY_LABELS: Record<ExecutionStrategy, string> = {
+  'single-shot': 'Single Shot',
+  iterative: 'Iterative',
+  'review-first': 'Review First',
+  'parallel-safe': 'Parallel Safe',
+};
+
+const EXECUTION_STRATEGY_ORDER: ExecutionStrategy[] = ['review-first', 'iterative', 'parallel-safe', 'single-shot'];
+
+interface TagListProps {
+  entries: [string, number][];
+}
+
+/** A compact "label (count)" chip row — reused for the Execution Strategy / Validation / Rollback summaries below. */
+function TagList({ entries }: TagListProps) {
+  if (entries.length === 0) {
+    return <div className="text-xs text-bolt-elements-textTertiary">None</div>;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {entries.map(([label, count]) => (
+        <span
+          key={label}
+          className="px-2.5 py-1 rounded-full border border-bolt-elements-borderColor/50 text-xs text-bolt-elements-textSecondary"
+        >
+          {label} <span className="text-bolt-elements-textTertiary">({count})</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /**
  * Sprint 25 — read-only view of `generationPlannerEngine.buildGenerationPlan()`.
  * No Generate button, no AI call, no code/file/config generation — this
@@ -82,6 +118,7 @@ export function GenerationPlanPanel({ project }: GenerationPlanPanelProps) {
   const plan = generationPlannerEngine.buildGenerationPlan(project);
   const queue = generationQueueEngine.buildGenerationQueue(project);
   const nextItem = generationQueueEngine.getNextQueueItem(queue);
+  const executionPlan = generationExecutionEngine.buildGenerationExecutionPlan(project);
 
   return (
     <div className="space-y-5">
@@ -263,6 +300,98 @@ export function GenerationPlanPanel({ project }: GenerationPlanPanelProps) {
         <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
           Read-only preview of the orchestration queue — no item has run, and nothing here starts, calls a model, or
           creates a file. There is no Start button yet.
+        </div>
+      </div>
+
+      {/* Execution Plan — Sprint 27, read-only workflow preview */}
+      <div className="pt-5 border-t border-bolt-elements-borderColor/30">
+        <div className="flex items-center gap-2 mb-2">
+          <div className="text-sm font-semibold text-bolt-elements-textPrimary">Execution Plan</div>
+          <span
+            className={classNames(
+              'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border',
+              executionPlan.ready
+                ? 'text-green-600 dark:text-green-400 border-green-500/30 bg-green-500/10'
+                : 'text-red-600 dark:text-red-400 border-red-500/30 bg-red-500/10',
+            )}
+          >
+            {executionPlan.ready ? 'Ready' : 'Not Ready'}
+          </span>
+        </div>
+
+        <div className="text-xs text-bolt-elements-textSecondary mb-1">{executionPlan.reason}</div>
+        <div className="text-[11px] text-bolt-elements-textTertiary mb-4">
+          Execution ID: <span className="font-mono">{executionPlan.executionId}</span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          <Stat label="Steps" value={executionPlan.summary.totalSteps} />
+          <Stat label="Prompts" value={executionPlan.summary.totalEstimatedPrompts} />
+          <Stat label="Files" value={executionPlan.summary.totalEstimatedFiles} />
+          <div
+            className={classNames(
+              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4',
+              'bg-bolt-elements-background-depth-2/60',
+            )}
+          >
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1.5">
+              Duration
+            </div>
+            <div className="text-2xl font-semibold text-bolt-elements-textPrimary">
+              {formatEstimatedMinutes(executionPlan.summary.totalEstimatedDurationMinutes)}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+          <div className="rounded-lg border border-bolt-elements-borderColor/40 px-3.5 py-2.5">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1">
+              Recommended Default Model
+            </div>
+            <div className="text-sm text-bolt-elements-textPrimary font-medium">
+              {RECOMMENDED_MODEL_LABELS[executionPlan.recommendedDefaultModel]}
+            </div>
+          </div>
+          <div className="rounded-lg border border-bolt-elements-borderColor/40 px-3.5 py-2.5">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1">
+              Selected Model
+            </div>
+            <div className="text-sm text-bolt-elements-textPrimary font-medium">
+              {RECOMMENDED_MODEL_LABELS[executionPlan.selectedModel]}
+            </div>
+            <div className="text-[10px] text-bolt-elements-textTertiary mt-0.5">Use Recommended</div>
+          </div>
+        </div>
+
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+          Execution Strategy
+        </div>
+        <div className="mb-4">
+          <TagList
+            entries={EXECUTION_STRATEGY_ORDER.filter(
+              (strategy) => executionPlan.summary.executionStrategyCounts[strategy] > 0,
+            ).map((strategy) => [
+              EXECUTION_STRATEGY_LABELS[strategy],
+              executionPlan.summary.executionStrategyCounts[strategy],
+            ])}
+          />
+        </div>
+
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+          Validation Summary
+        </div>
+        <div className="mb-4">
+          <TagList entries={Object.entries(executionPlan.summary.validationStrategyCounts)} />
+        </div>
+
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+          Rollback Summary
+        </div>
+        <TagList entries={Object.entries(executionPlan.summary.rollbackStrategyCounts)} />
+
+        <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+          Read-only execution plan — no model has been called, no prompt has been created, and no file has been
+          generated. There is no Start button yet.
         </div>
       </div>
     </div>
