@@ -166,6 +166,19 @@ export function requestChatInputFocus() {
   focusChatInputRequestStore.set(focusChatInputRequestStore.get() + 1);
 }
 
+/**
+ * Sprint 24 — same signal pattern as focusChatInputRequestStore above. Bump
+ * it via requestNewProjectDialog() to ask the sidebar's New Project dialog
+ * (ProjectList.tsx, local state) to open itself — e.g. from the "Guided
+ * Engineering" card on the home screen — without lifting that dialog's open
+ * state out of ProjectList.tsx or prop-drilling through Menu/BaseChat.
+ */
+export const requestNewProjectDialogStore = atom(0);
+
+export function requestNewProjectDialog() {
+  requestNewProjectDialogStore.set(requestNewProjectDialogStore.get() + 1);
+}
+
 export function addProject(input: {
   name: string;
   icon: string;

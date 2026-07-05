@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '@nanostores/react';
 import { classNames } from '~/utils/classNames';
-import { projectsStore, type Project } from '~/lib/stores/projects';
+import { projectsStore, requestNewProjectDialogStore, type Project } from '~/lib/stores/projects';
 import { ProjectListItem } from './ProjectListItem';
 import { NewProjectDialog } from './NewProjectDialog';
 
@@ -13,6 +13,19 @@ export function ProjectList({ onSelectProject }: ProjectListProps) {
   const projects = useStore(projectsStore);
   const [query, setQuery] = useState('');
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
+  const newProjectDialogRequest = useStore(requestNewProjectDialogStore);
+
+  /*
+   * Sprint 24 — lets the home screen's "Guided Engineering" card open this
+   * same dialog remotely (see requestNewProjectDialog() in
+   * ~/lib/stores/projects). Skipped on the initial mount (counter starts at
+   * 0), same guard as BaseChat.tsx's focusChatInputRequest effect.
+   */
+  useEffect(() => {
+    if (newProjectDialogRequest > 0) {
+      setIsNewProjectOpen(true);
+    }
+  }, [newProjectDialogRequest]);
 
   const filteredProjects = useMemo(() => {
     if (!query.trim()) {
