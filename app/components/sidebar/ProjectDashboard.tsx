@@ -12,6 +12,8 @@ import { projectKnowledgeEngine, type ReadinessStageStatus } from '~/lib/project
 import { projectTaskEngine } from '~/lib/projects/taskEngine';
 import { executionEngine } from '~/lib/projects/executionEngine';
 import { reviewEngine } from '~/lib/projects/reviewEngine';
+import { getStorageProviderKind } from '~/lib/builders-db/repositories/projectsRepository';
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '~/components/ui/Collapsible';
 import { ProjectRequirementsDialog } from './ProjectRequirementsDialog';
 import { ProjectTaskCard, TASK_STATUS_META, formatEstimatedMinutes } from './ProjectTaskCard';
 import { TaskDetailsDialog } from './TaskDetailsDialog';
@@ -40,8 +42,8 @@ interface InfoCardProps {
 }
 
 /**
- * One "Workspace Overview" tile. Values are read straight off the Project
- * object's optional integration fields (githubRepo/supabaseProjectId/
+ * One "Workspace" tile. Values are read straight off the Project object's
+ * optional integration fields (githubRepo/supabaseProjectId/
  * deploymentTarget/etc.) — all unset for every project today, so every
  * status honestly reads "Not Connected" rather than faking a connection.
  * The moment a future sprint wires real GitHub/Supabase/Vercel data into
@@ -290,10 +292,50 @@ function ProjectProgressCard({ completed, total }: ProjectProgressCardProps) {
   );
 }
 
+interface GroupHeadingProps {
+  title: string;
+  subtitle?: string;
+  badge?: string;
+}
+
+/**
+ * Sprint 25 — Dashboard Reorganization. The six top-level groups (Project
+ * Overview, Workspace, Engineering Pipeline, Project Execution, Internal /
+ * Developer) share this heading style, one visual level above each existing
+ * panel's own sub-heading (still the original `text-[13px] uppercase` style,
+ * now on an <h3> instead of <h2> to reflect the new nesting). Presentation
+ * only — no data, no behavior.
+ */
+function GroupHeading({ title, subtitle, badge }: GroupHeadingProps) {
+  return (
+    <div className="mb-5">
+      <div className="flex items-center gap-2">
+        <h2 className="text-lg font-semibold tracking-tight text-bolt-elements-textPrimary">{title}</h2>
+        {badge && (
+          <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary">
+            {badge}
+          </span>
+        )}
+      </div>
+      {subtitle && <p className="text-xs text-bolt-elements-textTertiary mt-1">{subtitle}</p>}
+    </div>
+  );
+}
+
+/** Small ↓ connector between Engineering Pipeline stages — purely decorative, visualizes the fixed Requirements → ... → DevOps order. */
+function PipelineConnector() {
+  return (
+    <div className="flex justify-center py-1">
+      <span className="i-ph:arrow-down w-4 h-4 text-bolt-elements-textTertiary/40" />
+    </div>
+  );
+}
+
 export function ProjectDashboard({ project, open, onClose }: ProjectDashboardProps) {
   const navigate = useNavigate();
   const [isRequirementsDialogOpen, setIsRequirementsDialogOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [isInternalSectionOpen, setIsInternalSectionOpen] = useState(false);
 
   if (!project) {
     return null;
@@ -389,6 +431,17 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
    */
   const readiness = projectKnowledgeEngine.getReadiness(project);
 
+  /*
+   * Sprint 25 — Dashboard Reorganization. Which storage provider currently
+   * backs BuildersDB (Builders' own control-plane persistence for Projects/
+   * Knowledge/Artifacts/Tasks/Reviews — never the product being built's own
+   * database). Read-only: getStorageProviderKind() already existed
+   * (app/lib/builders-db/repositories/projectsRepository.ts, "exposed for a
+   * future debug/admin view"), it just wasn't surfaced in the dashboard
+   * yet. No repository code changes here.
+   */
+  const buildersDbProvider = getStorageProviderKind();
+
   return (
     <>
       <RadixDialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
@@ -413,7 +466,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                 </div>
 
                 <div className="relative z-10 flex flex-col h-full overflow-y-auto">
-                  {/* Header */}
+                  {/* 1. Project Header */}
                   <div className="flex items-start justify-between px-8 py-6 border-b border-bolt-elements-borderColor/60">
                     <div className="flex items-center gap-4">
                       <div
@@ -426,7 +479,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                         <span className="text-2xl leading-none">{project.icon}</span>
                       </div>
                       <div>
-                        <div className="flex items-center gap-2.5">
+                        <div className="flex items-center gap-2.5 flex-wrap">
                           <RadixDialog.Title className="text-xl font-semibold tracking-tight text-bolt-elements-textPrimary">
                             {project.name}
                           </RadixDialog.Title>
@@ -434,6 +487,13 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                             <span className="i-ph:circle-duotone w-2.5 h-2.5 text-green-500" />
                             <span className="text-[11px] font-medium text-green-600 dark:text-green-400">
                               Active Project
+                            </span>
+                          </span>
+                          {/* Sprint 25 — blueprint pill, reads the same `blueprint` value already computed above; no new logic. */}
+                          <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/50">
+                            <span className="text-sm leading-none">{blueprint.icon}</span>
+                            <span className="text-[11px] font-medium text-bolt-elements-textTertiary">
+                              {blueprint.name}
                             </span>
                           </span>
                         </div>
@@ -451,49 +511,103 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                     </button>
                   </div>
 
-                  <div className="flex-1 px-8 py-6 space-y-8">
-                    {/* Recommended Next Action — Sprint 11, review-aware since Sprint 12 */}
-                    {recommendedAction && (
-                      <div
-                        className={classNames(
-                          'rounded-xl border border-purple-500/30 p-5',
-                          'bg-purple-50/70 dark:bg-purple-500/[0.08] backdrop-blur-md',
-                        )}
-                      >
-                        <div className="text-[11px] font-semibold uppercase tracking-wide text-purple-600 dark:text-purple-300 mb-2">
-                          Recommended Next Action
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2.5">
-                          <span className="text-sm text-bolt-elements-textTertiary">
-                            {recommendedAction.kind === 'review' ? 'Review' : 'Continue'}
-                          </span>
-                          <span className="text-base font-semibold text-bolt-elements-textPrimary">
-                            {recommendedAction.task.title}
-                          </span>
-                          <span
+                  <div className="flex-1 px-8 py-6 space-y-10">
+                    {/* 2. Project Overview — executive summary */}
+                    <section>
+                      <GroupHeading
+                        title="Project Overview"
+                        subtitle="What this project needs next, and how ready it is for code generation."
+                      />
+                      <div className="space-y-6">
+                        {/* Recommended Next Action — Sprint 11, review-aware since Sprint 12 */}
+                        {recommendedAction && (
+                          <div
                             className={classNames(
-                              'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0',
-                              TASK_STATUS_META[recommendedAction.task.status].badgeClass,
+                              'rounded-xl border border-purple-500/30 p-5',
+                              'bg-purple-50/70 dark:bg-purple-500/[0.08] backdrop-blur-md',
                             )}
                           >
-                            {TASK_STATUS_META[recommendedAction.task.status].label}
-                          </span>
-                          <span className="text-xs text-bolt-elements-textTertiary">
-                            {formatEstimatedMinutes(recommendedAction.task.estimatedMinutes)}
-                          </span>
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-purple-600 dark:text-purple-300 mb-2">
+                              Recommended Next Action
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2.5">
+                              <span className="text-sm text-bolt-elements-textTertiary">
+                                {recommendedAction.kind === 'review' ? 'Review' : 'Continue'}
+                              </span>
+                              <span className="text-base font-semibold text-bolt-elements-textPrimary">
+                                {recommendedAction.task.title}
+                              </span>
+                              <span
+                                className={classNames(
+                                  'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0',
+                                  TASK_STATUS_META[recommendedAction.task.status].badgeClass,
+                                )}
+                              >
+                                {TASK_STATUS_META[recommendedAction.task.status].label}
+                              </span>
+                              <span className="text-xs text-bolt-elements-textTertiary">
+                                {formatEstimatedMinutes(recommendedAction.task.estimatedMinutes)}
+                              </span>
+                            </div>
+                            <div className="mt-2.5 text-xs text-bolt-elements-textTertiary">
+                              <span className="font-medium text-bolt-elements-textSecondary">Because </span>
+                              {recommendedAction.reasons.join(' · ')}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Project Readiness — Sprint 10 */}
+                        <div>
+                          <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                            Project Readiness
+                          </h3>
+                          <div
+                            className={classNames(
+                              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                              'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                              'grid grid-cols-1 sm:grid-cols-2 gap-x-8 divide-y divide-bolt-elements-borderColor/20 sm:divide-y-0',
+                            )}
+                          >
+                            {readiness.map((stage) => (
+                              <ReadinessRow
+                                key={stage.id}
+                                label={stage.label}
+                                status={stage.status}
+                                percent={stage.percent}
+                              />
+                            ))}
+                          </div>
+                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                            Readiness is computed locally from Requirements and Roadmap progress — Design, Database,
+                            Frontend, Backend, and Deployment become available in future sprints.
+                          </div>
                         </div>
-                        <div className="mt-2.5 text-xs text-bolt-elements-textTertiary">
-                          <span className="font-medium text-bolt-elements-textSecondary">Because </span>
-                          {recommendedAction.reasons.join(' · ')}
+
+                        {/* Project Manager — Sprint 23 */}
+                        <div>
+                          <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                            Project Manager
+                          </h3>
+                          <div
+                            className={classNames(
+                              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                              'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                            )}
+                          >
+                            <ProjectManagerPanel project={project} />
+                          </div>
+                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                            Computed locally from every artifact, task, review, and roadmap status below — no AI call,
+                            no code generation. This is orchestration only: it decides whether the project is ready,
+                            never what to build.
+                          </div>
                         </div>
                       </div>
-                    )}
+                    </section>
 
-                    {/* Workspace Overview */}
-                    <div>
-                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                        Workspace Overview
-                      </h2>
+                    {/* 3. Workspace — connections + project configuration */}
+                    <section className="pt-10 border-t border-bolt-elements-borderColor/40">
+                      <GroupHeading title="Workspace" subtitle="Connections and configuration for this project." />
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                         <InfoCard
                           icon="i-ph:github-logo-duotone"
@@ -504,8 +618,22 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                           ]}
                         />
                         <InfoCard
+                          icon="i-ph:cloud-duotone"
+                          label="BuildersDB"
+                          rows={[
+                            {
+                              label: 'Status',
+                              value: buildersDbProvider === 'supabase' ? 'Connected' : 'Local Only',
+                            },
+                            {
+                              label: 'Provider',
+                              value: buildersDbProvider === 'supabase' ? 'Supabase' : 'Browser Storage',
+                            },
+                          ]}
+                        />
+                        <InfoCard
                           icon="i-ph:database-duotone"
-                          label="Supabase"
+                          label="Customer Supabase"
                           rows={[
                             { label: 'Status', value: project.supabaseProjectId ? 'Connected' : 'Not Connected' },
                             { label: 'Project', value: project.supabaseProjectId || 'Not linked yet' },
@@ -526,7 +654,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                         />
                         <InfoCard
                           icon="i-ph:users-duotone"
-                          label="Members"
+                          label="Team Members"
                           rows={[
                             {
                               label: 'Total',
@@ -540,523 +668,535 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                           rows={[{ label: 'Active', value: blueprint?.name || 'Blank Project' }]}
                         />
                       </div>
-                    </div>
 
-                    {/* Project Readiness — Sprint 10 */}
-                    <div>
-                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                        Project Readiness
-                      </h2>
-                      <div
-                        className={classNames(
-                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                          'grid grid-cols-1 sm:grid-cols-2 gap-x-8 divide-y divide-bolt-elements-borderColor/20 sm:divide-y-0',
-                        )}
-                      >
-                        {readiness.map((stage) => (
-                          <ReadinessRow
-                            key={stage.id}
-                            label={stage.label}
-                            status={stage.status}
-                            percent={stage.percent}
-                          />
-                        ))}
-                      </div>
-                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                        Readiness is computed locally from Requirements and Roadmap progress — Design, Database,
-                        Frontend, Backend, and Deployment become available in future sprints.
-                      </div>
-                    </div>
-
-                    {/* Blueprint Overview */}
-                    {blueprint && (
-                      <div>
-                        <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                          Blueprint Overview
-                        </h2>
-                        <div
-                          className={classNames(
-                            'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                            'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                          )}
-                        >
-                          <div className="flex items-start gap-3 mb-4">
-                            <span className="text-2xl leading-none shrink-0">{blueprint.icon}</span>
-                            <div className="min-w-0">
-                              <div className="text-sm font-semibold text-bolt-elements-textPrimary">
-                                {blueprint.name}
-                              </div>
-                              <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                                <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-300 font-medium">
-                                  {blueprintEngine.getBlueprintCategory(blueprint.id)}
-                                </span>
-                                {blueprintEngine.getBlueprintProductType(blueprint.id) && (
-                                  <span className="text-xs text-bolt-elements-textTertiary">
-                                    {blueprintEngine.getBlueprintProductType(blueprint.id)}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                            <div>
-                              <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
-                                Recommended Stack
-                              </div>
-                              {blueprintEngine.getRecommendedStack(blueprint.id).length > 0 ? (
-                                <div className="flex flex-wrap gap-1.5">
-                                  {blueprintEngine.getRecommendedStack(blueprint.id).map((item) => (
-                                    <span
-                                      key={item}
-                                      className="text-xs px-2 py-1 rounded-md bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/40 text-bolt-elements-textSecondary"
-                                    >
-                                      {item}
-                                    </span>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div className="text-xs text-bolt-elements-textTertiary">No suggestions yet</div>
-                              )}
-                            </div>
-
-                            <div>
-                              <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
-                                Recommended Integrations
-                              </div>
-                              {blueprintEngine.getRecommendedIntegrations(blueprint.id).length > 0 ? (
-                                <div className="flex flex-wrap gap-1.5">
-                                  {blueprintEngine.getRecommendedIntegrations(blueprint.id).map((item) => (
-                                    <span
-                                      key={item}
-                                      className="text-xs px-2 py-1 rounded-md bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/40 text-bolt-elements-textSecondary"
-                                    >
-                                      {item}
-                                    </span>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div className="text-xs text-bolt-elements-textTertiary">No suggestions yet</div>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="mt-4 pt-3 border-t border-bolt-elements-borderColor/30 text-[11px] text-bolt-elements-textTertiary">
-                            These are recommendations only — nothing here is applied, generated, or connected
-                            automatically.
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Requirements & Knowledge — Phase 2 Sprint 9 */}
-                    <div>
-                      <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">
-                          Requirements & Knowledge
-                        </h2>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[11px] font-medium text-bolt-elements-textTertiary">
-                            {projectKnowledgeEngine.getCompletion(knowledge).overall}% complete
-                          </span>
-                          <span
-                            className={classNames(
-                              'text-[11px] font-medium px-2 py-0.5 rounded-full border',
-                              requirementsCaptured
-                                ? 'text-green-600 dark:text-green-400 border-green-500/30 bg-green-500/10'
-                                : 'text-bolt-elements-textTertiary border-bolt-elements-borderColor/50',
-                            )}
-                          >
-                            {requirementsCaptured ? 'Requirements captured' : 'Requirements missing'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {!requirementsCaptured ? (
-                        <div className="flex flex-col items-center justify-center text-center py-12 px-4 rounded-xl border border-dashed border-bolt-elements-borderColor/60">
-                          <span className="i-ph:clipboard-text-duotone h-9 w-9 text-bolt-elements-textTertiary mb-3" />
-                          <div className="text-sm font-medium text-bolt-elements-textSecondary">
-                            No requirements captured yet.
-                          </div>
-                          <div className="text-xs text-bolt-elements-textTertiary mt-1 max-w-[360px]">
-                            Start by defining what this product should do.
-                          </div>
-                          <div className="flex flex-wrap justify-center gap-3 mt-4">
-                            <button
-                              type="button"
-                              onClick={() => setIsRequirementsDialogOpen(true)}
-                              className="flex gap-2 items-center bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-500/20 rounded-lg px-4 py-2 transition-colors"
-                            >
-                              <span className="inline-block i-ph:plus-circle h-4 w-4" />
-                              <span className="text-sm font-medium">Add Requirements</span>
-                            </button>
-                          </div>
-                          <div className="mt-4 w-full max-w-2xl mx-auto text-left">
-                            <RequirementsDraftPanel project={project} />
-                          </div>
-                        </div>
-                      ) : (
-                        <div
-                          className={classNames(
-                            'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                            'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                          )}
-                        >
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                            <RequirementsRow label="Project Vision" value={knowledge?.projectVision} />
-                            <RequirementsRow label="Target Users" value={knowledge?.targetUsers} />
-                            <RequirementsRow label="Core Features" value={knowledge?.coreFeatures} />
-                            <RequirementsRow label="Pages / Screens" value={knowledge?.pagesOrScreens} />
-                            <RequirementsRow label="Integrations" value={knowledge?.integrations} />
-                            <RequirementsRow
-                              label="Payments / Compliance"
-                              value={[...(knowledge?.paymentNeeds ?? []), ...(knowledge?.complianceNeeds ?? [])]}
-                            />
-                            <RequirementsRow
-                              label="Languages / Region"
-                              value={[
-                                ...(knowledge?.languages ?? []),
-                                ...(knowledge?.location ? [knowledge.location] : []),
-                              ]}
-                            />
-                          </div>
-
-                          <div className="mt-5 pt-4 border-t border-bolt-elements-borderColor/30 flex flex-wrap gap-3">
-                            <button
-                              type="button"
-                              onClick={() => setIsRequirementsDialogOpen(true)}
-                              className="flex gap-2 items-center bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-500/20 rounded-lg px-4 py-2 transition-colors"
-                            >
-                              <span className="inline-block i-ph:pencil-simple h-4 w-4" />
-                              <span className="text-sm font-medium">Edit Requirements</span>
-                            </button>
-                          </div>
-                          <div className="mt-4 pt-4 border-t border-bolt-elements-borderColor/30">
-                            <RequirementsDraftPanel project={project} />
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                        Requirements are stored locally for this project only — nothing here is sent to AI or generated
-                        automatically yet.
-                      </div>
-                    </div>
-
-                    {/* Architecture — Sprint 14 */}
-                    <div>
-                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                        Architecture
-                      </h2>
-                      <div
-                        className={classNames(
-                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                        )}
-                      >
-                        <ArchitectureDraftPanel project={project} />
-                      </div>
-                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                        The Architecture Draft is stored locally for this project only — approving it never updates
-                        Project Knowledge or generates a database, frontend, or backend.
-                      </div>
-                    </div>
-
-                    {/* Database Design — Sprint 15 */}
-                    <div>
-                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                        Database Design
-                      </h2>
-                      <div
-                        className={classNames(
-                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                        )}
-                      >
-                        <DatabaseDraftPanel project={project} />
-                      </div>
-                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                        The Database Design Draft is stored locally for this project only — approving it never generates
-                        SQL, connects to Supabase, or creates a database.
-                      </div>
-                    </div>
-
-                    {/* UI/UX Design — Sprint 16 */}
-                    <div>
-                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                        UI / UX Design
-                      </h2>
-                      <div
-                        className={classNames(
-                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                        )}
-                      >
-                        <UiUxDraftPanel project={project} />
-                      </div>
-                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                        The UI/UX Draft is stored locally for this project only — approving it never generates HTML,
-                        CSS, Tailwind, React, Figma files, or images.
-                      </div>
-                    </div>
-
-                    {/* Backend Design — Sprint 19 */}
-                    <div>
-                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                        Backend Design
-                      </h2>
-                      <div
-                        className={classNames(
-                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                        )}
-                      >
-                        <BackendDraftPanel project={project} />
-                      </div>
-                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                        The Backend Draft is stored locally for this project only — approving it never generates backend
-                        code, SQL, Prisma/Drizzle/Supabase schemas, connects to GitHub, or deploys anything.
-                      </div>
-                    </div>
-
-                    {/* Frontend Design — Sprint 20 */}
-                    <div>
-                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                        Frontend Design
-                      </h2>
-                      <div
-                        className={classNames(
-                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                        )}
-                      >
-                        <FrontendDraftPanel project={project} />
-                      </div>
-                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                        The Frontend Draft is stored locally for this project only — approving it never generates React,
-                        Next.js, Remix, Vue, Angular, Flutter, HTML, CSS, or Tailwind code.
-                      </div>
-                    </div>
-
-                    {/* QA Strategy — Sprint 21 */}
-                    <div>
-                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                        QA Strategy
-                      </h2>
-                      <div
-                        className={classNames(
-                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                        )}
-                      >
-                        <QaDraftPanel project={project} />
-                      </div>
-                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                        The QA Draft is stored locally for this project only — approving it never generates test code,
-                        connects to GitHub, or deploys anything.
-                      </div>
-                    </div>
-
-                    {/* DevOps Strategy — Sprint 22 */}
-                    <div>
-                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                        DevOps Strategy
-                      </h2>
-                      <div
-                        className={classNames(
-                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                        )}
-                      >
-                        <DevOpsDraftPanel project={project} />
-                      </div>
-                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                        The DevOps Draft is stored locally for this project only — approving it never generates a
-                        Dockerfile, GitHub Actions workflow, Kubernetes manifest, Terraform configuration, or shell
-                        script, and never deploys or provisions anything.
-                      </div>
-                    </div>
-
-                    {/* Project Manager — Sprint 23 */}
-                    <div>
-                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                        Project Manager
-                      </h2>
-                      <div
-                        className={classNames(
-                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                        )}
-                      >
-                        <ProjectManagerPanel project={project} />
-                      </div>
-                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                        Computed locally from every artifact, task, review, and roadmap status above — no AI call, no
-                        code generation. This is orchestration only: it decides whether the project is ready, never what
-                        to build.
-                      </div>
-                    </div>
-
-                    {/* Context Preview — Sprint 17, internal/team tool only */}
-                    <div>
-                      <div className="flex items-center gap-2 mb-4">
-                        <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">
-                          Context Preview
-                        </h2>
-                        <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary">
-                          Internal
-                        </span>
-                      </div>
-                      <div
-                        className={classNames(
-                          'rounded-xl border border-dashed border-bolt-elements-borderColor/50 p-5',
-                          'bg-[#F7F7F8]/60 dark:bg-[#161616]/60 backdrop-blur-md',
-                        )}
-                      >
-                        <ContextPreviewPanel project={project} />
-                      </div>
-                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                        Preview of what the Context Engine would send a given AI role — computed locally, no AI call.
-                        For the Builders team only; not part of the project workflow.
-                      </div>
-                    </div>
-
-                    {/* Project Roadmap — Sprint 8 */}
-                    <div>
-                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                        Project Roadmap
-                      </h2>
-                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                        <div className="lg:col-span-2 space-y-3">
-                          {roadmapWithStatus.length > 0 ? (
-                            roadmapWithStatus.map((item) => (
-                              <RoadmapItemCard
-                                key={item.key}
-                                title={item.title}
-                                description={item.description}
-                                status={item.status}
-                              />
-                            ))
-                          ) : (
-                            <div className="text-xs text-bolt-elements-textTertiary">
-                              No roadmap for this blueprint yet
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="space-y-4">
-                          <ProjectProgressCard completed={completedRoadmapCount} total={roadmapWithStatus.length} />
-
+                      {/* Blueprint Overview */}
+                      {blueprint && (
+                        <div className="mt-6">
+                          <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                            Blueprint Overview
+                          </h3>
                           <div
                             className={classNames(
-                              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4',
+                              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
                               'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
                             )}
                           >
-                            <div className="text-[13px] font-semibold text-bolt-elements-textPrimary mb-3">
-                              Quick Actions
+                            <div className="flex items-start gap-3 mb-4">
+                              <span className="text-2xl leading-none shrink-0">{blueprint.icon}</span>
+                              <div className="min-w-0">
+                                <div className="text-sm font-semibold text-bolt-elements-textPrimary">
+                                  {blueprint.name}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-300 font-medium">
+                                    {blueprintEngine.getBlueprintCategory(blueprint.id)}
+                                  </span>
+                                  {blueprintEngine.getBlueprintProductType(blueprint.id) && (
+                                    <span className="text-xs text-bolt-elements-textTertiary">
+                                      {blueprintEngine.getBlueprintProductType(blueprint.id)}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
                             </div>
-                            <div className="flex flex-col gap-2">
-                              <ActionButton icon="i-ph:play-circle" label="Continue Building" fullWidth />
-                              <ActionButton icon="i-ph:clipboard-text" label="Generate Requirements" fullWidth />
-                              <ActionButton icon="i-ph:layout" label="Generate UI" fullWidth />
-                              <ActionButton icon="i-ph:database" label="Generate Database" fullWidth />
-                              <ActionButton icon="i-ph:github-logo" label="Connect GitHub" fullWidth />
-                              <ActionButton icon="i-ph:database-duotone" label="Connect Supabase" fullWidth />
-                              <ActionButton icon="i-ph:rocket-launch" label="Deploy" fullWidth />
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                              <div>
+                                <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+                                  Recommended Stack
+                                </div>
+                                {blueprintEngine.getRecommendedStack(blueprint.id).length > 0 ? (
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {blueprintEngine.getRecommendedStack(blueprint.id).map((item) => (
+                                      <span
+                                        key={item}
+                                        className="text-xs px-2 py-1 rounded-md bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/40 text-bolt-elements-textSecondary"
+                                      >
+                                        {item}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="text-xs text-bolt-elements-textTertiary">No suggestions yet</div>
+                                )}
+                              </div>
+
+                              <div>
+                                <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+                                  Recommended Integrations
+                                </div>
+                                {blueprintEngine.getRecommendedIntegrations(blueprint.id).length > 0 ? (
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {blueprintEngine.getRecommendedIntegrations(blueprint.id).map((item) => (
+                                      <span
+                                        key={item}
+                                        className="text-xs px-2 py-1 rounded-md bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/40 text-bolt-elements-textSecondary"
+                                      >
+                                        {item}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="text-xs text-bolt-elements-textTertiary">No suggestions yet</div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="mt-4 pt-3 border-t border-bolt-elements-borderColor/30 text-[11px] text-bolt-elements-textTertiary">
+                              These are recommendations only — nothing here is applied, generated, or connected
+                              automatically.
                             </div>
                           </div>
                         </div>
-                      </div>
-
-                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                        Roadmap status is stored locally for this project only — nothing here is generated, connected,
-                        or deployed automatically.
-                      </div>
-                    </div>
-
-                    {/* Task Execution Plan — Sprint 11 */}
-                    <div>
-                      <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">
-                          Task Execution Plan
-                        </h2>
-                        <span className="text-[11px] font-medium text-bolt-elements-textTertiary">
-                          {executionProgress.percentComplete}% complete
-                        </span>
-                      </div>
-
-                      {/* Review Queue — Sprint 12 */}
-                      <ReviewQueueCard summary={reviewSummary} />
-
-                      {/* Execution Progress */}
-                      <div
-                        className={classNames(
-                          'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4 mb-4',
-                          'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                          'grid grid-cols-3 sm:grid-cols-6 gap-4',
-                        )}
-                      >
-                        <ExecutionStat label="Tasks" value={executionProgress.total} />
-                        <ExecutionStat
-                          label="Completed"
-                          value={executionProgress.completed}
-                          valueClassName="text-green-600 dark:text-green-400"
-                        />
-                        <ExecutionStat
-                          label="In Review"
-                          value={executionProgress.needsReview}
-                          valueClassName="text-purple-600 dark:text-purple-400"
-                        />
-                        <ExecutionStat
-                          label="In Progress"
-                          value={executionProgress.inProgress}
-                          valueClassName="text-amber-600 dark:text-amber-400"
-                        />
-                        <ExecutionStat
-                          label="Ready"
-                          value={executionProgress.ready}
-                          valueClassName="text-blue-600 dark:text-blue-400"
-                        />
-                        <ExecutionStat
-                          label="Blocked"
-                          value={executionProgress.blocked}
-                          valueClassName="text-red-600 dark:text-red-400"
-                        />
-                      </div>
-
-                      {executionTasks.length > 0 ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {executionTasks.map((task) => (
-                            <ProjectTaskCard
-                              key={task.id}
-                              projectId={project.id}
-                              task={task}
-                              dependencyTitles={projectTaskEngine
-                                .getDependencies(project.blueprintId, task.id)
-                                .map((dependency) => dependency.title)}
-                              blockedBy={executionEngine.getBlockedReason(project, task.id)}
-                              latestReview={getTaskReview(project, task.id)}
-                              onOpenDetails={() => setSelectedTaskId(task.id)}
-                            />
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-xs text-bolt-elements-textTertiary">
-                          No tasks defined for this blueprint yet
-                        </div>
                       )}
+                    </section>
 
-                      <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                        Task status is stored locally for this project only — nothing here is generated by AI yet. This
-                        is the execution model future AI generation will use. Completed tasks reflect an approved review
-                        — see Review Queue above.
+                    {/* 4. Engineering Pipeline — Requirements -> Architecture -> Database -> UI/UX -> Backend -> Frontend -> QA -> DevOps */}
+                    <section className="pt-10 border-t border-bolt-elements-borderColor/40">
+                      <GroupHeading
+                        title="Engineering Pipeline"
+                        subtitle="Requirements → Architecture → Database → UI/UX → Backend → Frontend → QA → DevOps"
+                      />
+                      <div className="space-y-6">
+                        {/* Requirements & Knowledge — Phase 2 Sprint 9 */}
+                        <div>
+                          <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">
+                              Requirements & Knowledge
+                            </h3>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] font-medium text-bolt-elements-textTertiary">
+                                {projectKnowledgeEngine.getCompletion(knowledge).overall}% complete
+                              </span>
+                              <span
+                                className={classNames(
+                                  'text-[11px] font-medium px-2 py-0.5 rounded-full border',
+                                  requirementsCaptured
+                                    ? 'text-green-600 dark:text-green-400 border-green-500/30 bg-green-500/10'
+                                    : 'text-bolt-elements-textTertiary border-bolt-elements-borderColor/50',
+                                )}
+                              >
+                                {requirementsCaptured ? 'Requirements captured' : 'Requirements missing'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {!requirementsCaptured ? (
+                            <div className="flex flex-col items-center justify-center text-center py-12 px-4 rounded-xl border border-dashed border-bolt-elements-borderColor/60">
+                              <span className="i-ph:clipboard-text-duotone h-9 w-9 text-bolt-elements-textTertiary mb-3" />
+                              <div className="text-sm font-medium text-bolt-elements-textSecondary">
+                                No requirements captured yet.
+                              </div>
+                              <div className="text-xs text-bolt-elements-textTertiary mt-1 max-w-[360px]">
+                                Start by defining what this product should do.
+                              </div>
+                              <div className="flex flex-wrap justify-center gap-3 mt-4">
+                                <button
+                                  type="button"
+                                  onClick={() => setIsRequirementsDialogOpen(true)}
+                                  className="flex gap-2 items-center bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-500/20 rounded-lg px-4 py-2 transition-colors"
+                                >
+                                  <span className="inline-block i-ph:plus-circle h-4 w-4" />
+                                  <span className="text-sm font-medium">Add Requirements</span>
+                                </button>
+                              </div>
+                              <div className="mt-4 w-full max-w-2xl mx-auto text-left">
+                                <RequirementsDraftPanel project={project} />
+                              </div>
+                            </div>
+                          ) : (
+                            <div
+                              className={classNames(
+                                'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                                'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                              )}
+                            >
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                <RequirementsRow label="Project Vision" value={knowledge?.projectVision} />
+                                <RequirementsRow label="Target Users" value={knowledge?.targetUsers} />
+                                <RequirementsRow label="Core Features" value={knowledge?.coreFeatures} />
+                                <RequirementsRow label="Pages / Screens" value={knowledge?.pagesOrScreens} />
+                                <RequirementsRow label="Integrations" value={knowledge?.integrations} />
+                                <RequirementsRow
+                                  label="Payments / Compliance"
+                                  value={[...(knowledge?.paymentNeeds ?? []), ...(knowledge?.complianceNeeds ?? [])]}
+                                />
+                                <RequirementsRow
+                                  label="Languages / Region"
+                                  value={[
+                                    ...(knowledge?.languages ?? []),
+                                    ...(knowledge?.location ? [knowledge.location] : []),
+                                  ]}
+                                />
+                              </div>
+
+                              <div className="mt-5 pt-4 border-t border-bolt-elements-borderColor/30 flex flex-wrap gap-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setIsRequirementsDialogOpen(true)}
+                                  className="flex gap-2 items-center bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-500/20 rounded-lg px-4 py-2 transition-colors"
+                                >
+                                  <span className="inline-block i-ph:pencil-simple h-4 w-4" />
+                                  <span className="text-sm font-medium">Edit Requirements</span>
+                                </button>
+                              </div>
+                              <div className="mt-4 pt-4 border-t border-bolt-elements-borderColor/30">
+                                <RequirementsDraftPanel project={project} />
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                            Requirements are stored locally for this project only — nothing here is sent to AI or
+                            generated automatically yet.
+                          </div>
+                        </div>
+
+                        <PipelineConnector />
+
+                        {/* Architecture — Sprint 14 */}
+                        <div>
+                          <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                            Architecture
+                          </h3>
+                          <div
+                            className={classNames(
+                              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                              'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                            )}
+                          >
+                            <ArchitectureDraftPanel project={project} />
+                          </div>
+                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                            The Architecture Draft is stored locally for this project only — approving it never updates
+                            Project Knowledge or generates a database, frontend, or backend.
+                          </div>
+                        </div>
+
+                        <PipelineConnector />
+
+                        {/* Database Design — Sprint 15 */}
+                        <div>
+                          <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                            Database Design
+                          </h3>
+                          <div
+                            className={classNames(
+                              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                              'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                            )}
+                          >
+                            <DatabaseDraftPanel project={project} />
+                          </div>
+                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                            The Database Design Draft is stored locally for this project only — approving it never
+                            generates SQL, connects to Supabase, or creates a database.
+                          </div>
+                        </div>
+
+                        <PipelineConnector />
+
+                        {/* UI/UX Design — Sprint 16 */}
+                        <div>
+                          <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                            UI / UX Design
+                          </h3>
+                          <div
+                            className={classNames(
+                              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                              'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                            )}
+                          >
+                            <UiUxDraftPanel project={project} />
+                          </div>
+                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                            The UI/UX Draft is stored locally for this project only — approving it never generates HTML,
+                            CSS, Tailwind, React, Figma files, or images.
+                          </div>
+                        </div>
+
+                        <PipelineConnector />
+
+                        {/* Backend Design — Sprint 19 */}
+                        <div>
+                          <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                            Backend Design
+                          </h3>
+                          <div
+                            className={classNames(
+                              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                              'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                            )}
+                          >
+                            <BackendDraftPanel project={project} />
+                          </div>
+                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                            The Backend Draft is stored locally for this project only — approving it never generates
+                            backend code, SQL, Prisma/Drizzle/Supabase schemas, connects to GitHub, or deploys anything.
+                          </div>
+                        </div>
+
+                        <PipelineConnector />
+
+                        {/* Frontend Design — Sprint 20 */}
+                        <div>
+                          <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                            Frontend Design
+                          </h3>
+                          <div
+                            className={classNames(
+                              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                              'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                            )}
+                          >
+                            <FrontendDraftPanel project={project} />
+                          </div>
+                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                            The Frontend Draft is stored locally for this project only — approving it never generates
+                            React, Next.js, Remix, Vue, Angular, Flutter, HTML, CSS, or Tailwind code.
+                          </div>
+                        </div>
+
+                        <PipelineConnector />
+
+                        {/* QA Strategy — Sprint 21 */}
+                        <div>
+                          <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                            QA Strategy
+                          </h3>
+                          <div
+                            className={classNames(
+                              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                              'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                            )}
+                          >
+                            <QaDraftPanel project={project} />
+                          </div>
+                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                            The QA Draft is stored locally for this project only — approving it never generates test
+                            code, connects to GitHub, or deploys anything.
+                          </div>
+                        </div>
+
+                        <PipelineConnector />
+
+                        {/* DevOps Strategy — Sprint 22 */}
+                        <div>
+                          <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                            DevOps Strategy
+                          </h3>
+                          <div
+                            className={classNames(
+                              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                              'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                            )}
+                          >
+                            <DevOpsDraftPanel project={project} />
+                          </div>
+                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                            The DevOps Draft is stored locally for this project only — approving it never generates a
+                            Dockerfile, GitHub Actions workflow, Kubernetes manifest, Terraform configuration, or shell
+                            script, and never deploys or provisions anything.
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    </section>
 
-                    {/* Recent Chats */}
-                    <div>
+                    {/* 5. Project Execution — Roadmap, Task Execution Plan (Review Queue nested inside, as before) */}
+                    <section className="pt-10 border-t border-bolt-elements-borderColor/40">
+                      <GroupHeading
+                        title="Project Execution"
+                        subtitle="Roadmap, task breakdown, and the review queue."
+                      />
+                      <div className="space-y-8">
+                        {/* Project Roadmap — Sprint 8 */}
+                        <div>
+                          <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                            Project Roadmap
+                          </h3>
+                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                            <div className="lg:col-span-2 space-y-3">
+                              {roadmapWithStatus.length > 0 ? (
+                                roadmapWithStatus.map((item) => (
+                                  <RoadmapItemCard
+                                    key={item.key}
+                                    title={item.title}
+                                    description={item.description}
+                                    status={item.status}
+                                  />
+                                ))
+                              ) : (
+                                <div className="text-xs text-bolt-elements-textTertiary">
+                                  No roadmap for this blueprint yet
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="space-y-4">
+                              <ProjectProgressCard completed={completedRoadmapCount} total={roadmapWithStatus.length} />
+
+                              <div
+                                className={classNames(
+                                  'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4',
+                                  'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                                )}
+                              >
+                                <div className="text-[13px] font-semibold text-bolt-elements-textPrimary mb-3">
+                                  Quick Actions
+                                </div>
+                                <div className="flex flex-col gap-2">
+                                  <ActionButton icon="i-ph:play-circle" label="Continue Building" fullWidth />
+                                  <ActionButton icon="i-ph:clipboard-text" label="Generate Requirements" fullWidth />
+                                  <ActionButton icon="i-ph:layout" label="Generate UI" fullWidth />
+                                  <ActionButton icon="i-ph:database" label="Generate Database" fullWidth />
+                                  <ActionButton icon="i-ph:github-logo" label="Connect GitHub" fullWidth />
+                                  <ActionButton icon="i-ph:database-duotone" label="Connect Supabase" fullWidth />
+                                  <ActionButton icon="i-ph:rocket-launch" label="Deploy" fullWidth />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                            Roadmap status is stored locally for this project only — nothing here is generated,
+                            connected, or deployed automatically.
+                          </div>
+                        </div>
+
+                        {/* Task Execution Plan — Sprint 11 (Review Queue — Sprint 12 — stays nested at the top, as before) */}
+                        <div>
+                          <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">
+                              Task Execution Plan
+                            </h3>
+                            <span className="text-[11px] font-medium text-bolt-elements-textTertiary">
+                              {executionProgress.percentComplete}% complete
+                            </span>
+                          </div>
+
+                          <ReviewQueueCard summary={reviewSummary} />
+
+                          <div
+                            className={classNames(
+                              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4 mb-4',
+                              'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                              'grid grid-cols-3 sm:grid-cols-6 gap-4',
+                            )}
+                          >
+                            <ExecutionStat label="Tasks" value={executionProgress.total} />
+                            <ExecutionStat
+                              label="Completed"
+                              value={executionProgress.completed}
+                              valueClassName="text-green-600 dark:text-green-400"
+                            />
+                            <ExecutionStat
+                              label="In Review"
+                              value={executionProgress.needsReview}
+                              valueClassName="text-purple-600 dark:text-purple-400"
+                            />
+                            <ExecutionStat
+                              label="In Progress"
+                              value={executionProgress.inProgress}
+                              valueClassName="text-amber-600 dark:text-amber-400"
+                            />
+                            <ExecutionStat
+                              label="Ready"
+                              value={executionProgress.ready}
+                              valueClassName="text-blue-600 dark:text-blue-400"
+                            />
+                            <ExecutionStat
+                              label="Blocked"
+                              value={executionProgress.blocked}
+                              valueClassName="text-red-600 dark:text-red-400"
+                            />
+                          </div>
+
+                          {executionTasks.length > 0 ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              {executionTasks.map((task) => (
+                                <ProjectTaskCard
+                                  key={task.id}
+                                  projectId={project.id}
+                                  task={task}
+                                  dependencyTitles={projectTaskEngine
+                                    .getDependencies(project.blueprintId, task.id)
+                                    .map((dependency) => dependency.title)}
+                                  blockedBy={executionEngine.getBlockedReason(project, task.id)}
+                                  latestReview={getTaskReview(project, task.id)}
+                                  onOpenDetails={() => setSelectedTaskId(task.id)}
+                                />
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-bolt-elements-textTertiary">
+                              No tasks defined for this blueprint yet
+                            </div>
+                          )}
+
+                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                            Task status is stored locally for this project only — nothing here is generated by AI yet.
+                            This is the execution model future AI generation will use. Completed tasks reflect an
+                            approved review — see Review Queue above.
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    {/* 6. Internal / Developer — collapsed by default */}
+                    <section className="pt-10 border-t border-bolt-elements-borderColor/40">
+                      <Collapsible open={isInternalSectionOpen} onOpenChange={setIsInternalSectionOpen}>
+                        <div
+                          className={classNames(
+                            'rounded-xl border border-dashed border-bolt-elements-borderColor/50 p-5',
+                            'bg-[#F7F7F8]/60 dark:bg-[#161616]/60 backdrop-blur-md',
+                          )}
+                        >
+                          <CollapsibleTrigger asChild>
+                            <button
+                              type="button"
+                              className="w-full flex items-center justify-between gap-3 bg-transparent text-left appearance-none focus:outline-none"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={classNames(
+                                    'i-ph:caret-right w-3.5 h-3.5 text-bolt-elements-textTertiary transition-transform duration-150',
+                                    isInternalSectionOpen && 'rotate-90',
+                                  )}
+                                />
+                                <span className="text-lg font-semibold tracking-tight text-bolt-elements-textPrimary">
+                                  Internal / Developer
+                                </span>
+                                <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary">
+                                  Internal
+                                </span>
+                              </div>
+                              <span className="text-xs text-bolt-elements-textTertiary">
+                                {isInternalSectionOpen ? 'Hide' : 'Show'}
+                              </span>
+                            </button>
+                          </CollapsibleTrigger>
+
+                          <CollapsibleContent>
+                            <div className="mt-5 pt-5 border-t border-bolt-elements-borderColor/30">
+                              {/* Context Preview — Sprint 17, internal/team tool only */}
+                              <div>
+                                <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                                  Context Preview
+                                </h3>
+                                <ContextPreviewPanel project={project} />
+                                <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                                  Preview of what the Context Engine would send a given AI role — computed locally, no
+                                  AI call. For the Builders team only; not part of the project workflow.
+                                </div>
+                              </div>
+                            </div>
+                          </CollapsibleContent>
+                        </div>
+                      </Collapsible>
+                    </section>
+
+                    {/* Recent Chats — not part of the requested regroup, left as-is */}
+                    <div className="pt-10 border-t border-bolt-elements-borderColor/40">
                       <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
                         Recent Chats
                       </h2>
@@ -1079,7 +1219,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       </div>
                     </div>
 
-                    {/* Project Actions */}
+                    {/* Project Actions — not part of the requested regroup, left as-is */}
                     <div>
                       <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
                         Project Actions
