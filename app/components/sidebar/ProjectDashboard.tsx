@@ -27,6 +27,7 @@ import { FrontendDraftPanel } from './FrontendDraftPanel';
 import { QaDraftPanel } from './QADraftPanel';
 import { DevOpsDraftPanel } from './DevOpsDraftPanel';
 import { ProjectManagerPanel } from './ProjectManagerPanel';
+import { GenerationPlanPanel } from './GenerationPlanPanel';
 import { ContextPreviewPanel } from './ContextPreviewPanel';
 
 interface ProjectDashboardProps {
@@ -600,6 +601,31 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                             Computed locally from every artifact, task, review, and roadmap status below — no AI call,
                             no code generation. This is orchestration only: it decides whether the project is ready,
                             never what to build.
+                          </div>
+                        </div>
+
+                        {/* Generation Plan — Sprint 25, planning only */}
+                        <div>
+                          <div className="flex items-center gap-2 mb-4">
+                            <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">
+                              Generation Plan
+                            </h3>
+                            <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary">
+                              Read Only
+                            </span>
+                          </div>
+                          <div
+                            className={classNames(
+                              'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                              'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                            )}
+                          >
+                            <GenerationPlanPanel project={project} />
+                          </div>
+                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+                            Computed locally from every approved artifact and the Project Manager's readiness verdict —
+                            no AI call, no files created, no code generated. This is a deterministic plan only; there is
+                            no Generate button yet.
                           </div>
                         </div>
                       </div>
