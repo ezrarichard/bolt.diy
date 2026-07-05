@@ -1,9 +1,14 @@
+import { useState } from 'react';
 import { classNames } from '~/utils/classNames';
 import { getGenerationSession, type Project } from '~/lib/stores/projects';
 import { generationPlannerEngine, RECOMMENDED_MODEL_LABELS } from '~/lib/projects/generationPlannerEngine';
 import { generationQueueEngine, type GenerationQueueStatus } from '~/lib/projects/generationQueueEngine';
 import { generationExecutionEngine, type ExecutionStrategy } from '~/lib/projects/generationExecutionEngine';
 import { generationSessionEngine, type GenerationSessionStepStatus } from '~/lib/projects/generationSessionEngine';
+import { generationRunner, type GenerationRunResult, type GeneratedFile } from '~/lib/projects/generationRunner';
+import { CONTEXT_ROLE_LABELS, type ContextBudget } from '~/lib/projects/contextEngine';
+import { formatArtifactTimestamp } from '~/lib/projects/artifacts';
+import { useGenerateText } from '~/lib/hooks/useGenerateText';
 import { formatEstimatedMinutes } from './ProjectTaskCard';
 
 interface GenerationPlanPanelProps {
@@ -123,6 +128,14 @@ function SessionStatusBadge({ status }: { status: GenerationSessionStepStatus })
   );
 }
 
+/** Sprint 30 — display labels for ContextBudget, presentation only. */
+const CONTEXT_BUDGET_LABELS: Record<ContextBudget, string> = {
+  small: 'Small',
+  medium: 'Medium',
+  large: 'Large',
+  full: 'Full',
+};
+
 interface TagListProps {
   entries: [string, number][];
 }
@@ -148,6 +161,34 @@ function TagList({ entries }: TagListProps) {
 }
 
 /**
+ * Sprint 30 — one row of the Prototype Generation Test's read-only file
+ * list. Content is only ever shown inside a collapsed `<details>` preview —
+ * never rendered open by default, never written anywhere.
+ */
+function GeneratedFileRow({ file }: { file: GeneratedFile }) {
+  return (
+    <li className="rounded-lg border border-bolt-elements-borderColor/40 px-3.5 py-2.5">
+      <div className="flex flex-wrap items-center gap-2 mb-1">
+        <span className="text-sm font-mono text-bolt-elements-textPrimary break-all">{file.path}</span>
+        <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-full border border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary shrink-0">
+          {file.language}
+        </span>
+      </div>
+      <div className="text-xs text-bolt-elements-textSecondary mb-1">{file.purpose}</div>
+      <div className="text-[11px] text-bolt-elements-textTertiary mb-2">
+        {file.generatedBy} · {formatArtifactTimestamp(file.generatedAt)}
+      </div>
+      <details className="text-xs">
+        <summary className="cursor-pointer text-bolt-elements-textTertiary select-none">Content preview</summary>
+        <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-bolt-elements-background-depth-3 p-2 text-[11px] text-bolt-elements-textSecondary whitespace-pre-wrap">
+          {file.content}
+        </pre>
+      </details>
+    </li>
+  );
+}
+
+/**
  * Sprint 25 — read-only view of `generationPlannerEngine.buildGenerationPlan()`.
  * No Generate button, no AI call, no code/file/config generation — this
  * only renders the deterministic plan (phases, dependency graph,
@@ -164,6 +205,36 @@ export function GenerationPlanPanel({ project }: GenerationPlanPanelProps) {
   const session = persistedSession ?? generationSessionEngine.createSession(project, executionPlan);
   const currentStep = generationSessionEngine.getCurrentStep(session);
   const remainingSteps = session.summary.waitingCount + session.summary.runningCount;
+
+  /**
+   * Sprint 30 — Prototype Generation Test. `generationRunner.getRunnableStep`
+   * is reused unchanged (never re-derived here) to decide whether there is a
+   * currently-runnable Foundation step; the section below only renders when
+   * the Project Manager also reports the project ready for generation.
+   */
+  const { generate, isGenerating } = useGenerateText();
+  const [testResult, setTestResult] = useState<GenerationRunResult | undefined>(undefined);
+  const [isRunningTest, setIsRunningTest] = useState(false);
+
+  const runnableCheck = generationRunner.getRunnableStep(session);
+  const runnableFoundationStep = 'step' in runnableCheck ? runnableCheck.step : undefined;
+  const runnableExecutionStep = runnableFoundationStep
+    ? executionPlan.steps.find((step) => step.stepId === runnableFoundationStep.stepId)
+    : undefined;
+  const showPrototypeGenerationTest =
+    plan.readyForGeneration && Boolean(runnableFoundationStep && runnableExecutionStep);
+
+  async function handleRunFoundationGeneration() {
+    setIsRunningTest(true);
+    setTestResult(undefined);
+
+    try {
+      const result = await generationRunner.runFoundationGeneration({ project, session, generate });
+      setTestResult(result);
+    } finally {
+      setIsRunningTest(false);
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -401,8 +472,13 @@ export function GenerationPlanPanel({ project }: GenerationPlanPanelProps) {
             <div className="text-[10px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1">
               Selected Model
             </div>
-            <div className="text-sm text-bolt-elements-textPrimary font-medium">
+            {/* Sprint 30.5 — static label only; the caret is a placeholder for a future model-selector dropdown, not a working control yet. */}
+            <div
+              className="flex items-center justify-between gap-2 text-sm text-bolt-elements-textPrimary font-medium"
+              title="Model selection coming soon"
+            >
               {RECOMMENDED_MODEL_LABELS[executionPlan.selectedModel]}
+              <span className="i-ph:caret-down w-3.5 h-3.5 text-bolt-elements-textTertiary/60 shrink-0" />
             </div>
             <div className="text-[10px] text-bolt-elements-textTertiary mt-0.5">Use Recommended</div>
           </div>
@@ -503,6 +579,166 @@ export function GenerationPlanPanel({ project }: GenerationPlanPanelProps) {
           Nothing here executes, calls a model, or creates a file. There is no Start, Pause, or Resume button yet.
         </div>
       </div>
+
+      {/* Prototype Generation Test — Sprint 30, internal/manual validation of generationRunner.runFoundationGeneration only */}
+      {showPrototypeGenerationTest && runnableFoundationStep && runnableExecutionStep && (
+        <div className="pt-5 border-t border-bolt-elements-borderColor/30">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <div className="text-sm font-semibold text-bolt-elements-textPrimary">Prototype Generation Test</div>
+            <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border text-purple-600 dark:text-purple-400 border-purple-500/30 bg-purple-500/10">
+              Prototype Mode
+            </span>
+            <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border text-bolt-elements-textTertiary border-bolt-elements-borderColor/50">
+              Internal Prototype Test
+            </span>
+          </div>
+          <div className="text-[11px] text-bolt-elements-textTertiary mb-4">
+            Not production generation — manually invokes the Foundation Generation Runner (Sprint 29) for validation
+            only. No project data is changed by this section.
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+            <div className="rounded-lg border border-bolt-elements-borderColor/40 px-3.5 py-2.5">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1">
+                Current Runnable Step
+              </div>
+              <div className="text-sm text-bolt-elements-textPrimary font-medium">
+                {runnableFoundationStep.moduleName}
+              </div>
+            </div>
+            <div className="rounded-lg border border-bolt-elements-borderColor/40 px-3.5 py-2.5">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1">
+                Selected Model
+              </div>
+              {/* Sprint 30.5 — static label only; the caret is a placeholder for a future model-selector dropdown, not a working control yet. */}
+              <div
+                className="flex items-center justify-between gap-2 text-sm text-bolt-elements-textPrimary font-medium"
+                title="Model selection coming soon"
+              >
+                {RECOMMENDED_MODEL_LABELS[runnableFoundationStep.selectedModel]}
+                <span className="i-ph:caret-down w-3.5 h-3.5 text-bolt-elements-textTertiary/60 shrink-0" />
+              </div>
+            </div>
+            <div className="rounded-lg border border-bolt-elements-borderColor/40 px-3.5 py-2.5">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1">
+                Recommended Model
+              </div>
+              <div className="text-sm text-bolt-elements-textPrimary font-medium">
+                {RECOMMENDED_MODEL_LABELS[runnableFoundationStep.recommendedModel]}
+              </div>
+            </div>
+            <div className="rounded-lg border border-bolt-elements-borderColor/40 px-3.5 py-2.5">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1">
+                Context Role
+              </div>
+              <div className="text-sm text-bolt-elements-textPrimary font-medium">
+                {CONTEXT_ROLE_LABELS[runnableExecutionStep.contextRole]}
+              </div>
+            </div>
+            <div className="rounded-lg border border-bolt-elements-borderColor/40 px-3.5 py-2.5 sm:col-span-2">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1">
+                Context Budget
+              </div>
+              <div className="text-sm text-bolt-elements-textPrimary font-medium">
+                {CONTEXT_BUDGET_LABELS[runnableExecutionStep.contextBudget]}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3.5 py-2.5 mb-4">
+            <div className="text-xs text-amber-700 dark:text-amber-300 flex gap-1.5">
+              <span className="i-ph:warning-duotone w-3.5 h-3.5 shrink-0 mt-0.5" />
+              This will generate Foundation files in memory only. Nothing is written to disk.
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleRunFoundationGeneration}
+            disabled={isRunningTest || isGenerating}
+            className={classNames(
+              'px-4 py-2 rounded-lg text-sm font-medium border transition-colors',
+              isRunningTest || isGenerating
+                ? 'opacity-60 cursor-not-allowed border-bolt-elements-borderColor/40 text-bolt-elements-textTertiary'
+                : 'border-purple-500/40 bg-purple-500/10 text-purple-600 dark:text-purple-300 hover:bg-purple-500/20',
+            )}
+          >
+            {isRunningTest || isGenerating ? 'Running Foundation Generation…' : 'Run Foundation Generation'}
+          </button>
+
+          {testResult && (
+            <div className="mt-4">
+              {testResult.success ? (
+                <div>
+                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                    <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border text-green-600 dark:text-green-400 border-green-500/30 bg-green-500/10">
+                      Success
+                    </span>
+                    <span className="text-[11px] text-bolt-elements-textTertiary">
+                      {testResult.files.length} file(s) · ~{testResult.tokens} tokens · {testResult.duration}ms
+                    </span>
+                  </div>
+
+                  {testResult.warnings.length > 0 && (
+                    <ul className="space-y-1 mb-3">
+                      {testResult.warnings.map((warning) => (
+                        <li key={warning} className="text-xs text-amber-600 dark:text-amber-400 flex gap-1.5">
+                          <span className="i-ph:warning-duotone w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          {warning}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <ul className="space-y-2">
+                    {testResult.files.map((file) => (
+                      <GeneratedFileRow key={file.id} file={file} />
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/5 px-3.5 py-2.5">
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400 mb-1.5">
+                    Generation Failed
+                  </div>
+                  <ul className="space-y-1">
+                    {testResult.errors.map((error, index) => (
+                      <li key={`${error.code}-${index}`} className="text-xs text-bolt-elements-textSecondary">
+                        <span className="font-mono text-red-600 dark:text-red-400">{error.code}</span> — {error.message}
+                      </li>
+                    ))}
+                  </ul>
+                  {testResult.warnings.length > 0 && (
+                    <ul className="mt-2 space-y-1">
+                      {testResult.warnings.map((warning) => (
+                        <li key={warning} className="text-xs text-amber-600 dark:text-amber-400">
+                          {warning}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              {testResult.rawResponseText && (
+                <details className="mt-3 rounded-lg border border-bolt-elements-borderColor/40 px-3.5 py-2.5">
+                  <summary className="cursor-pointer select-none text-[10px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary">
+                    Raw Claude Response (temp diagnostic — before JSON parsing)
+                  </summary>
+                  <pre className="mt-2 max-h-80 overflow-auto rounded-md bg-bolt-elements-background-depth-3 p-2 text-[11px] text-bolt-elements-textSecondary whitespace-pre-wrap">
+                    {testResult.rawResponseText}
+                  </pre>
+                </details>
+              )}
+            </div>
+          )}
+
+          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
+            Internal validation only — results are held in this panel's local state and are discarded on refresh. No
+            project data, workspace file, preview, git, or Supabase state is touched by this section.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

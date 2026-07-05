@@ -230,6 +230,13 @@ function estimateDurationMinutes(
  * configuration files with only 1 documentation file, so configuration
  * dominates) — this is a real, reachable rule, just not one today's
  * deterministic templates happen to trigger yet.
+ *
+ * Sprint 30.5 — the project-wide/high-complexity tier is kept as its own
+ * branch (rather than folded into the final default) so a future
+ * model-selector UI still has a distinct classification to map to a
+ * non-default model; today it resolves to the same platform default
+ * (Sonnet 5) as everything else except the documentation-dominated and
+ * single-file/low-complexity tiers above/below.
  */
 function deriveRecommendedModel(
   files: { group: string; estimatedCount: number }[],
@@ -247,7 +254,7 @@ function deriveRecommendedModel(
   }
 
   if (generationMode === 'project-wide' || (complexity === 'high' && generationMode === 'multi-module')) {
-    return 'claude-opus-4-8';
+    return 'claude-sonnet-5';
   }
 
   if (complexity === 'low' && generationMode === 'single-file') {

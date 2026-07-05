@@ -43,6 +43,28 @@ export function isReasoningModel(modelName: string): boolean {
   return result;
 }
 
+/*
+ * Claude 5-family reasoning models (Sonnet 5, Opus 4.8, Fable 5) reject the
+ * `temperature` parameter entirely ("temperature is deprecated for this
+ * model") rather than requiring it pinned to 1 like OpenAI's o1/o3/gpt-5 —
+ * kept as its own check (not folded into isReasoningModel above) so callers
+ * can tell "omit temperature outright" (Claude 5 family) apart from "pin
+ * temperature to 1" (OpenAI reasoning family); see stream-text.ts and
+ * api.llmcall.ts for where that distinction matters.
+ *
+ * Matched by prefix so a future dated suffix on the same base name (e.g.
+ * "claude-sonnet-5-20260101") is still recognized, without matching
+ * structurally-similar-but-different real models like "claude-sonnet-4-5"
+ * (Sonnet 4.5) or "claude-opus-4-5" (Opus 4.5), which keep sending
+ * temperature normally. Extend this list when a new Claude 5-family model
+ * ships.
+ */
+const CLAUDE_REASONING_MODEL_PREFIXES = ['claude-sonnet-5', 'claude-opus-4-8', 'claude-fable-5'];
+
+export function isClaudeReasoningModel(modelName: string): boolean {
+  return CLAUDE_REASONING_MODEL_PREFIXES.some((prefix) => modelName.startsWith(prefix));
+}
+
 // limits the number of model responses that can be returned in a single request
 export const MAX_RESPONSE_SEGMENTS = 2;
 

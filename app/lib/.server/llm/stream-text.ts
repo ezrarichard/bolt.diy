@@ -1,5 +1,11 @@
 import { convertToCoreMessages, streamText as _streamText, type Message } from 'ai';
-import { MAX_TOKENS, PROVIDER_COMPLETION_LIMITS, isReasoningModel, type FileMap } from './constants';
+import {
+  MAX_TOKENS,
+  PROVIDER_COMPLETION_LIMITS,
+  isReasoningModel,
+  isClaudeReasoningModel,
+  type FileMap,
+} from './constants';
 import { getSystemPrompt } from '~/lib/common/prompts/prompts';
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, MODIFICATIONS_TAG_NAME, PROVIDER_LIST, WORK_DIR } from '~/utils/constants';
 import type { IProviderSetting } from '~/types/model';
@@ -223,6 +229,7 @@ export async function streamText(props: {
 
   // Log reasoning model detection and token parameters
   const isReasoning = isReasoningModel(modelDetails.name);
+  const isClaudeReasoning = isClaudeReasoningModel(modelDetails.name);
   logger.info(
     `Model "${modelDetails.name}" is reasoning model: ${isReasoning}, using ${isReasoning ? 'maxCompletionTokens' : 'maxTokens'}: ${safeMaxTokens}`,
   );
@@ -234,12 +241,13 @@ export async function streamText(props: {
     );
   }
 
-  // Use maxCompletionTokens for reasoning models (o1, GPT-5), maxTokens for traditional models
+  // Use maxCompletionTokens for reasoning models (o1, GPT-5), maxTokens for traditional models — Claude 5-family reasoning models still use maxTokens like every other Claude model.
   const tokenParams = isReasoning ? { maxCompletionTokens: safeMaxTokens } : { maxTokens: safeMaxTokens };
 
-  // Filter out unsupported parameters for reasoning models
+  // Filter out unsupported parameters for reasoning models — both OpenAI's o1/o3/gpt-5 and the Claude 5-family (Sonnet 5, Opus 4.8, Fable 5) reject `temperature` and the other sampling params below, just for different reasons (see isClaudeReasoningModel's doc comment).
+  const omitTemperatureParams = isReasoning || isClaudeReasoning;
   const filteredOptions =
-    isReasoning && options
+    omitTemperatureParams && options
       ? Object.fromEntries(
           Object.entries(options).filter(
             ([key]) =>
@@ -262,6 +270,7 @@ export async function streamText(props: {
     JSON.stringify(
       {
         isReasoning,
+        isClaudeReasoning,
         originalOptions: options || {},
         filteredOptions,
         originalOptionsKeys: options ? Object.keys(options) : [],
@@ -285,7 +294,14 @@ export async function streamText(props: {
     messages: convertToCoreMessages(processedMessages as any),
     ...filteredOptions,
 
-    // Set temperature to 1 for reasoning models (required by OpenAI API)
+    /*
+     * Set temperature to 1 for OpenAI's o1/o3/gpt-5 (the only value they
+     * accept). Claude 5-family reasoning models (Sonnet 5, Opus 4.8, Fable
+     * 5) must NOT receive a temperature key at all — the API rejects it
+     * outright ("temperature is deprecated for this model") — so this
+     * override intentionally stays scoped to `isReasoning`, not
+     * `omitTemperatureParams`.
+     */
     ...(isReasoning ? { temperature: 1 } : {}),
   };
 

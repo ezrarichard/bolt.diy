@@ -92,6 +92,17 @@ export interface GenerationRunResult {
 
   /** Empty on success. Structured, never a thrown exception — see file header. */
   errors: GenerationRunError[];
+
+  /**
+   * TEMP DIAGNOSTIC FIELD — added to help design the Sprint 31 parser after
+   * Claude returned a response `invalid-response-shape` couldn't parse.
+   * Holds Claude's exact raw response text whenever one was received (i.e.
+   * every case except `model-call-failed`, where there is no text, and the
+   * pre-generate errors, where Claude was never called). Not present on the
+   * `GENERATED FILE` spec — remove once the real parser is confirmed
+   * correct and this is no longer needed for inspection.
+   */
+  rawResponseText?: string;
 }
 
 export type GenerateTextOutcome = { ok: true; text: string } | { ok: false; error: string };
@@ -336,6 +347,12 @@ async function runFoundationGeneration(input: RunFoundationGenerationInput): Pro
       };
     }
 
+    // TEMP DIAGNOSTIC — see `rawResponseText`'s doc comment. Remove once the Sprint 31 parser is confirmed correct.
+    console.log(
+      `[generationRunner] raw Claude response for step "${step.stepId}" (before JSON parsing):`,
+      outcome.text,
+    );
+
     const parsedResult = parseGeneratedFiles(outcome.text);
 
     if (!parsedResult.ok) {
@@ -347,6 +364,7 @@ async function runFoundationGeneration(input: RunFoundationGenerationInput): Pro
         warnings: contextBundle.warnings,
         files: [],
         errors: [parsedResult.error],
+        rawResponseText: outcome.text,
       };
     }
 
@@ -359,6 +377,7 @@ async function runFoundationGeneration(input: RunFoundationGenerationInput): Pro
         warnings: contextBundle.warnings,
         files: [],
         errors: [{ code: 'no-valid-files', message: 'The AI response contained no valid files.' }],
+        rawResponseText: outcome.text,
       };
     }
 
@@ -393,6 +412,7 @@ async function runFoundationGeneration(input: RunFoundationGenerationInput): Pro
       warnings,
       files,
       errors: [],
+      rawResponseText: outcome.text,
     };
   } catch (error) {
     return emptyResult(undefined, [

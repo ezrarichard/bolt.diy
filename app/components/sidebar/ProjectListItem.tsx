@@ -27,7 +27,7 @@ export function ProjectListItem({ project, onClick }: ProjectListItemProps) {
     <button
       onClick={onClick}
       className={classNames(
-        'w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left',
+        'w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-left',
         'bg-transparent hover:bg-purple-500/5 dark:hover:bg-white/[0.03]',
         'border border-transparent hover:border-bolt-elements-borderColor/50',
         'transition-all duration-150 ease-out',
@@ -36,14 +36,14 @@ export function ProjectListItem({ project, onClick }: ProjectListItemProps) {
     >
       <div
         className={classNames(
-          'flex items-center justify-center w-9 h-9 rounded-full shrink-0 ring-1',
+          'flex items-center justify-center w-10 h-10 rounded-full shrink-0 ring-1',
           colorClasses.bg,
           colorClasses.ring,
         )}
       >
         <span className="text-base leading-none">{project.icon}</span>
       </div>
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 space-y-0.5">
         <div className="text-sm font-medium text-bolt-elements-textPrimary truncate">{project.name}</div>
         {project.description && (
           <div className="text-xs text-bolt-elements-textTertiary truncate">{project.description}</div>

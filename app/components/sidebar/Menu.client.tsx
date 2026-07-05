@@ -18,13 +18,21 @@ import { projectsStore, currentProjectIdStore, isProjectDashboardOpenStore } fro
 import { ProjectList } from './ProjectList';
 import { ProjectDashboard } from './ProjectDashboard';
 
+/**
+ * Sprint 32 UI polish — fixed desktop-panel width (VS Code / Cursor / Claude
+ * Desktop style), kept within the requested 340–380px range. Referenced by
+ * both the closed variant's offset and the inline `width` style below so the
+ * two can never drift apart.
+ */
+const SIDEBAR_WIDTH_PX = 360;
+
 const menuVariants = {
   closed: {
     opacity: 0,
     visibility: 'hidden',
-    left: '-340px',
+    left: `-${SIDEBAR_WIDTH_PX}px`,
     transition: {
-      duration: 0.2,
+      duration: 0.25,
       ease: cubicEasingFn,
     },
   },
@@ -33,7 +41,7 @@ const menuVariants = {
     visibility: 'initial',
     left: 0,
     transition: {
-      duration: 0.2,
+      duration: 0.25,
       ease: cubicEasingFn,
     },
   },
@@ -321,6 +329,51 @@ export const Menu = () => {
     };
   }, [isSettingsOpen]);
 
+  /*
+   * Sprint 32 UI polish — clicking anywhere outside the sidebar closes it, so
+   * interacting with the workspace (e.g. the Project Dashboard) behind it no
+   * longer requires first dragging the mouse past the hover-exit threshold.
+   */
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    function onPointerDown(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener('mousedown', onPointerDown);
+
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+    };
+  }, [open]);
+
+  /*
+   * Sprint 32 UI polish — Escape closes the sidebar, matching the desktop
+   * panel behavior of VS Code / Cursor / Claude Desktop.
+   */
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
   const handleDuplicate = async (id: string) => {
     await duplicateCurrentChat(id);
     loadEntries(); // Reload the list after duplication
@@ -347,7 +400,7 @@ export const Menu = () => {
         initial="closed"
         animate={open ? 'open' : 'closed'}
         variants={menuVariants}
-        style={{ width: '340px' }}
+        style={{ width: `${SIDEBAR_WIDTH_PX}px` }}
         className={classNames(
           'flex selection-accent flex-col side-menu fixed top-0 h-full rounded-r-2xl',
           'bg-white dark:bg-gray-950 border-r border-bolt-elements-borderColor',
@@ -357,11 +410,13 @@ export const Menu = () => {
       >
         <div className="h-12 flex items-center justify-between px-4 border-b border-gray-100 dark:border-gray-800/50 bg-gray-50/50 dark:bg-gray-900/50 rounded-tr-2xl">
           <div className="text-gray-900 dark:text-white font-medium"></div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <HelpButton onClick={() => window.open('https://stackblitz-labs.github.io/bolt.diy/', '_blank')} />
             <span className="font-medium text-sm text-gray-900 dark:text-white truncate">
               {profile?.username || 'Guest User'}
             </span>
+            {/* Sprint 32 UI polish — Settings moved here from the sidebar footer for one-click access. */}
+            <SettingsButton onClick={handleSettingsClick} />
             <div className="flex items-center justify-center w-[32px] h-[32px] overflow-hidden bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-500 rounded-full shrink-0">
               {profile?.avatar ? (
                 <img
@@ -542,10 +597,7 @@ export const Menu = () => {
               </Dialog>
             </DialogRoot>
           </div>
-          <div className="flex items-center justify-between border-t border-gray-200 dark:border-gray-800 px-4 py-3">
-            <div className="flex items-center gap-3">
-              <SettingsButton onClick={handleSettingsClick} />
-            </div>
+          <div className="flex items-center justify-end border-t border-gray-200 dark:border-gray-800 px-4 py-3">
             <ThemeSwitch />
           </div>
         </div>

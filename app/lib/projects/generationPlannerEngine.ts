@@ -53,14 +53,15 @@ export type GenerationComplexity = 'low' | 'medium' | 'high';
 export type GenerationMode = 'single-file' | 'feature-slice' | 'multi-module' | 'project-wide';
 
 /**
- * Our four primary models (see CLAUDE.md / system model list). Opus is
- * reserved for complex, project-wide or multi-module work; Haiku for the
- * smallest single-file helper tasks; Sonnet is the default for everything
- * else. Fable has no natural trigger in this deterministic engineering
+ * Our four primary models (see CLAUDE.md / system model list). Sprint 30.5 —
+ * Claude Sonnet 5 is now the platform default for every classification
+ * tier, including project-wide/high-complexity work that previously
+ * recommended Opus; Haiku is still used for the smallest single-file helper
+ * tasks. Fable has no natural trigger in this deterministic engineering
  * pipeline today (there is no creative-copy/marketing phase) — the type
- * still includes it so a future phase (e.g. marketing copy generation) can
- * be classified without widening this union again; see
- * `deriveRecommendedModel` below.
+ * still includes Opus and Fable so a future model-selector UI (and a future
+ * phase, e.g. marketing copy generation) can classify/select either without
+ * widening this union again; see `deriveRecommendedModel` below.
  */
 export type RecommendedModel = 'claude-sonnet-5' | 'claude-opus-4-8' | 'claude-fable-5' | 'claude-haiku-4-5-20251001';
 
@@ -390,10 +391,18 @@ function deriveGenerationMode(phaseId: GenerationPhaseId, totalFiles: number): G
   return 'multi-module';
 }
 
-/** Classification only — never invokes a model. See the model-strategy note on `RecommendedModel` above for why Fable never appears here. */
+/**
+ * Classification only — never invokes a model. Sprint 30.5 — the
+ * project-wide/high-complexity tier is kept as its own branch (rather than
+ * folded into the final default) so a future model-selector UI still has a
+ * distinct classification to map to a non-default model; today it resolves
+ * to the same platform default (Sonnet 5) as everything else except the
+ * single-file/low-complexity tier below. See the model-strategy note on
+ * `RecommendedModel` above for why Fable never appears here.
+ */
 function deriveRecommendedModel(complexity: GenerationComplexity, generationMode: GenerationMode): RecommendedModel {
   if (generationMode === 'project-wide' || (complexity === 'high' && generationMode === 'multi-module')) {
-    return 'claude-opus-4-8';
+    return 'claude-sonnet-5';
   }
 
   if (complexity === 'low' && generationMode === 'single-file') {
