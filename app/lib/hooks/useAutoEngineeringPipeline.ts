@@ -173,8 +173,9 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
           const nextVersion = (latest?.version ?? 0) + 1;
           const artifact = role.createDraftArtifact(parsed.draft, nextVersion);
 
-          addProjectArtifact(projectId, artifact);
-          updateProjectArtifact(projectId, artifact.id, { status: 'approved' });
+          // Sprint 36 — 'automatic' output metadata, so version history can tell this run apart from a human clicking Generate/Regenerate.
+          addProjectArtifact(projectId, artifact, 'automatic');
+          updateProjectArtifact(projectId, artifact.id, { status: 'approved' }, 'automatic');
           toast.success(`${role.label} completed`);
         }
       } finally {

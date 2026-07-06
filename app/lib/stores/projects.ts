@@ -12,6 +12,7 @@ import type {
 import type { GenerationSession } from '~/lib/projects/generationSessionEngine';
 import { createProjectRepository } from '~/lib/builders-db/repositories/projectsRepository';
 import { buildersDbRepository, isBuildersDbAvailable } from '~/lib/builders-db/repositories/buildersDbRepository';
+import type { RoleOutputGenerationType } from '~/lib/builders-db/buildersDbTypes';
 
 /**
  * Project data model — Sprint 1 (UI-only).
@@ -450,7 +451,19 @@ export function getProjectArtifacts(project: Project): ProjectArtifact[] {
  * createPlaceholderArtifact in app/lib/projects/artifacts.ts for building
  * the placeholder shape).
  */
-export function addProjectArtifact(projectId: string, artifact: ProjectArtifact): void {
+/**
+ * `generationType` ('manual' by default — every *DraftPanel's manual Generate/
+ * Regenerate flow; useAutoEngineeringPipeline.ts passes 'automatic' explicitly) is
+ * Sprint 36 output metadata, mirrored into builders_role_outputs so a version's history
+ * records which workflow produced it. Purely additive: no existing caller (all 7
+ * *DraftPanel components, RequirementsDraftPanel) needs to change since the parameter
+ * defaults to today's only actual case.
+ */
+export function addProjectArtifact(
+  projectId: string,
+  artifact: ProjectArtifact,
+  generationType: RoleOutputGenerationType = 'manual',
+): void {
   const next = projectsStore
     .get()
     .map((project) =>
@@ -460,7 +473,7 @@ export function addProjectArtifact(projectId: string, artifact: ProjectArtifact)
   projectRepository.updateArtifacts(next);
 
   mirrorToBuildersDb(async () => {
-    await buildersDbRepository.createOrUpdateRoleOutput(projectId, artifact);
+    await buildersDbRepository.createOrUpdateRoleOutput(projectId, artifact, generationType);
     await buildersDbRepository.addProjectActivity({
       projectId,
       activityType: 'role_output_saved',
@@ -474,9 +487,16 @@ export function addProjectArtifact(projectId: string, artifact: ProjectArtifact)
  * version, etc.), e.g. moving a Requirements Draft from 'draft' to
  * 'approved'/'discarded', or bumping its content+version on regenerate.
  * `updatedAt` is always refreshed. Persisted via the ProjectRepository (see
- * app/lib/builders-db/).
+ * app/lib/builders-db/). `generationType` — see addProjectArtifact's comment; only
+ * meaningful when this call is bumping `version` (a regenerate), not a plain
+ * approve/discard status flip, but harmless to pass either way.
  */
-export function updateProjectArtifact(projectId: string, artifactId: string, partial: Partial<ProjectArtifact>): void {
+export function updateProjectArtifact(
+  projectId: string,
+  artifactId: string,
+  partial: Partial<ProjectArtifact>,
+  generationType: RoleOutputGenerationType = 'manual',
+): void {
   const next = projectsStore.get().map((project) => {
     if (project.id !== projectId) {
       return project;
@@ -498,7 +518,7 @@ export function updateProjectArtifact(projectId: string, artifactId: string, par
 
   if (updatedArtifact) {
     mirrorToBuildersDb(async () => {
-      await buildersDbRepository.createOrUpdateRoleOutput(projectId, updatedArtifact);
+      await buildersDbRepository.createOrUpdateRoleOutput(projectId, updatedArtifact, generationType);
       await buildersDbRepository.addProjectActivity({
         projectId,
         activityType: 'role_output_saved',

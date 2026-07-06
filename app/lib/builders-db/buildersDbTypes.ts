@@ -94,9 +94,20 @@ export function fromProjectRow(row: BuildersDbProjectRow): Project {
   };
 }
 
-/** builders_role_outputs row — mirrors `ProjectArtifact` (app/lib/projects/artifacts.ts). */
+/** Sprint 36 — which workflow produced a role output version: a human clicking Generate/Regenerate in a *DraftPanel, or the Sprint 31 autonomous pipeline (useAutoEngineeringPipeline.ts). */
+export type RoleOutputGenerationType = 'manual' | 'automatic';
+
+/**
+ * builders_role_outputs row — mirrors `ProjectArtifact` (app/lib/projects/artifacts.ts).
+ *
+ * Sprint 36 — `id` is now a surrogate uuid (one row per VERSION, not per artifact);
+ * `artifact_id` is the frontend's stable `ProjectArtifact.id`, constant across every
+ * regenerate of the same role output. See the Sprint 36 migration's header comment for
+ * why this changed from Sprint 34's one-row-per-artifact shape.
+ */
 export interface BuildersDbRoleOutputRow {
   id: string;
+  artifact_id: string;
   project_id: string;
   task_id: string | null;
   role_key: string | null;
@@ -105,13 +116,28 @@ export interface BuildersDbRoleOutputRow {
   status: string;
   content: string | null;
   version: number | null;
+  generation_type: RoleOutputGenerationType;
+  parent_version_id: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export function toRoleOutputRow(projectId: string, artifact: ProjectArtifact): BuildersDbRoleOutputRow {
+/**
+ * Builds the upsert payload for one version. Deliberately omits `id` — on a genuinely
+ * new version (a fresh `(artifact_id, version)` pair) Postgres assigns a new surrogate
+ * id via the column default; on a status-only change to an EXISTING version (the
+ * `(artifact_id, version)` upsert conflict target matches), the existing row's `id` is
+ * left untouched. See createOrUpdateRoleOutput in buildersDbRepository.ts, the only
+ * caller.
+ */
+export function toRoleOutputRow(
+  projectId: string,
+  artifact: ProjectArtifact,
+  generationType: RoleOutputGenerationType = 'manual',
+  parentVersionId?: string | null,
+): Omit<BuildersDbRoleOutputRow, 'id'> {
   return {
-    id: artifact.id,
+    artifact_id: artifact.id,
     project_id: projectId,
     task_id: artifact.taskId,
     role_key: artifact.type,
@@ -120,6 +146,8 @@ export function toRoleOutputRow(projectId: string, artifact: ProjectArtifact): B
     status: artifact.status,
     content: artifact.content,
     version: artifact.version ?? null,
+    generation_type: generationType,
+    parent_version_id: parentVersionId ?? null,
     created_at: artifact.createdAt,
     updated_at: artifact.updatedAt,
   };
@@ -127,7 +155,7 @@ export function toRoleOutputRow(projectId: string, artifact: ProjectArtifact): B
 
 export function fromRoleOutputRow(row: BuildersDbRoleOutputRow): ProjectArtifact {
   return {
-    id: row.id,
+    id: row.artifact_id,
     taskId: row.task_id ?? '',
     title: row.title ?? '',
     type: row.role_key ?? '',
@@ -137,6 +165,35 @@ export function fromRoleOutputRow(row: BuildersDbRoleOutputRow): ProjectArtifact
     content: row.content ?? '',
     generatedBy: row.role_name ?? undefined,
     version: row.version ?? undefined,
+  };
+}
+
+/**
+ * Sprint 36 — one role output version's metadata, without its full `content` (see
+ * getRoleVersionHistory in buildersDbRepository.ts) — everything requirement #2
+ * ("Output Metadata") asks for that isn't already implied by `ProjectArtifact` itself.
+ */
+export interface RoleOutputVersionMeta {
+  rowId: string;
+  artifactId: string;
+  version: number | null;
+  status: ProjectArtifactStatus;
+  generationType: RoleOutputGenerationType;
+  parentVersionId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function fromRoleOutputRowToVersionMeta(row: BuildersDbRoleOutputRow): RoleOutputVersionMeta {
+  return {
+    rowId: row.id,
+    artifactId: row.artifact_id,
+    version: row.version,
+    status: row.status as ProjectArtifactStatus,
+    generationType: row.generation_type,
+    parentVersionId: row.parent_version_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -225,4 +282,45 @@ export interface BuildersDbActivityInput {
   activityType: string;
   description: string;
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * Sprint 36 — one entry in a builders_context_traces row's `sources` JSONB array: which
+ * single piece of persistent context contributed to a role's generated response.
+ * `roleKey`/`version` are only present for `type: 'role-output'`.
+ */
+export interface ContextTraceSource {
+  type: 'role-output' | 'task' | 'original-prompt';
+  label: string;
+  roleKey?: string;
+  version?: number;
+}
+
+/** builders_context_traces row. */
+export interface BuildersDbContextTraceRow {
+  id: string;
+  project_id: string;
+  role_key: string;
+  role_output_id: string | null;
+  sources: ContextTraceSource[];
+  created_at: string;
+}
+
+export interface BuildersDbContextTraceInput {
+  projectId: string;
+  roleKey: string;
+  roleOutputId?: string | null;
+  sources: ContextTraceSource[];
+}
+
+export function fromContextTraceRow(
+  row: BuildersDbContextTraceRow,
+): BuildersDbContextTraceInput & { createdAt: string } {
+  return {
+    projectId: row.project_id,
+    roleKey: row.role_key,
+    roleOutputId: row.role_output_id,
+    sources: row.sources ?? [],
+    createdAt: row.created_at,
+  };
 }

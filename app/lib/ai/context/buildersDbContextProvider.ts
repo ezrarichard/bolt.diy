@@ -1,5 +1,9 @@
 import { buildersDbRepository, isBuildersDbAvailable } from '~/lib/builders-db/repositories/buildersDbRepository';
-import type { BuildersDbTaskInput, BuildersDbTaskReviewInput } from '~/lib/builders-db/buildersDbTypes';
+import type {
+  BuildersDbTaskInput,
+  BuildersDbTaskReviewInput,
+  ContextTraceSource,
+} from '~/lib/builders-db/buildersDbTypes';
 import { formatArtifactTimestamp, parseArtifactContent, type ProjectArtifact } from '~/lib/projects/artifacts';
 import { ROLE_ARTIFACT_CHAIN } from '~/lib/projects/collaborationContext';
 
@@ -66,7 +70,8 @@ export function truncateForContext(text: string, maxChars: number = MAX_CHARS_PE
   return `${text.slice(0, maxChars).trimEnd()}\n… [truncated ${text.length - maxChars} more character(s) — see BuildersDB for the full output]`;
 }
 
-function humanizeFieldKey(key: string): string {
+/** Exported (Sprint 36) so app/lib/ai/context/versionHistory.ts's change-summary diffing can render the same field labels this file already uses for a role output's content. */
+export function humanizeFieldKey(key: string): string {
   const withSpaces = key.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
   return withSpaces.charAt(0).toUpperCase() + withSpaces.slice(1);
 }
@@ -326,6 +331,95 @@ function logContextRetrievedActivity(
     .catch((error) => console.error('[BuildersDB Context] context_retrieved activity log failed:', error));
 }
 
+// ── Context source traceability (Sprint 36) ──────────────────────────────
+
+/**
+ * Builds the `sources` list a context trace records for one role's context build —
+ * every role output, task, and the original prompt (when present) that
+ * `buildRoleContextBlock` actually included. Pure and synchronous: this only describes
+ * what was already gathered, it doesn't gather anything itself.
+ */
+function buildContextTraceSources(
+  roleOutputs: ProjectArtifact[],
+  tasks: TaskContextEntry[],
+  projectPromptText: string | undefined,
+): ContextTraceSource[] {
+  const sources: ContextTraceSource[] = [];
+
+  if (projectPromptText) {
+    sources.push({ type: 'original-prompt', label: 'Original Project Prompt' });
+  }
+
+  for (const artifact of roleOutputs) {
+    const roleLabel = roleLabelFor(artifact.type);
+    sources.push({
+      type: 'role-output',
+      label: `${roleLabel} v${artifact.version ?? 1}${artifact.status === 'approved' ? ' (approved)' : ''}`,
+      roleKey: artifact.type,
+      version: artifact.version ?? undefined,
+    });
+  }
+
+  for (const task of tasks) {
+    sources.push({ type: 'task', label: `Task: ${task.taskId}${task.reviewStatus ? ` (${task.reviewStatus})` : ''}` });
+  }
+
+  return sources;
+}
+
+/**
+ * Best-effort, fire-and-forget: records WHY a role's context looked the way it did (see
+ * requirement #3/#4, "Context Source Traceability"/"Context Explanation"). Never awaited
+ * by `buildRoleContextBlock` — a failure here must never affect the AI generation it's
+ * merely describing.
+ */
+function recordContextTrace(
+  projectId: string,
+  roleKey: string,
+  roleOutputs: ProjectArtifact[],
+  tasks: TaskContextEntry[],
+  projectPromptText: string | undefined,
+): void {
+  const sources = buildContextTraceSources(roleOutputs, tasks, projectPromptText);
+
+  if (sources.length === 0) {
+    return;
+  }
+
+  buildersDbRepository
+    .saveContextTrace({ projectId, roleKey, sources })
+    .catch((error) => console.error('[BuildersDB Context] recordContextTrace failed:', error));
+}
+
+/**
+ * Answers "why did this AI generate this response?" (requirement #4) by reading back
+ * the most recent context trace stored for `roleKey` and formatting it as a "Sources
+ * Used" list. Returns a clear fallback string rather than `''` — this is meant for
+ * direct human/debugging consumption, not prompt injection, so an empty string would
+ * read as a bug rather than "nothing to show yet".
+ */
+export async function getContextExplanation(projectId: string, roleKey: string): Promise<string> {
+  if (!isBuildersDbAvailable()) {
+    return 'BuildersDB is not configured — no context trace available.';
+  }
+
+  try {
+    const traces = await buildersDbRepository.getContextTrace(projectId, roleKey, 1);
+    const latest = traces[0];
+
+    if (!latest || latest.sources.length === 0) {
+      return `No context trace recorded yet for ${roleLabelFor(roleKey)}.`;
+    }
+
+    const lines = latest.sources.map((source) => `- ${source.label}`);
+
+    return `Sources Used (${roleLabelFor(roleKey)}, recorded ${formatArtifactTimestamp(latest.createdAt)}):\n${lines.join('\n')}`;
+  } catch (error) {
+    console.error('[BuildersDB Context] getContextExplanation failed:', error);
+    return 'Context trace unavailable (BuildersDB read failed).';
+  }
+}
+
 let warnedOnceUnavailable = false;
 
 /**
@@ -383,6 +477,7 @@ export async function buildRoleContextBlock(
     );
 
     logContextRetrievedActivity(projectId, roleKey, roleOutputs.length, tasks.length);
+    recordContextTrace(projectId, roleKey, roleOutputs, tasks, projectPromptText);
 
     return sections.join('\n\n');
   } catch (error) {
@@ -397,7 +492,9 @@ export const buildersDbContextProvider = {
   buildRoleContextBlock,
   getLatestApprovedRoleOutputs,
   getLatestRoleOutputs,
+  getContextExplanation,
   truncateForContext,
   formatRoleOutputForContext,
   formatTasksForContext,
+  humanizeFieldKey,
 };

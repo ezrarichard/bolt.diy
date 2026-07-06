@@ -137,13 +137,80 @@ untouched and still governs the single localStorage-persisted `Project[]` blob; 
 
 ### Known limitations (as of Sprint 34)
 
-- `getRoleOutputsForProject()` exists and works, but no AI engine's `buildContext` reads
-  from it yet — every engine still reads `project.artifacts` from the in-memory
-  `Project` object, same as before this sprint.
-- No RLS beyond "anon key can do anything" — there is no Auth yet (Sprint 35), so every
-  policy in the migration is permissive by design. Tighten these once Sprint 35 lands.
+- ~~`getRoleOutputsForProject()` exists and works, but no AI engine's `buildContext`
+  reads from it yet~~ — addressed in Sprint 35, see below.
+- No RLS beyond "anon key can do anything" — there is no Auth yet, so every
+  policy in the migration is permissive by design. Tighten these once a future Auth
+  sprint lands.
 - `builders_project_members`/`owner_id`/`user_id` columns exist but nothing writes to
-  them yet — placeholders for Sprint 35, same spirit as `Project.members` above.
+  them yet — placeholders for a future Auth sprint, same spirit as `Project.members`
+  above.
 - Write-through is best-effort and unordered relative to the UI: if BuildersDB is
   slow or down, local state is still correct and current, but BuildersDB can fall
   behind or (rarely, on a lost race) miss a write. There is no retry/outbox queue.
+
+## Sprint 35 — AI role context retrieval
+
+Adds the read side Sprint 34 didn't: `app/lib/ai/context/buildersDbContextProvider.ts`
+fetches prior role outputs + task/review state from BuildersDB and formats them into a
+"## Persistent Project Context from BuildersDB" text block, appended (never replacing
+anything) to the prompt at the three places a role's final prompt string is assembled —
+`app/lib/hooks/useDraftPanel.ts`, `app/lib/hooks/useAutoEngineeringPipeline.ts`, and
+`app/components/sidebar/RequirementsDraftPanel.tsx`. Priority rule: latest APPROVED
+output per role, else latest of any status. `buildRoleContextBlock()` resolves to `''`
+whenever BuildersDB is unconfigured/unreachable/empty — a pure no-op for local-only
+usage. Which upstream roles are "relevant" to a given role reuses
+`app/lib/projects/collaborationContext.ts`'s existing `ROLE_ARTIFACT_CHAIN` (exported
+for this purpose) rather than re-declaring the pipeline order a second time.
+
+## Sprint 36 — knowledge memory, version history & context traceability
+
+Sprint 34/35's `builders_role_outputs` had one row PER ARTIFACT: every regenerate
+upserted-by-id, overwriting the previous version's content in place (mirroring the
+frontend's own in-memory behavior — `updateProjectArtifact` mutates the same
+`ProjectArtifact.id`, never keeping old content around). Sprint 36 makes BuildersDB the
+durable version history the frontend itself doesn't keep — see
+`supabase/migrations/20260707090000_sprint36_knowledge_memory.sql`:
+
+- `builders_role_outputs.id` (the old primary key) is renamed to `artifact_id` — the
+  frontend's stable `ProjectArtifact.id`, constant across every regenerate of the same
+  role output. A new surrogate `id` (uuid) becomes the primary key, one row per
+  `(artifact_id, version)` pair (a unique constraint `createOrUpdateRoleOutput` now
+  upserts against) — a status-only change (e.g. approval) updates that version's row in
+  place; a genuine version bump inserts a new row, leaving every earlier version intact.
+- `generation_type` ('manual' | 'automatic') and `parent_version_id` (the previous
+  version's row id) are new columns — Sprint 36's "Output Metadata" requirement.
+  Threaded in via a new, optional, default-preserving `generationType` parameter on
+  `addProjectArtifact`/`updateProjectArtifact` (`app/lib/stores/projects.ts`);
+  `useAutoEngineeringPipeline.ts` is the only caller that passes `'automatic'`.
+- `builders_context_traces` (new table) records, per context block actually built for a
+  role, which sources fed into it (prior role outputs, tasks, the original prompt) as a
+  lightweight JSONB array — one row per build, not one row per source. Written by
+  `buildRoleContextBlock` itself (fire-and-forget, via a new `recordContextTrace`), read
+  back by `getContextExplanation()` to answer "why did this AI generate this response?".
+
+New repository functions (`app/lib/builders-db/repositories/buildersDbRepository.ts`):
+`getRoleVersionHistory`, `getLatestApproved`, `getLatestDraft`, `saveContextTrace`,
+`getContextTrace`. New file `app/lib/ai/context/versionHistory.ts`: version-history
+formatting (`formatVersionHistoryForPreview`), a project-wide "Context Preview"
+(`buildContextPreview`), lightweight version-to-version diffing
+(`summarizeVersionChange`/`getRoleChangeLog` — set-difference on list fields, "changed"
+flag on everything else, no AI summarization), and `applyContextBudget` (a token-budget
+trim over labeled sections, mirroring `app/lib/projects/contextEngine.ts`'s own
+budget-trim loop shape, reusing its `estimateTokens`). All backend/helper-level per the
+sprint's own scope — no new UI.
+
+### Known limitations (as of Sprint 36)
+
+- `applyContextBudget`/token budgeting is available but not yet wired into
+  `buildRoleContextBlock`'s default path — that still uses Sprint 35's fixed
+  `MAX_ROLE_OUTPUTS`/`MAX_CHARS_PER_ROLE_OUTPUT` caps. Opting a call site into
+  token-based budgeting is future work.
+- `builders_context_traces` keeps every trace ever recorded (append-only, no pruning) —
+  fine at today's scale, but a future sprint should consider retention/cleanup once
+  projects run for a long time.
+- Change summaries are a simple list-field diff, not a real semantic summary of text
+  field changes (a changed text field is flagged as "Changed: <Field>", not diffed) — as
+  scoped ("large AI summarisation unnecessary").
+- No UI surfaces any of this yet (version history, context trace, change summaries) —
+  everything is a backend/helper implementation, per the sprint's own scope.

@@ -2,15 +2,18 @@ import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/c
 import type { Project } from '~/lib/stores/projects';
 import type { ProjectArtifact } from '~/lib/projects/artifacts';
 import {
+  fromContextTraceRow,
   fromProjectRow,
   fromRoleOutputRow,
   fromTaskReviewRow,
   toProjectRow,
   toRoleOutputRow,
   type BuildersDbActivityInput,
+  type BuildersDbContextTraceInput,
   type BuildersDbExecutionLogInput,
   type BuildersDbTaskInput,
   type BuildersDbTaskReviewInput,
+  type RoleOutputGenerationType,
 } from '~/lib/builders-db/buildersDbTypes';
 
 /**
@@ -177,7 +180,32 @@ export async function deleteProject(projectId: string): Promise<boolean> {
 
 // ── Role outputs ──────────────────────────────────────────────────────────
 
-export async function createOrUpdateRoleOutput(projectId: string, artifact: ProjectArtifact): Promise<boolean> {
+/** Fire-and-forget — never lets an activity-log failure affect the write it's describing. */
+function logRoleOutputVersionCreated(projectId: string, artifact: ProjectArtifact): void {
+  addProjectActivity({
+    projectId,
+    activityType: 'role_output_version_created',
+    description: `${artifact.generatedBy ?? artifact.type} version ${artifact.version ?? 1} created`,
+    metadata: { roleKey: artifact.type, version: artifact.version ?? null },
+  }).catch((error) => logError('logRoleOutputVersionCreated', error));
+}
+
+/**
+ * Sprint 36 — upserts one role output VERSION. Targets the `(artifact_id, version)`
+ * unique constraint (see the Sprint 36 migration) rather than the row's own `id`: a
+ * status-only change to an already-persisted version (e.g. approving it) updates that
+ * same row in place, while a genuinely new version (a `version` never seen before for
+ * this `artifact_id`) inserts a new row — every earlier version stays exactly as it was,
+ * which is the version history this sprint adds. `generationType` records which
+ * workflow produced it ('manual' from a *DraftPanel, 'automatic' from
+ * useAutoEngineeringPipeline.ts); `parent_version_id` is computed here by looking up the
+ * immediately-prior version's row id, so version history can be walked backwards later.
+ */
+export async function createOrUpdateRoleOutput(
+  projectId: string,
+  artifact: ProjectArtifact,
+  generationType: RoleOutputGenerationType = 'manual',
+): Promise<boolean> {
   const client = getBuildersDbClient();
 
   if (!client) {
@@ -186,10 +214,31 @@ export async function createOrUpdateRoleOutput(projectId: string, artifact: Proj
   }
 
   try {
-    const { error } = await client.from('builders_role_outputs').upsert(toRoleOutputRow(projectId, artifact));
+    const { data: existingVersions, error: fetchError } = await client
+      .from('builders_role_outputs')
+      .select('id, version')
+      .eq('artifact_id', artifact.id)
+      .order('version', { ascending: false });
+
+    if (fetchError) {
+      throw fetchError;
+    }
+
+    const versions = existingVersions ?? [];
+    const isNewVersion = !versions.some((row) => row.version === (artifact.version ?? null));
+    const parentVersionId = isNewVersion
+      ? (versions.find((row) => (row.version ?? 0) < (artifact.version ?? 0))?.id ?? null)
+      : null;
+
+    const row = toRoleOutputRow(projectId, artifact, generationType, parentVersionId);
+    const { error } = await client.from('builders_role_outputs').upsert(row, { onConflict: 'artifact_id,version' });
 
     if (error) {
       throw error;
+    }
+
+    if (isNewVersion) {
+      logRoleOutputVersionCreated(projectId, artifact);
     }
 
     return true;
@@ -258,6 +307,96 @@ export async function getLatestRoleOutput(projectId: string, roleKey: string): P
     return data ? fromRoleOutputRow(data) : null;
   } catch (error) {
     logError('getLatestRoleOutput', error);
+    return null;
+  }
+}
+
+/** Sprint 36 — every version of one role's output, oldest first — the version history requirement #1 calls for. Includes every status (draft/approved/discarded/final), so callers can see the full timeline, not just what's currently active. */
+export async function getRoleVersionHistory(projectId: string, roleKey: string): Promise<ProjectArtifact[]> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('getRoleVersionHistory');
+    return [];
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_role_outputs')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('role_key', roleKey)
+      .order('version', { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    return (data ?? []).map(fromRoleOutputRow);
+  } catch (error) {
+    logError('getRoleVersionHistory', error);
+    return [];
+  }
+}
+
+/** Sprint 36 — requirement #5 ("Latest Approved vs Latest Draft"): the highest-version row with `status = 'approved'` for a role, or null if none has been approved yet. */
+export async function getLatestApproved(projectId: string, roleKey: string): Promise<ProjectArtifact | null> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('getLatestApproved');
+    return null;
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_role_outputs')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('role_key', roleKey)
+      .eq('status', 'approved')
+      .order('version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    return data ? fromRoleOutputRow(data) : null;
+  } catch (error) {
+    logError('getLatestApproved', error);
+    return null;
+  }
+}
+
+/** Sprint 36 — the highest-version row with `status = 'draft'` for a role (i.e. still awaiting a human decision), or null if none is currently pending. */
+export async function getLatestDraft(projectId: string, roleKey: string): Promise<ProjectArtifact | null> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('getLatestDraft');
+    return null;
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_role_outputs')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('role_key', roleKey)
+      .eq('status', 'draft')
+      .order('version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    return data ? fromRoleOutputRow(data) : null;
+  } catch (error) {
+    logError('getLatestDraft', error);
     return null;
   }
 }
@@ -494,6 +633,80 @@ export async function getProjectActivity(projectId: string): Promise<BuildersDbA
   }
 }
 
+// ── Context traces ────────────────────────────────────────────────────────
+
+/**
+ * Sprint 36 — records which sources fed into one role's generated context (see
+ * app/lib/ai/context/buildersDbContextProvider.ts's buildRoleContextBlock, the only
+ * caller). Also logs a lightweight `context_trace_stored` activity entry.
+ */
+export async function saveContextTrace(input: BuildersDbContextTraceInput): Promise<boolean> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('saveContextTrace');
+    return false;
+  }
+
+  try {
+    const { error } = await client.from('builders_context_traces').insert({
+      project_id: input.projectId,
+      role_key: input.roleKey,
+      role_output_id: input.roleOutputId ?? null,
+      sources: input.sources,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    addProjectActivity({
+      projectId: input.projectId,
+      activityType: 'context_trace_stored',
+      description: `Context trace stored for ${input.roleKey} (${input.sources.length} source(s))`,
+      metadata: { roleKey: input.roleKey, sourceCount: input.sources.length },
+    }).catch((error) => logError('context_trace_stored activity', error));
+
+    return true;
+  } catch (error) {
+    logError('saveContextTrace', error);
+    return false;
+  }
+}
+
+/** The most recent context traces stored for a role, newest first — answers "why did this AI generate this response" (see app/lib/ai/context/contextTrace.ts). */
+export async function getContextTrace(
+  projectId: string,
+  roleKey: string,
+  limit = 5,
+): Promise<(BuildersDbContextTraceInput & { createdAt: string })[]> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('getContextTrace');
+    return [];
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_context_traces')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('role_key', roleKey)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      throw error;
+    }
+
+    return (data ?? []).map(fromContextTraceRow);
+  } catch (error) {
+    logError('getContextTrace', error);
+    return [];
+  }
+}
+
 export const buildersDbRepository = {
   isBuildersDbAvailable,
   createProject,
@@ -504,6 +717,9 @@ export const buildersDbRepository = {
   createOrUpdateRoleOutput,
   getRoleOutputsForProject,
   getLatestRoleOutput,
+  getRoleVersionHistory,
+  getLatestApproved,
+  getLatestDraft,
   createProjectTask,
   updateProjectTask,
   getProjectTasks,
@@ -513,4 +729,6 @@ export const buildersDbRepository = {
   createExecutionLog,
   addProjectActivity,
   getProjectActivity,
+  saveContextTrace,
+  getContextTrace,
 };
