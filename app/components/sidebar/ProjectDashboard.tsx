@@ -33,6 +33,7 @@ import { BackendDraftPanel } from './BackendDraftPanel';
 import { FrontendDraftPanel } from './FrontendDraftPanel';
 import { QaDraftPanel } from './QADraftPanel';
 import { DevOpsDraftPanel } from './DevOpsDraftPanel';
+import { AiEngineeringTeamPanel } from './AIEngineeringTeamPanel';
 import { ProjectManagerPanel } from './ProjectManagerPanel';
 import { GenerationPlanPanel } from './GenerationPlanPanel';
 import { ContextPreviewPanel } from './ContextPreviewPanel';
@@ -783,7 +784,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                     <section className="pt-10 border-t border-bolt-elements-borderColor/40">
                       <GroupHeading
                         title="Engineering Journey"
-                        subtitle="Requirements → Architecture → Database → UI/UX → Backend → Frontend → QA → DevOps. Approved stages collapse automatically — click Expand to review them again."
+                        subtitle="Requirements & Knowledge is the only manual stage. Once it's captured, the AI Engineering Team (Architecture → Database → UI/UX → Backend → Frontend → QA → DevOps) generates, reviews, and approves every stage automatically."
                       />
                       <div className="space-y-6">
                         {/* Requirements & Knowledge — Phase 2 Sprint 9, collapsible since Sprint 30.5 */}
@@ -873,94 +874,101 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
 
                         <PipelineConnector />
 
-                        {/* Architecture — Sprint 14 */}
-                        <EngineeringStageSection
-                          title="Architecture"
-                          artifact={architectureArtifact}
-                          footnote="The Architecture Draft is stored locally for this project only — approving it never updates Project Knowledge or generates a database, frontend, or backend."
-                          navSectionId="architecture"
-                          sectionRef={registerSection('architecture')}
+                        {/* AI Engineering Team — Sprint 31 (Autonomous AI Engineering Pipeline). Architecture through DevOps now generate, review, and approve themselves automatically once Requirements is captured; the per-stage panels below are unchanged, just moved behind "View AI Decisions". */}
+                        <AiEngineeringTeamPanel
+                          project={project}
+                          requirementsCaptured={requirementsCaptured}
+                          requirementsArtifact={requirementsArtifact}
                         >
-                          <ArchitectureDraftPanel project={project} />
-                        </EngineeringStageSection>
+                          {/* Architecture — Sprint 14 */}
+                          <EngineeringStageSection
+                            title="Architecture"
+                            artifact={architectureArtifact}
+                            footnote="The Architecture Draft is stored locally for this project only — approving it never updates Project Knowledge or generates a database, frontend, or backend."
+                            navSectionId="architecture"
+                            sectionRef={registerSection('architecture')}
+                          >
+                            <ArchitectureDraftPanel project={project} />
+                          </EngineeringStageSection>
 
-                        <PipelineConnector />
+                          <PipelineConnector />
 
-                        {/* Database Design — Sprint 15 */}
-                        <EngineeringStageSection
-                          title="Database Design"
-                          artifact={databaseArtifact}
-                          footnote="The Database Design Draft is stored locally for this project only — approving it never generates SQL, connects to Supabase, or creates a database."
-                          navSectionId="database"
-                          sectionRef={registerSection('database')}
-                        >
-                          <DatabaseDraftPanel project={project} />
-                        </EngineeringStageSection>
+                          {/* Database Design — Sprint 15 */}
+                          <EngineeringStageSection
+                            title="Database Design"
+                            artifact={databaseArtifact}
+                            footnote="The Database Design Draft is stored locally for this project only — approving it never generates SQL, connects to Supabase, or creates a database."
+                            navSectionId="database"
+                            sectionRef={registerSection('database')}
+                          >
+                            <DatabaseDraftPanel project={project} />
+                          </EngineeringStageSection>
 
-                        <PipelineConnector />
+                          <PipelineConnector />
 
-                        {/* UI/UX Design — Sprint 16 */}
-                        <EngineeringStageSection
-                          title="UI / UX Design"
-                          artifact={uiuxArtifact}
-                          footnote="The UI/UX Draft is stored locally for this project only — approving it never generates HTML, CSS, Tailwind, React, Figma files, or images."
-                          navSectionId="uiux"
-                          sectionRef={registerSection('uiux')}
-                        >
-                          <UiUxDraftPanel project={project} />
-                        </EngineeringStageSection>
+                          {/* UI/UX Design — Sprint 16 */}
+                          <EngineeringStageSection
+                            title="UI / UX Design"
+                            artifact={uiuxArtifact}
+                            footnote="The UI/UX Draft is stored locally for this project only — approving it never generates HTML, CSS, Tailwind, React, Figma files, or images."
+                            navSectionId="uiux"
+                            sectionRef={registerSection('uiux')}
+                          >
+                            <UiUxDraftPanel project={project} />
+                          </EngineeringStageSection>
 
-                        <PipelineConnector />
+                          <PipelineConnector />
 
-                        {/* Backend Design — Sprint 19 */}
-                        <EngineeringStageSection
-                          title="Backend Design"
-                          artifact={backendArtifact}
-                          footnote="The Backend Draft is stored locally for this project only — approving it never generates backend code, SQL, Prisma/Drizzle/Supabase schemas, connects to GitHub, or deploys anything."
-                          navSectionId="backend"
-                          sectionRef={registerSection('backend')}
-                        >
-                          <BackendDraftPanel project={project} />
-                        </EngineeringStageSection>
+                          {/* Backend Design — Sprint 19 */}
+                          <EngineeringStageSection
+                            title="Backend Design"
+                            artifact={backendArtifact}
+                            footnote="The Backend Draft is stored locally for this project only — approving it never generates backend code, SQL, Prisma/Drizzle/Supabase schemas, connects to GitHub, or deploys anything."
+                            navSectionId="backend"
+                            sectionRef={registerSection('backend')}
+                          >
+                            <BackendDraftPanel project={project} />
+                          </EngineeringStageSection>
 
-                        <PipelineConnector />
+                          <PipelineConnector />
 
-                        {/* Frontend Design — Sprint 20 */}
-                        <EngineeringStageSection
-                          title="Frontend Design"
-                          artifact={frontendArtifact}
-                          footnote="The Frontend Draft is stored locally for this project only — approving it never generates React, Next.js, Remix, Vue, Angular, Flutter, HTML, CSS, or Tailwind code."
-                          navSectionId="frontend"
-                          sectionRef={registerSection('frontend')}
-                        >
-                          <FrontendDraftPanel project={project} />
-                        </EngineeringStageSection>
+                          {/* Frontend Design — Sprint 20 */}
+                          <EngineeringStageSection
+                            title="Frontend Design"
+                            artifact={frontendArtifact}
+                            footnote="The Frontend Draft is stored locally for this project only — approving it never generates React, Next.js, Remix, Vue, Angular, Flutter, HTML, CSS, or Tailwind code."
+                            navSectionId="frontend"
+                            sectionRef={registerSection('frontend')}
+                          >
+                            <FrontendDraftPanel project={project} />
+                          </EngineeringStageSection>
 
-                        <PipelineConnector />
+                          <PipelineConnector />
 
-                        {/* QA Strategy — Sprint 21 */}
-                        <EngineeringStageSection
-                          title="QA Strategy"
-                          artifact={qaArtifact}
-                          footnote="The QA Draft is stored locally for this project only — approving it never generates test code, connects to GitHub, or deploys anything."
-                          navSectionId="qa"
-                          sectionRef={registerSection('qa')}
-                        >
-                          <QaDraftPanel project={project} />
-                        </EngineeringStageSection>
+                          {/* QA Strategy — Sprint 21 */}
+                          <EngineeringStageSection
+                            title="QA Strategy"
+                            artifact={qaArtifact}
+                            footnote="The QA Draft is stored locally for this project only — approving it never generates test code, connects to GitHub, or deploys anything."
+                            navSectionId="qa"
+                            sectionRef={registerSection('qa')}
+                          >
+                            <QaDraftPanel project={project} />
+                          </EngineeringStageSection>
 
-                        <PipelineConnector />
+                          <PipelineConnector />
 
-                        {/* DevOps Strategy — Sprint 22 */}
-                        <EngineeringStageSection
-                          title="DevOps Strategy"
-                          artifact={devopsArtifact}
-                          footnote="The DevOps Draft is stored locally for this project only — approving it never generates a Dockerfile, GitHub Actions workflow, Kubernetes manifest, Terraform configuration, or shell script, and never deploys or provisions anything."
-                          navSectionId="devops"
-                          sectionRef={registerSection('devops')}
-                        >
-                          <DevOpsDraftPanel project={project} />
-                        </EngineeringStageSection>
+                          {/* DevOps Strategy — Sprint 22 */}
+                          <EngineeringStageSection
+                            title="DevOps Strategy"
+                            artifact={devopsArtifact}
+                            footnote="The DevOps Draft is stored locally for this project only — approving it never generates a Dockerfile, GitHub Actions workflow, Kubernetes manifest, Terraform configuration, or shell script, and never deploys or provisions anything."
+                            navSectionId="devops"
+                            sectionRef={registerSection('devops')}
+                          >
+                            <DevOpsDraftPanel project={project} />
+                          </EngineeringStageSection>
+                        </AiEngineeringTeamPanel>
                       </div>
                     </section>
 
