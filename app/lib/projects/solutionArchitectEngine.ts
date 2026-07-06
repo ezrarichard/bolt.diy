@@ -2,8 +2,14 @@ import { blueprintEngine } from '~/lib/blueprints';
 import { executionEngine } from './executionEngine';
 import { projectKnowledgeEngine } from './projectKnowledgeEngine';
 import { isRequirementsCaptured, type ProjectKnowledge } from './knowledge';
-import { ARTIFACT_TYPES, createArtifact, type ProjectArtifact } from './artifacts';
+import { ARTIFACT_TYPES, createArtifact, getApprovedArtifactContent, type ProjectArtifact } from './artifacts';
 import { parseStructuredDraft, type ParsedDraftResult } from './draftParsing';
+import {
+  gatherAIDecisions,
+  gatherEngineeringNotes,
+  type AIDecisionEntry,
+  type EngineeringNoteEntry,
+} from './collaborationContext';
 import {
   getProjectArtifacts,
   getProjectKnowledge,
@@ -17,6 +23,7 @@ import {
   SOLUTION_ARCHITECT_SYSTEM_PROMPT,
   type ArchitectureDraft,
 } from './prompts/architecture';
+import type { RequirementsDraft } from './prompts/requirements';
 
 /**
  * Solution Architect Engine — Sprint 14, built on the Sprint 13 Business
@@ -50,6 +57,15 @@ export interface ArchitectureContext {
   };
   knowledge: ProjectKnowledge | undefined;
   knowledgeCompletion: number;
+
+  /** Sprint 32 — the approved Business Analyst output in full: the Solution Architect is the immediately-next role, so this is directly relevant rather than summarized. */
+  requirementsDraft: RequirementsDraft | undefined;
+
+  /** Sprint 32 — every upstream role's "Engineering Notes For Next Engineer" gathered so far (just Business Analyst, at this point in the chain). See collaborationContext.ts. */
+  engineeringNotes: EngineeringNoteEntry[];
+
+  /** Sprint 32 — every upstream role's AI Decisions log gathered so far. See collaborationContext.ts. */
+  aiDecisions: AIDecisionEntry[];
   roadmap: { title: string; description: string; status: string }[];
   tasks: { title: string; category: string; status: string }[];
   existingArtifacts: { title: string; type: string; status: string }[];
@@ -89,6 +105,8 @@ const ARTIFACT_TASK_ID = 'requirements';
 function buildArchitectureContext(project: Project): ArchitectureContext {
   const blueprint = blueprintEngine.getBlueprint(project.blueprintId) ?? blueprintEngine.getDefaultBlueprint();
   const knowledge = getProjectKnowledge(project);
+  const artifacts = getProjectArtifacts(project);
+  const requirementsDraft = getApprovedArtifactContent<RequirementsDraft>(artifacts, ARTIFACT_TYPES.REQUIREMENTS_DRAFT);
 
   const roadmap = blueprintEngine.getRoadmap(blueprint.id).map((item) => ({
     title: item.title,
@@ -102,7 +120,7 @@ function buildArchitectureContext(project: Project): ArchitectureContext {
     status: task.status,
   }));
 
-  const existingArtifacts = getProjectArtifacts(project).map((artifact) => ({
+  const existingArtifacts = artifacts.map((artifact) => ({
     title: artifact.title,
     type: artifact.type,
     status: artifact.status,
@@ -122,6 +140,9 @@ function buildArchitectureContext(project: Project): ArchitectureContext {
     },
     knowledge,
     knowledgeCompletion: projectKnowledgeEngine.getCompletion(knowledge).overall,
+    requirementsDraft,
+    engineeringNotes: gatherEngineeringNotes(artifacts, 'Solution Architect'),
+    aiDecisions: gatherAIDecisions(artifacts, 'Solution Architect'),
     roadmap,
     tasks,
     existingArtifacts,

@@ -1,10 +1,14 @@
 import { classNames } from '~/utils/classNames';
 import { getProjectArtifacts, type Project } from '~/lib/stores/projects';
 import { formatArtifactTimestamp, getLatestArtifact, type ProjectArtifact } from '~/lib/projects/artifacts';
-import { AUTO_ENGINEERING_ROLES, isAutoEngineeringComplete } from '~/lib/projects/autoEngineeringEngine';
+import {
+  AUTO_ENGINEERING_ESTIMATED_SECONDS,
+  AUTO_ENGINEERING_ROLES,
+  isAutoEngineeringComplete,
+} from '~/lib/projects/autoEngineeringEngine';
 import { useAutoEngineeringPipeline } from '~/lib/hooks/useAutoEngineeringPipeline';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '~/components/ui/Collapsible';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 interface AiEngineeringTeamPanelProps {
   project: Project;
@@ -31,22 +35,48 @@ const ROW_STATUS_META: Record<RowStatus, { icon: string; className: string }> = 
   pending: { icon: 'i-ph:circle-dashed', className: 'text-bolt-elements-textTertiary' },
 };
 
-function TeamRow({ meta }: { meta: RowMeta }) {
+/** Ticks once a second while `active` is true, resetting to 0 whenever `active` flips from false to true — drives the "Generating… Ns elapsed" live-progress line below, purely presentational. */
+function useElapsedSeconds(active: boolean): number {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    setElapsed(0);
+
+    if (!active) {
+      return undefined;
+    }
+
+    const intervalId = setInterval(() => setElapsed((value) => value + 1), 1000);
+
+    return () => clearInterval(intervalId);
+  }, [active]);
+
+  return elapsed;
+}
+
+function TeamRow({ meta, elapsedSeconds }: { meta: RowMeta; elapsedSeconds: number }) {
   const statusMeta = ROW_STATUS_META[meta.status];
 
   return (
-    <li className="flex items-center justify-between gap-3 py-2.5 px-1">
-      <div className="flex items-center gap-2.5 min-w-0">
-        <span className={classNames(statusMeta.icon, 'w-4.5 h-4.5 shrink-0', statusMeta.className)} />
-        <span className="text-sm font-medium text-bolt-elements-textPrimary truncate">{meta.label}</span>
+    <li className="py-2.5 px-1">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className={classNames(statusMeta.icon, 'w-4.5 h-4.5 shrink-0', statusMeta.className)} />
+          <span className="text-sm font-medium text-bolt-elements-textPrimary truncate">{meta.label}</span>
+        </div>
+        <div className="flex items-center gap-3 text-xs text-bolt-elements-textTertiary shrink-0">
+          {meta.version !== undefined && <span>v{meta.version}</span>}
+          {meta.generatedAt && <span>{formatArtifactTimestamp(meta.generatedAt)}</span>}
+          {meta.status === 'pending' && <span>Waiting…</span>}
+          {meta.status === 'running' && <span className="text-purple-600 dark:text-purple-400">Generating…</span>}
+          {meta.status === 'failed' && <span className="text-red-600 dark:text-red-400">Failed</span>}
+        </div>
       </div>
-      <div className="flex items-center gap-3 text-xs text-bolt-elements-textTertiary shrink-0">
-        {meta.version !== undefined && <span>v{meta.version}</span>}
-        {meta.generatedAt && <span>{formatArtifactTimestamp(meta.generatedAt)}</span>}
-        {meta.status === 'pending' && <span>Waiting</span>}
-        {meta.status === 'running' && <span className="text-purple-600 dark:text-purple-400">Generating…</span>}
-        {meta.status === 'failed' && <span className="text-red-600 dark:text-red-400">Failed</span>}
-      </div>
+      {meta.status === 'running' && (
+        <div className="mt-1 pl-7 text-[11px] text-purple-600/80 dark:text-purple-400/80">
+          Generating {meta.label}… {elapsedSeconds}s elapsed (est. ~{AUTO_ENGINEERING_ESTIMATED_SECONDS}s)
+        </div>
+      )}
     </li>
   );
 }
@@ -74,6 +104,7 @@ export function AiEngineeringTeamPanel({
 }: AiEngineeringTeamPanelProps) {
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const { isRunning, currentRoleId, failure } = useAutoEngineeringPipeline(project);
+  const elapsedSeconds = useElapsedSeconds(currentRoleId !== undefined);
   const artifacts = getProjectArtifacts(project);
   const complete = isAutoEngineeringComplete(project);
 
@@ -141,7 +172,7 @@ export function AiEngineeringTeamPanel({
       >
         <ul className="divide-y divide-bolt-elements-borderColor/20">
           {rows.map((row) => (
-            <TeamRow key={row.label} meta={row} />
+            <TeamRow key={row.label} meta={row} elapsedSeconds={elapsedSeconds} />
           ))}
         </ul>
       </div>

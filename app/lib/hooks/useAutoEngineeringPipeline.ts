@@ -11,6 +11,7 @@ import {
 import { getLatestArtifact } from '~/lib/projects/artifacts';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
 import { getNextAutoRole, type AutoEngineeringRoleId } from '~/lib/projects/autoEngineeringEngine';
+import { buildRoleContextBlock } from '~/lib/ai/context/buildersDbContextProvider';
 import { useGenerateText } from './useGenerateText';
 
 /**
@@ -110,9 +111,31 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
             setCurrentRoleId(role.id);
           }
 
-          const context = role.buildContext(current);
-          const { system, prompt } = role.buildPrompt(context);
-          const result = await generateRef.current(system, prompt, { maxTokens: role.maxOutputTokens });
+          let result: Awaited<ReturnType<typeof generateRef.current>>;
+
+          try {
+            const context = role.buildContext(current);
+            const { system, prompt } = role.buildPrompt(context);
+
+            // Sprint 35 — same additive BuildersDB context section as useDraftPanel.ts's manual generation path; see that file's comment.
+            const buildersDbContext = await buildRoleContextBlock(
+              projectId,
+              role.artifactType,
+              current.description ?? current.name,
+            );
+            const fullPrompt = buildersDbContext ? `${prompt}\n\n${buildersDbContext}` : prompt;
+
+            result = await generateRef.current(system, fullPrompt, { maxTokens: role.maxOutputTokens });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : `${role.label} failed unexpectedly.`;
+
+            if (isMountedRef.current) {
+              setFailure({ roleId: role.id, message });
+            }
+
+            toast.error(`${role.label} failed to generate: ${message}`);
+            break;
+          }
 
           if (!result.ok) {
             if (isMountedRef.current) {
@@ -120,6 +143,17 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
             }
 
             toast.error(`${role.label} failed to generate: ${result.error}`);
+            break;
+          }
+
+          if (!result.text || result.text.trim().length === 0) {
+            const message = 'The AI returned an empty response.';
+
+            if (isMountedRef.current) {
+              setFailure({ roleId: role.id, message });
+            }
+
+            toast.error(`${role.label} failed to generate: ${message}`);
             break;
           }
 

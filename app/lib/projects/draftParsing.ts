@@ -11,10 +11,56 @@
 
 export interface DraftFieldConfig<TKey extends string = string> {
   key: TKey;
-  kind: 'text' | 'list';
+  kind: 'text' | 'list' | 'decisions';
 }
 
 export type ParsedDraftResult<T> = { ok: true; draft: T } | { ok: false; error: string };
+
+/**
+ * Sprint 32 — "AI Decisions" shape every engineering role now leaves behind
+ * for the next engineer and for future review: what was decided, why, what
+ * was considered and rejected, and what the next role or a future pass
+ * should reconsider. Reused across every `*_DRAFT_FIELDS` array via the
+ * `'decisions'` field kind below — a single shared shape rather than each
+ * role re-describing its own decision log format.
+ */
+export interface AIDecision {
+  decision: string;
+  reason: string;
+  alternativeConsidered?: string;
+  whyRejected?: string;
+  recommendation?: string;
+  futureImprovements?: string;
+}
+
+/** Drops an entry missing its two required fields (`decision`, `reason`) rather than failing the whole draft — mirrors every other field kind's "silently omit the invalid part" behavior. */
+function toValidDecision(entry: unknown): AIDecision | undefined {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    return undefined;
+  }
+
+  const record = entry as Record<string, unknown>;
+  const decision = typeof record.decision === 'string' ? record.decision.trim() : '';
+  const reason = typeof record.reason === 'string' ? record.reason.trim() : '';
+
+  if (!decision || !reason) {
+    return undefined;
+  }
+
+  const optionalText = (key: string): string | undefined => {
+    const value = record[key];
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+  };
+
+  return {
+    decision,
+    reason,
+    alternativeConsidered: optionalText('alternativeConsidered'),
+    whyRejected: optionalText('whyRejected'),
+    recommendation: optionalText('recommendation'),
+    futureImprovements: optionalText('futureImprovements'),
+  };
+}
 
 /**
  * Pulls a JSON object out of a raw AI response, tolerating markdown code
@@ -105,6 +151,14 @@ export function parseStructuredDraft<T extends object>(
 
         if (items.length > 0) {
           (draft as Record<string, string[]>)[field.key] = items;
+        }
+      }
+    } else if (field.kind === 'decisions') {
+      if (Array.isArray(value)) {
+        const decisions = value.map(toValidDecision).filter((item): item is AIDecision => Boolean(item));
+
+        if (decisions.length > 0) {
+          (draft as Record<string, AIDecision[]>)[field.key] = decisions;
         }
       }
     } else if (typeof value === 'string' && value.trim().length > 0) {

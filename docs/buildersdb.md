@@ -90,9 +90,60 @@ Not implemented. `Project.supabaseProjectId?: string` already exists as a placeh
 5. Only then does setting `BUILDERS_DB_SUPABASE_URL`/`BUILDERS_DB_SUPABASE_ANON_KEY` become safe — `createProjectRepository()` already switches on their presence today, so no selector change is needed at that point.
 6. Layer Future Auth → Future Team Workspaces → Future Secrets → Future Generated Supabase Projects (as described above) on top, in that order, each its own sprint.
 
-## Known limitations (as of this sprint)
+## Known limitations (as of Sprint 18)
 
 - `ProjectRepository` is synchronous; a real network-backed provider cannot honor that contract yet (see above).
 - `providers/supabaseProvider.ts` is a compile-time skeleton only — it has no tests against a real Supabase project because none exists.
 - No env vars, migrations, tables, or Supabase project have actually been created — `docs/buildersdb.md` (this file) is the only artifact of "BuildersDB" that exists after this sprint.
 - The `updateKnowledge`/`updateArtifacts`/`updateTasks`/`updateReviews` methods all currently accept the full `Project[]` list (matching what the Store already computes via its existing `.map()`-based mutations) rather than a partial delta. A future Supabase provider can still choose to write only the changed column(s) per project using whichever fields actually changed — the full-list argument doesn't prevent that, it just doesn't require it either.
+
+## Sprint 34 — a real, additive write-through layer
+
+Sprint 34 connects the frontend to an actual BuildersDB Supabase project **without**
+doing the async rewrite this doc's "Future migration plan" describes above. Instead of
+converting `ProjectRepository` (and auditing every UI call site), it adds a second,
+parallel, genuinely-async repository:
+
+```
+app/lib/builders-db/repositories/buildersDbRepository.ts
+```
+
+backed by `@supabase/supabase-js` (now a real dependency) and the schema in
+`supabase/migrations/20260706120000_buildersdb_foundation.sql` — 8 normalized tables:
+`builders_projects`, `builders_project_members` (structural only, unused until Auth),
+`builders_ai_roles` (a static catalog), `builders_role_outputs`,
+`builders_project_tasks`, `builders_task_reviews`, `builders_execution_logs`, and
+`builders_project_activity`. No schema like this existed anywhere in the repo before
+this sprint — this migration IS the schema, designed to mirror the existing frontend
+shapes (`Project`, `ProjectArtifact`, `TaskReviewRecord`, `TaskHistoryEvent`) documented
+above rather than inventing new ones. Mapping between the two lives in
+`app/lib/builders-db/buildersDbTypes.ts`.
+
+`app/lib/stores/projects.ts`'s existing mutators (`addProject`, `deleteProject`,
+`setRoadmapItemStatus`, `setTaskStatus`, `setTaskNotes`, `addProjectArtifact`,
+`updateProjectArtifact`, `applyReviewDecision`, `updateProjectKnowledge`,
+`clearProjectKnowledge`, `setGenerationSession`) are unchanged in their synchronous
+public signatures. Each now additionally calls `mirrorToBuildersDb(...)` — fire-and-
+forget, never awaited, a no-op whenever `BUILDERS_DB_SUPABASE_URL`/
+`BUILDERS_DB_SUPABASE_ANON_KEY` aren't set (true for everyone until BuildersDB is
+actually provisioned). `ProjectList.tsx` calls a new `hydrateProjectsFromBuildersDb()`
+once on mount, which replaces `projectsStore` with BuildersDB's projects if and only if
+BuildersDB is configured AND returns at least one project — local-only usage is
+unaffected either way.
+
+The Sprint 18 `ProjectRepository`/local/Supabase-provider seam described above is
+untouched and still governs the single localStorage-persisted `Project[]` blob; Sprint
+34's repository is additive, not a replacement.
+
+### Known limitations (as of Sprint 34)
+
+- `getRoleOutputsForProject()` exists and works, but no AI engine's `buildContext` reads
+  from it yet — every engine still reads `project.artifacts` from the in-memory
+  `Project` object, same as before this sprint.
+- No RLS beyond "anon key can do anything" — there is no Auth yet (Sprint 35), so every
+  policy in the migration is permissive by design. Tighten these once Sprint 35 lands.
+- `builders_project_members`/`owner_id`/`user_id` columns exist but nothing writes to
+  them yet — placeholders for Sprint 35, same spirit as `Project.members` above.
+- Write-through is best-effort and unordered relative to the UI: if BuildersDB is
+  slow or down, local state is still correct and current, but BuildersDB can fall
+  behind or (rarely, on a lost race) miss a write. There is no retry/outbox queue.

@@ -8,6 +8,7 @@ import {
   type ProjectArtifact,
 } from '~/lib/projects/artifacts';
 import type { ParsedDraftResult } from '~/lib/projects/draftParsing';
+import { buildRoleContextBlock } from '~/lib/ai/context/buildersDbContextProvider';
 import { useGenerateText } from './useGenerateText';
 
 export type DraftPanelPhase = 'idle' | 'confirm' | 'generating' | 'error';
@@ -50,7 +51,21 @@ export interface DraftPanelState<TDraft> {
   canGenerate: boolean;
   latest: ProjectArtifact | undefined;
   latestDraft: TDraft | undefined;
+
+  /**
+   * Sprint 31.1 — true whenever there's real parsed draft content to show,
+   * regardless of approval status. Previously this only covered `'draft'`
+   * (the human-review-pending state), so the moment something auto-approved
+   * an artifact (the autonomous AI Engineering Team pipeline), every field
+   * this panel renders vanished behind a bare status line even though the
+   * real generated content was sitting right there in the artifact. Kept as
+   * `isPreviewing` for any caller still checking that name — same value,
+   * broadened meaning.
+   */
   isPreviewing: boolean;
+
+  /** True only while the latest draft is still awaiting a human decision — gates whether Approve/Discard render; Regenerate and the content itself no longer depend on this. */
+  isPendingApproval: boolean;
   statusMeta: (typeof ARTIFACT_STATUS_META)[keyof typeof ARTIFACT_STATUS_META] | undefined;
   runGeneration: (regenerateArtifact?: ProjectArtifact) => Promise<void>;
   handleApprove: () => void;
@@ -79,7 +94,8 @@ export function useDraftPanel<TDraft extends object, TContext>(
   const canGenerate = canGenerateFn ? canGenerateFn(project) : true;
   const latest = getLatestArtifact(getProjectArtifacts(project), artifactType);
   const latestDraft = latest ? parseArtifactContent<TDraft>(latest.content) : undefined;
-  const isPreviewing = Boolean(latest?.status === 'draft' && latestDraft);
+  const isPendingApproval = latest?.status === 'draft';
+  const isPreviewing = Boolean(latestDraft && (latest?.status === 'draft' || latest?.status === 'approved'));
 
   const runGeneration = async (regenerateArtifact?: ProjectArtifact) => {
     setPhase('generating');
@@ -87,9 +103,24 @@ export function useDraftPanel<TDraft extends object, TContext>(
 
     const context = buildContext(project);
     const { system, prompt } = buildPrompt(context);
+
+    /**
+     * Sprint 35 — appends BuildersDB's persistent context (prior roles' approved/latest
+     * outputs, tasks, reviews) as an additional section, never replacing anything
+     * `buildPrompt` already produced. Resolves to `''` (see buildRoleContextBlock) when
+     * BuildersDB isn't configured or has nothing relevant yet, so this is a no-op for
+     * every project until BuildersDB is actually provisioned.
+     */
+    const buildersDbContext = await buildRoleContextBlock(
+      project.id,
+      artifactType,
+      project.description ?? project.name,
+    );
+    const fullPrompt = buildersDbContext ? `${prompt}\n\n${buildersDbContext}` : prompt;
+
     const result = await generate(
       system,
-      prompt,
+      fullPrompt,
       maxOutputTokens !== undefined ? { maxTokens: maxOutputTokens } : undefined,
     );
 
@@ -154,6 +185,7 @@ export function useDraftPanel<TDraft extends object, TContext>(
     latest,
     latestDraft,
     isPreviewing,
+    isPendingApproval,
     statusMeta,
     runGeneration,
     handleApprove,

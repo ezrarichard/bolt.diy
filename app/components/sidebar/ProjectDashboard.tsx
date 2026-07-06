@@ -348,6 +348,9 @@ interface EngineeringStageSectionProps {
   children: React.ReactNode;
   navSectionId?: NavSectionId;
   sectionRef?: (el: HTMLElement | null) => void;
+
+  /** Sprint 31.1 — when true, always renders full content, skipping the collapsed "Approved vN · Expand" summary entirely. Used only inside AiEngineeringTeamPanel's "View AI Decisions" — a section the user opens specifically to review real generated content, where a second layer of per-stage collapsing on top of that toggle reads as "nothing was generated" even though it was. Every other caller (Requirements) is unaffected — omitting this prop keeps today's collapse-on-approve behavior exactly as is. */
+  alwaysExpanded?: boolean;
 }
 
 /**
@@ -369,20 +372,23 @@ function EngineeringStageSection({
   children,
   navSectionId,
   sectionRef,
+  alwaysExpanded,
 }: EngineeringStageSectionProps) {
   const isApproved = artifact?.status === 'approved';
-  const [isExpanded, setIsExpanded] = useState(!isApproved);
+  const [isExpanded, setIsExpanded] = useState(alwaysExpanded ? true : !isApproved);
 
   // Re-sync only when the approval boolean itself flips (approve/discard/regenerate) — a user's manual expand/collapse choice is never overridden by an unrelated re-render.
   useEffect(() => {
-    setIsExpanded(!isApproved);
-  }, [isApproved]);
+    if (!alwaysExpanded) {
+      setIsExpanded(!isApproved);
+    }
+  }, [isApproved, alwaysExpanded]);
 
   return (
     <div ref={sectionRef} data-nav-section={navSectionId}>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">{title}</h3>
-        {isApproved && (
+        {isApproved && !alwaysExpanded && (
           <button
             type="button"
             onClick={() => setIsExpanded((value) => !value)}
@@ -399,7 +405,7 @@ function EngineeringStageSection({
         )}
       </div>
 
-      {isApproved && !isExpanded ? (
+      {isApproved && !isExpanded && !alwaysExpanded ? (
         <button
           type="button"
           onClick={() => setIsExpanded(true)}
@@ -887,6 +893,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                             footnote="The Architecture Draft is stored locally for this project only — approving it never updates Project Knowledge or generates a database, frontend, or backend."
                             navSectionId="architecture"
                             sectionRef={registerSection('architecture')}
+                            alwaysExpanded
                           >
                             <ArchitectureDraftPanel project={project} />
                           </EngineeringStageSection>
@@ -900,6 +907,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                             footnote="The Database Design Draft is stored locally for this project only — approving it never generates SQL, connects to Supabase, or creates a database."
                             navSectionId="database"
                             sectionRef={registerSection('database')}
+                            alwaysExpanded
                           >
                             <DatabaseDraftPanel project={project} />
                           </EngineeringStageSection>
@@ -913,6 +921,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                             footnote="The UI/UX Draft is stored locally for this project only — approving it never generates HTML, CSS, Tailwind, React, Figma files, or images."
                             navSectionId="uiux"
                             sectionRef={registerSection('uiux')}
+                            alwaysExpanded
                           >
                             <UiUxDraftPanel project={project} />
                           </EngineeringStageSection>
@@ -926,6 +935,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                             footnote="The Backend Draft is stored locally for this project only — approving it never generates backend code, SQL, Prisma/Drizzle/Supabase schemas, connects to GitHub, or deploys anything."
                             navSectionId="backend"
                             sectionRef={registerSection('backend')}
+                            alwaysExpanded
                           >
                             <BackendDraftPanel project={project} />
                           </EngineeringStageSection>
@@ -939,6 +949,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                             footnote="The Frontend Draft is stored locally for this project only — approving it never generates React, Next.js, Remix, Vue, Angular, Flutter, HTML, CSS, or Tailwind code."
                             navSectionId="frontend"
                             sectionRef={registerSection('frontend')}
+                            alwaysExpanded
                           >
                             <FrontendDraftPanel project={project} />
                           </EngineeringStageSection>
@@ -952,6 +963,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                             footnote="The QA Draft is stored locally for this project only — approving it never generates test code, connects to GitHub, or deploys anything."
                             navSectionId="qa"
                             sectionRef={registerSection('qa')}
+                            alwaysExpanded
                           >
                             <QaDraftPanel project={project} />
                           </EngineeringStageSection>
@@ -965,6 +977,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                             footnote="The DevOps Draft is stored locally for this project only — approving it never generates a Dockerfile, GitHub Actions workflow, Kubernetes manifest, Terraform configuration, or shell script, and never deploys or provisions anything."
                             navSectionId="devops"
                             sectionRef={registerSection('devops')}
+                            alwaysExpanded
                           >
                             <DevOpsDraftPanel project={project} />
                           </EngineeringStageSection>

@@ -19,6 +19,8 @@ import {
 } from '~/lib/projects/artifacts';
 import { businessAnalystEngine } from '~/lib/projects/businessAnalystEngine';
 import { REQUIREMENTS_DRAFT_FIELDS, type RequirementsDraft } from '~/lib/projects/prompts/requirements';
+import type { AIDecision } from '~/lib/projects/draftParsing';
+import { buildRoleContextBlock } from '~/lib/ai/context/buildersDbContextProvider';
 import { useGenerateText } from '~/lib/hooks/useGenerateText';
 
 interface RequirementsDraftPanelProps {
@@ -54,7 +56,16 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
 
     const context = businessAnalystEngine.buildRequirementsContext(project);
     const { system, prompt } = businessAnalystEngine.buildBusinessPrompt(context);
-    const result = await generate(system, prompt);
+
+    // Sprint 35 — same additive BuildersDB context section as useDraftPanel.ts; see that file's comment. Requirements is the first pipeline role, so this contributes tasks/original-prompt continuity but no upstream role outputs (there are none before it).
+    const buildersDbContext = await buildRoleContextBlock(
+      project.id,
+      ARTIFACT_TYPE,
+      project.description ?? project.name,
+    );
+    const fullPrompt = buildersDbContext ? `${prompt}\n\n${buildersDbContext}` : prompt;
+
+    const result = await generate(system, fullPrompt);
 
     if (!result.ok) {
       setErrorMessage(result.error);
@@ -131,7 +142,51 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {REQUIREMENTS_DRAFT_FIELDS.map((field) => {
               const value = latestDraft?.[field.key];
-              const display = Array.isArray(value) ? value.join(', ') : value;
+
+              if (field.kind === 'decisions') {
+                const decisions = value as AIDecision[] | undefined;
+
+                if (!decisions || decisions.length === 0) {
+                  return null;
+                }
+
+                return (
+                  <div key={field.key} className="md:col-span-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+                      {field.label}
+                    </div>
+                    <ul className="space-y-2">
+                      {decisions.map((entry, index) => (
+                        <li
+                          key={index}
+                          className="text-sm text-bolt-elements-textSecondary rounded-lg border border-bolt-elements-borderColor/30 p-2.5"
+                        >
+                          <div className="font-medium text-bolt-elements-textPrimary">{entry.decision}</div>
+                          <div>{entry.reason}</div>
+                          {entry.alternativeConsidered && (
+                            <div className="text-xs text-bolt-elements-textTertiary mt-1">
+                              Alternative considered: {entry.alternativeConsidered}
+                              {entry.whyRejected ? ` — rejected: ${entry.whyRejected}` : ''}
+                            </div>
+                          )}
+                          {entry.recommendation && (
+                            <div className="text-xs text-bolt-elements-textTertiary mt-1">
+                              Recommendation: {entry.recommendation}
+                            </div>
+                          )}
+                          {entry.futureImprovements && (
+                            <div className="text-xs text-bolt-elements-textTertiary mt-1">
+                              Future improvements: {entry.futureImprovements}
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              }
+
+              const display = Array.isArray(value) ? (value as string[]).join(', ') : (value as string | undefined);
 
               if (!display) {
                 return null;

@@ -64,6 +64,16 @@ export default defineConfig((config) => {
       'OLLAMA_API_BASE_URL',
       'LMSTUDIO_API_BASE_URL',
       'TOGETHER_API_BASE_URL',
+
+      /*
+       * Sprint 34 — BuildersDB's own env vars (app/lib/builders-db/client.ts). Listed
+       * individually rather than given a shared prefix so they stay exact matches, same
+       * as the custom vars above; deliberately NOT named VITE_SUPABASE_* to avoid any
+       * collision with the pre-existing, unrelated "generated app's Supabase" feature
+       * (app/lib/stores/supabase.ts) that already owns that name.
+       */
+      'BUILDERS_DB_SUPABASE_URL',
+      'BUILDERS_DB_SUPABASE_ANON_KEY',
     ],
     css: {
       preprocessorOptions: {

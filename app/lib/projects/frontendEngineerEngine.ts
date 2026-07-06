@@ -11,8 +11,13 @@ import {
   getTaskNotes,
   type Project,
 } from '~/lib/stores/projects';
+import {
+  gatherAIDecisions,
+  gatherEngineeringNotes,
+  type AIDecisionEntry,
+  type EngineeringNoteEntry,
+} from './collaborationContext';
 import type { ArchitectureDraft } from './prompts/architecture';
-import type { DatabaseDraft } from './prompts/database';
 import type { UIUXDraft } from './prompts/uiux';
 import type { BackendDraft } from './prompts/backend';
 import {
@@ -39,10 +44,17 @@ import {
  * that (both reused unchanged). Approving a Frontend Draft never generates
  * React/Next.js/Remix/Vue/Angular/Flutter/SwiftUI/Jetpack Compose code,
  * HTML, CSS, or Tailwind, connects to GitHub, or deploys anything, and
- * never mutates Project Knowledge, the Architecture Draft, the Database
- * Design Draft, the UI/UX Draft, or the Backend Draft — it only marks this
- * artifact approved. No React, no UI, no prompt strings inlined here —
- * those live in app/lib/projects/prompts/frontend.ts.
+ * never mutates Project Knowledge, the Architecture Draft, the UI/UX Draft,
+ * or the Backend Draft — it only marks this artifact approved. No React, no
+ * UI, no prompt strings inlined here — those live in
+ * app/lib/projects/prompts/frontend.ts.
+ *
+ * Sprint 32 — Frontend Engineer's curated input is Business Analyst +
+ * Architecture + UX + Backend (not Database directly): frontend
+ * implementation follows screens and APIs, not the schema underneath them.
+ * Architecture is carried as a summary; UX and Backend are carried in full
+ * (both directly relevant — see prompts/frontend.ts for where that
+ * full-vs-summary split happens).
  */
 
 export interface FrontendContext {
@@ -58,9 +70,16 @@ export interface FrontendContext {
   knowledge: ProjectKnowledge | undefined;
   knowledgeCompletion: number;
   architecture: ArchitectureDraft | undefined;
-  database: DatabaseDraft | undefined;
+
+  /** Full content — both directly relevant upstream roles per Sprint 32's curated dependency map (Database is deliberately excluded here). */
   uiux: UIUXDraft | undefined;
   backend: BackendDraft | undefined;
+
+  /** Sprint 32 — every upstream role's Engineering Notes gathered so far. */
+  engineeringNotes: EngineeringNoteEntry[];
+
+  /** Sprint 32 — every upstream role's AI Decisions log gathered so far. */
+  aiDecisions: AIDecisionEntry[];
   roadmap: { title: string; description: string; status: string }[];
   tasks: { title: string; category: string; status: string }[];
   existingArtifacts: { title: string; type: string; status: string }[];
@@ -104,7 +123,6 @@ function buildFrontendContext(project: Project): FrontendContext {
   const knowledge = getProjectKnowledge(project);
   const artifacts = getProjectArtifacts(project);
   const architecture = getApprovedArtifactContent<ArchitectureDraft>(artifacts, ARTIFACT_TYPES.ARCHITECTURE_DRAFT);
-  const database = getApprovedArtifactContent<DatabaseDraft>(artifacts, ARTIFACT_TYPES.DATABASE_DRAFT);
   const uiux = getApprovedArtifactContent<UIUXDraft>(artifacts, ARTIFACT_TYPES.UIUX_DRAFT);
   const backend = getApprovedArtifactContent<BackendDraft>(artifacts, ARTIFACT_TYPES.BACKEND_DRAFT);
 
@@ -141,9 +159,10 @@ function buildFrontendContext(project: Project): FrontendContext {
     knowledge,
     knowledgeCompletion: projectKnowledgeEngine.getCompletion(knowledge).overall,
     architecture,
-    database,
     uiux,
     backend,
+    engineeringNotes: gatherEngineeringNotes(artifacts, 'Frontend Engineer'),
+    aiDecisions: gatherAIDecisions(artifacts, 'Frontend Engineer'),
     roadmap,
     tasks,
     existingArtifacts,

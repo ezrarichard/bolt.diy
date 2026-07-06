@@ -1,10 +1,18 @@
 import type { QAContext } from '~/lib/projects/qaEngineerEngine';
-import { ARCHITECTURE_DRAFT_FIELDS } from './architecture';
-import { DATABASE_DRAFT_FIELDS } from './database';
-import { UIUX_DRAFT_FIELDS } from './uiux';
+import type { AIDecision } from '~/lib/projects/draftParsing';
 import { BACKEND_DRAFT_FIELDS } from './backend';
 import { FRONTEND_DRAFT_FIELDS } from './frontend';
-import { formatDraftFields, formatList, formatProjectKnowledge } from './shared';
+import { summarizeArchitecture, summarizeDatabase, summarizeUIUX } from './summaries';
+import {
+  COLLABORATION_FRAMING,
+  formatAIDecisions,
+  formatDraftFields,
+  formatEngineeringNotes,
+  formatJsonShapeField,
+  formatList,
+  formatProjectKnowledge,
+  omitCollaborationFields,
+} from './shared';
 
 /**
  * QA Engineer prompt — Sprint 21.
@@ -48,12 +56,18 @@ export interface QADraft {
   releaseReadinessChecklist?: string[];
   knownQualityRisks?: string[];
   recommendedNextSteps?: string[];
+
+  /** Sprint 32 — freeform recommendations for the next role (the DevOps Engineer). See app/lib/projects/collaborationContext.ts. */
+  engineeringNotes?: string;
+
+  /** Sprint 32 — structured decision log (see draftParsing.ts's `AIDecision`), carried forward to every later role. */
+  aiDecisions?: AIDecision[];
 }
 
 export interface QADraftFieldConfig {
   key: keyof QADraft;
   label: string;
-  kind: 'text' | 'list';
+  kind: 'text' | 'list' | 'decisions';
 }
 
 /**
@@ -90,6 +104,8 @@ export const QA_DRAFT_FIELDS: QADraftFieldConfig[] = [
   { key: 'releaseReadinessChecklist', label: 'Release Readiness Checklist', kind: 'list' },
   { key: 'knownQualityRisks', label: 'Known Quality Risks', kind: 'list' },
   { key: 'recommendedNextSteps', label: 'Recommended Next Steps', kind: 'list' },
+  { key: 'engineeringNotes', label: 'Engineering Notes For Next Engineer', kind: 'text' },
+  { key: 'aiDecisions', label: 'AI Decisions', kind: 'decisions' },
 ];
 
 export const QA_ENGINEER_SYSTEM_PROMPT = `You are a Senior QA Engineer working inside Builders, an AI engineering platform.
@@ -105,10 +121,12 @@ Rules:
 - The Architecture Draft, Database Design Draft, UI/UX Draft, Backend Draft, and Frontend Draft have already been approved — treat their module boundaries, data model, user flows, API design, and frontend design as settled constraints your test strategy must cover, not open questions.
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty.
 - Be concise. This is a high-level QA strategy, not a full test suite: each text field must be at most 2-4 sentences (a short paragraph), and each list field must contain at most 5-10 of the most important items — pick the ones that matter most rather than trying to be exhaustive.
-- Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.`;
+- Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.
+
+${COLLABORATION_FRAMING}`;
 
 const JSON_SHAPE = `{
-${QA_DRAFT_FIELDS.map((field) => `  "${field.key}": ${field.kind === 'list' ? 'string[]' : 'string'}`).join(',\n')}
+${QA_DRAFT_FIELDS.map(formatJsonShapeField).join(',\n')}
 }`;
 
 /**
@@ -126,20 +144,26 @@ Recommended integrations: ${formatList(context.blueprint.recommendedIntegrations
 Approved Requirements / Project Knowledge (${context.knowledgeCompletion}% complete):
 ${formatProjectKnowledge(context.knowledge)}
 
-Approved Architecture Draft:
-${formatDraftFields(context.architecture, ARCHITECTURE_DRAFT_FIELDS)}
+Approved Architecture (summary):
+${summarizeArchitecture(context.architecture)}
 
-Approved Database Design Draft:
-${formatDraftFields(context.database, DATABASE_DRAFT_FIELDS)}
+Approved Database Design (summary):
+${summarizeDatabase(context.database)}
 
-Approved UI/UX Draft:
-${formatDraftFields(context.uiux, UIUX_DRAFT_FIELDS)}
+Approved UI/UX Design (summary):
+${summarizeUIUX(context.uiux)}
 
-Approved Backend Draft:
-${formatDraftFields(context.backend, BACKEND_DRAFT_FIELDS)}
+Approved Backend Draft (full — directly relevant to test coverage):
+${formatDraftFields(context.backend, omitCollaborationFields(BACKEND_DRAFT_FIELDS))}
 
-Approved Frontend Draft:
-${formatDraftFields(context.frontend, FRONTEND_DRAFT_FIELDS)}
+Approved Frontend Draft (full — you are the next role in the chain):
+${formatDraftFields(context.frontend, omitCollaborationFields(FRONTEND_DRAFT_FIELDS))}
+
+Engineering Notes from previous engineers:
+${formatEngineeringNotes(context.engineeringNotes)}
+
+AI Decisions made so far:
+${formatAIDecisions(context.aiDecisions)}
 
 Roadmap:
 ${context.roadmap.length > 0 ? context.roadmap.map((item) => `- ${item.title} (${item.status}): ${item.description}`).join('\n') : 'No roadmap defined.'}

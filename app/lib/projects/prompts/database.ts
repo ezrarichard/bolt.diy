@@ -1,6 +1,16 @@
 import type { DatabaseContext } from '~/lib/projects/databaseDesignerEngine';
+import type { AIDecision } from '~/lib/projects/draftParsing';
 import { ARCHITECTURE_DRAFT_FIELDS } from './architecture';
-import { formatDraftFields, formatList, formatProjectKnowledge } from './shared';
+import {
+  COLLABORATION_FRAMING,
+  formatAIDecisions,
+  formatDraftFields,
+  formatEngineeringNotes,
+  formatJsonShapeField,
+  formatList,
+  formatProjectKnowledge,
+  omitCollaborationFields,
+} from './shared';
 
 /**
  * Database Designer prompt — Sprint 15.
@@ -31,12 +41,18 @@ export interface DatabaseDraft {
   dataRetention?: string;
   migrationStrategy?: string;
   futureExpansion?: string[];
+
+  /** Sprint 32 — freeform recommendations for the next role (the UX Engineer). See app/lib/projects/collaborationContext.ts. */
+  engineeringNotes?: string;
+
+  /** Sprint 32 — structured decision log (see draftParsing.ts's `AIDecision`), carried forward to every later role. */
+  aiDecisions?: AIDecision[];
 }
 
 export interface DatabaseDraftFieldConfig {
   key: keyof DatabaseDraft;
   label: string;
-  kind: 'text' | 'list';
+  kind: 'text' | 'list' | 'decisions';
 }
 
 /**
@@ -61,6 +77,8 @@ export const DATABASE_DRAFT_FIELDS: DatabaseDraftFieldConfig[] = [
   { key: 'dataRetention', label: 'Data Retention', kind: 'text' },
   { key: 'migrationStrategy', label: 'Migration Strategy', kind: 'text' },
   { key: 'futureExpansion', label: 'Future Expansion', kind: 'list' },
+  { key: 'engineeringNotes', label: 'Engineering Notes For Next Engineer', kind: 'text' },
+  { key: 'aiDecisions', label: 'AI Decisions', kind: 'decisions' },
 ];
 
 export const DATABASE_DESIGNER_SYSTEM_PROMPT = `You are a Senior Database Architect working inside Builders, an AI engineering platform.
@@ -77,10 +95,12 @@ Rules:
 - The Architecture Draft has already been approved — treat its database/backend/integration decisions as settled constraints, not open questions.
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty.
 - Be concise. This is a high-level database design overview, not a full schema: each text field must be at most 2-4 sentences (a short paragraph), and each list field must contain at most 5-10 of the most important items — pick the ones that matter most rather than trying to be exhaustive.
-- Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.`;
+- Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.
+
+${COLLABORATION_FRAMING}`;
 
 const JSON_SHAPE = `{
-${DATABASE_DRAFT_FIELDS.map((field) => `  "${field.key}": ${field.kind === 'list' ? 'string[]' : 'string'}`).join(',\n')}
+${DATABASE_DRAFT_FIELDS.map(formatJsonShapeField).join(',\n')}
 }`;
 
 /**
@@ -99,8 +119,14 @@ Recommended integrations: ${formatList(context.blueprint.recommendedIntegrations
 Approved Requirements / Project Knowledge (${context.knowledgeCompletion}% complete):
 ${formatProjectKnowledge(context.knowledge)}
 
-Approved Architecture Draft:
-${formatDraftFields(context.architecture, ARCHITECTURE_DRAFT_FIELDS)}
+Approved Architecture Draft (full — you are the next role in the chain):
+${formatDraftFields(context.architecture, omitCollaborationFields(ARCHITECTURE_DRAFT_FIELDS))}
+
+Engineering Notes from previous engineers:
+${formatEngineeringNotes(context.engineeringNotes)}
+
+AI Decisions made so far:
+${formatAIDecisions(context.aiDecisions)}
 
 Roadmap:
 ${context.roadmap.length > 0 ? context.roadmap.map((item) => `- ${item.title} (${item.status}): ${item.description}`).join('\n') : 'No roadmap defined.'}

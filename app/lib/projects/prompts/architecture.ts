@@ -1,5 +1,16 @@
 import type { ArchitectureContext } from '~/lib/projects/solutionArchitectEngine';
-import { formatList, formatProjectKnowledge } from './shared';
+import type { AIDecision } from '~/lib/projects/draftParsing';
+import { REQUIREMENTS_DRAFT_FIELDS } from './requirements';
+import {
+  COLLABORATION_FRAMING,
+  formatAIDecisions,
+  formatDraftFields,
+  formatEngineeringNotes,
+  formatJsonShapeField,
+  formatList,
+  formatProjectKnowledge,
+  omitCollaborationFields,
+} from './shared';
 
 /**
  * Solution Architect prompt — Sprint 14.
@@ -30,12 +41,18 @@ export interface ArchitectureDraft {
   risks?: string[];
   openQuestions?: string[];
   recommendedNextSteps?: string[];
+
+  /** Sprint 32 — freeform recommendations for the next role (the Database Engineer). See app/lib/projects/collaborationContext.ts. */
+  engineeringNotes?: string;
+
+  /** Sprint 32 — structured decision log (see draftParsing.ts's `AIDecision`), carried forward to every later role. */
+  aiDecisions?: AIDecision[];
 }
 
 export interface ArchitectureDraftFieldConfig {
   key: keyof ArchitectureDraft;
   label: string;
-  kind: 'text' | 'list';
+  kind: 'text' | 'list' | 'decisions';
 }
 
 /**
@@ -60,6 +77,8 @@ export const ARCHITECTURE_DRAFT_FIELDS: ArchitectureDraftFieldConfig[] = [
   { key: 'risks', label: 'Risks', kind: 'list' },
   { key: 'openQuestions', label: 'Open Questions', kind: 'list' },
   { key: 'recommendedNextSteps', label: 'Recommended Next Steps', kind: 'list' },
+  { key: 'engineeringNotes', label: 'Engineering Notes For Next Engineer', kind: 'text' },
+  { key: 'aiDecisions', label: 'AI Decisions', kind: 'decisions' },
 ];
 
 export const SOLUTION_ARCHITECT_SYSTEM_PROMPT = `You are a Senior Solution Architect working inside Builders, an AI engineering platform.
@@ -77,13 +96,15 @@ India-specific expectations — use these as sensible defaults for India-focused
 - Languages: consider Tamil, Malayalam, Hindi, and English support where relevant to the product's audience.
 
 Rules:
-- Base your answer strictly on the project context you are given (blueprint, approved requirements/Project Knowledge, roadmap, tasks, existing artifacts, notes). Do not invent unrelated features or industries.
+- Base your answer strictly on the project context you are given (blueprint, approved requirements/Project Knowledge, the Business Analyst's approved draft, roadmap, tasks, existing artifacts, notes). Do not invent unrelated features or industries.
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty — but list genuine uncertainties under "openQuestions" instead of guessing wildly.
 - Be concise. This is a high-level architecture overview, not a design document: each text field must be at most 2-4 sentences (a short paragraph), and each list field must contain at most 5-8 of the most important items — pick the ones that matter most rather than trying to be exhaustive.
-- Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.`;
+- Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.
+
+${COLLABORATION_FRAMING}`;
 
 const JSON_SHAPE = `{
-${ARCHITECTURE_DRAFT_FIELDS.map((field) => `  "${field.key}": ${field.kind === 'list' ? 'string[]' : 'string'}`).join(',\n')}
+${ARCHITECTURE_DRAFT_FIELDS.map(formatJsonShapeField).join(',\n')}
 }`;
 
 /**
@@ -101,6 +122,15 @@ Recommended integrations: ${formatList(context.blueprint.recommendedIntegrations
 
 Approved Requirements / Project Knowledge (${context.knowledgeCompletion}% complete):
 ${formatProjectKnowledge(context.knowledge)}
+
+Approved Business Analyst Output (full — you are the next role in the chain):
+${formatDraftFields(context.requirementsDraft, omitCollaborationFields(REQUIREMENTS_DRAFT_FIELDS))}
+
+Engineering Notes from previous engineers:
+${formatEngineeringNotes(context.engineeringNotes)}
+
+AI Decisions made so far:
+${formatAIDecisions(context.aiDecisions)}
 
 Roadmap:
 ${context.roadmap.length > 0 ? context.roadmap.map((item) => `- ${item.title} (${item.status}): ${item.description}`).join('\n') : 'No roadmap defined.'}

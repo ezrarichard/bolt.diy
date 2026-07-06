@@ -1,7 +1,16 @@
 import type { UIUXContext } from '~/lib/projects/uiuxDesignerEngine';
+import type { AIDecision } from '~/lib/projects/draftParsing';
 import { ARCHITECTURE_DRAFT_FIELDS } from './architecture';
-import { DATABASE_DRAFT_FIELDS } from './database';
-import { formatDraftFields, formatList, formatProjectKnowledge } from './shared';
+import {
+  COLLABORATION_FRAMING,
+  formatAIDecisions,
+  formatDraftFields,
+  formatEngineeringNotes,
+  formatJsonShapeField,
+  formatList,
+  formatProjectKnowledge,
+  omitCollaborationFields,
+} from './shared';
 
 /**
  * UI/UX Designer prompt — Sprint 16.
@@ -43,12 +52,18 @@ export interface UIUXDraft {
   notifications?: string[];
   designTokens?: string[];
   futureEnhancements?: string[];
+
+  /** Sprint 32 — freeform recommendations for the next role (the Backend Engineer). See app/lib/projects/collaborationContext.ts. */
+  engineeringNotes?: string;
+
+  /** Sprint 32 — structured decision log (see draftParsing.ts's `AIDecision`), carried forward to every later role. */
+  aiDecisions?: AIDecision[];
 }
 
 export interface UIUXDraftFieldConfig {
   key: keyof UIUXDraft;
   label: string;
-  kind: 'text' | 'list';
+  kind: 'text' | 'list' | 'decisions';
 }
 
 /**
@@ -83,26 +98,30 @@ export const UIUX_DRAFT_FIELDS: UIUXDraftFieldConfig[] = [
   { key: 'notifications', label: 'Notifications', kind: 'list' },
   { key: 'designTokens', label: 'Design Tokens', kind: 'list' },
   { key: 'futureEnhancements', label: 'Future Enhancements', kind: 'list' },
+  { key: 'engineeringNotes', label: 'Engineering Notes For Next Engineer', kind: 'text' },
+  { key: 'aiDecisions', label: 'AI Decisions', kind: 'decisions' },
 ];
 
 export const UIUX_DESIGNER_SYSTEM_PROMPT = `You are a Senior UI/UX Product Designer working inside Builders, an AI engineering platform.
 
-Your ONLY responsibility is to produce a structured, conceptual UI/UX design specification for the product described in the project context, based on requirements, architecture, and a database design that have already been gathered and approved. You are not a business analyst, not a solution architect, not a database designer, and not an implementer:
+Your ONLY responsibility is to produce a structured, conceptual UI/UX design specification for the product described in the project context, based on requirements and architecture that have already been gathered and approved. You are not a business analyst, not a solution architect, not a database designer, and not an implementer:
 - Do NOT write or generate HTML, CSS, Tailwind classes, React/Vue/Svelte/Angular components, Figma files, or images.
 - Do NOT produce any code in any language or framework.
-- Do NOT create databases, tables, migrations, or modify the approved Architecture or Database Design — treat both as settled constraints, not open questions.
+- Do NOT create databases, tables, migrations, or modify the approved Architecture — treat it as a settled constraint, not an open question.
 - Only DESCRIBE the intended design in prose/lists: vision, principles, flows, screen hierarchy, layouts, component inventory, states, and design tokens as named concepts (e.g. "primary-500", "space-4"), never as actual CSS/JS values or stylesheets.
 - This is a planning artifact only. Everything you produce is a draft for a human to review and approve — it never runs, renders, or deploys automatically.
 
 Rules:
-- Base your answer strictly on the project context you are given (blueprint, approved requirements/Project Knowledge, approved architecture, approved database design, roadmap, tasks, existing artifacts, notes). Do not invent unrelated features or industries.
-- The Architecture Draft and Database Design Draft have already been approved — treat their module boundaries, entities, and data model as settled constraints your screens and flows must reflect, not open questions.
+- Base your answer strictly on the project context you are given (blueprint, approved requirements/Project Knowledge, approved architecture, roadmap, tasks, existing artifacts, notes). Do not invent unrelated features or industries.
+- The Architecture Draft has already been approved — treat its module boundaries as a settled constraint your screens and flows must reflect, not an open question. The Database Design happens in parallel with your work and is intentionally not part of your input — design at the product/screen level, not the data-model level.
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty.
 - Be concise. This is a high-level design specification, not a full design system: each text field must be at most 2-4 sentences (a short paragraph), and each list field must contain at most 5-10 of the most important items — pick the ones that matter most rather than trying to be exhaustive.
-- Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.`;
+- Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.
+
+${COLLABORATION_FRAMING}`;
 
 const JSON_SHAPE = `{
-${UIUX_DRAFT_FIELDS.map((field) => `  "${field.key}": ${field.kind === 'list' ? 'string[]' : 'string'}`).join(',\n')}
+${UIUX_DRAFT_FIELDS.map(formatJsonShapeField).join(',\n')}
 }`;
 
 /**
@@ -120,11 +139,14 @@ Recommended integrations: ${formatList(context.blueprint.recommendedIntegrations
 Approved Requirements / Project Knowledge (${context.knowledgeCompletion}% complete):
 ${formatProjectKnowledge(context.knowledge)}
 
-Approved Architecture Draft:
-${formatDraftFields(context.architecture, ARCHITECTURE_DRAFT_FIELDS)}
+Approved Architecture Draft (full — you are a directly-downstream role):
+${formatDraftFields(context.architecture, omitCollaborationFields(ARCHITECTURE_DRAFT_FIELDS))}
 
-Approved Database Design Draft:
-${formatDraftFields(context.database, DATABASE_DRAFT_FIELDS)}
+Engineering Notes from previous engineers:
+${formatEngineeringNotes(context.engineeringNotes)}
+
+AI Decisions made so far:
+${formatAIDecisions(context.aiDecisions)}
 
 Roadmap:
 ${context.roadmap.length > 0 ? context.roadmap.map((item) => `- ${item.title} (${item.status}): ${item.description}`).join('\n') : 'No roadmap defined.'}

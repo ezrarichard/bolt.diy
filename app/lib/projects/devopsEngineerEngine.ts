@@ -18,6 +18,12 @@ import type { BackendDraft } from './prompts/backend';
 import type { FrontendDraft } from './prompts/frontend';
 import type { QADraft } from './prompts/qa';
 import {
+  gatherAIDecisions,
+  gatherEngineeringNotes,
+  type AIDecisionEntry,
+  type EngineeringNoteEntry,
+} from './collaborationContext';
+import {
   buildDevOpsUserPrompt,
   DEVOPS_DRAFT_FIELDS,
   DEVOPS_ENGINEER_SYSTEM_PROMPT,
@@ -61,12 +67,20 @@ export interface DevOpsContext {
   };
   knowledge: ProjectKnowledge | undefined;
   knowledgeCompletion: number;
+
+  /** Sprint 32 — DevOps reads every upstream role (per spec: "reads EVERYTHING"); everything but QA is carried as a summary, QA in full (the immediately preceding role) — see prompts/devops.ts for that split. */
   architecture: ArchitectureDraft | undefined;
   database: DatabaseDraft | undefined;
   uiux: UIUXDraft | undefined;
   backend: BackendDraft | undefined;
   frontend: FrontendDraft | undefined;
   qa: QADraft | undefined;
+
+  /** Sprint 32 — every upstream role's Engineering Notes gathered so far. */
+  engineeringNotes: EngineeringNoteEntry[];
+
+  /** Sprint 32 — every upstream role's AI Decisions log gathered so far. */
+  aiDecisions: AIDecisionEntry[];
   roadmap: { title: string; description: string; status: string }[];
   tasks: { title: string; category: string; status: string }[];
   existingArtifacts: { title: string; type: string; status: string }[];
@@ -153,6 +167,8 @@ function buildDevOpsContext(project: Project): DevOpsContext {
     backend,
     frontend,
     qa,
+    engineeringNotes: gatherEngineeringNotes(artifacts, 'DevOps Engineer'),
+    aiDecisions: gatherAIDecisions(artifacts, 'DevOps Engineer'),
     roadmap,
     tasks,
     existingArtifacts,

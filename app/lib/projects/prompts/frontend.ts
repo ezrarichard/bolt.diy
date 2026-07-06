@@ -1,9 +1,18 @@
 import type { FrontendContext } from '~/lib/projects/frontendEngineerEngine';
-import { ARCHITECTURE_DRAFT_FIELDS } from './architecture';
-import { DATABASE_DRAFT_FIELDS } from './database';
+import type { AIDecision } from '~/lib/projects/draftParsing';
 import { UIUX_DRAFT_FIELDS } from './uiux';
 import { BACKEND_DRAFT_FIELDS } from './backend';
-import { formatDraftFields, formatList, formatProjectKnowledge } from './shared';
+import { summarizeArchitecture } from './summaries';
+import {
+  COLLABORATION_FRAMING,
+  formatAIDecisions,
+  formatDraftFields,
+  formatEngineeringNotes,
+  formatJsonShapeField,
+  formatList,
+  formatProjectKnowledge,
+  omitCollaborationFields,
+} from './shared';
 
 /**
  * Frontend Engineer prompt — Sprint 20.
@@ -50,12 +59,18 @@ export interface FrontendDraft {
   frontendFolderStructure?: string[];
   testingStrategy?: string;
   recommendedNextSteps?: string[];
+
+  /** Sprint 32 — freeform recommendations for the next role (the QA Engineer). See app/lib/projects/collaborationContext.ts. */
+  engineeringNotes?: string;
+
+  /** Sprint 32 — structured decision log (see draftParsing.ts's `AIDecision`), carried forward to every later role. */
+  aiDecisions?: AIDecision[];
 }
 
 export interface FrontendDraftFieldConfig {
   key: keyof FrontendDraft;
   label: string;
-  kind: 'text' | 'list';
+  kind: 'text' | 'list' | 'decisions';
 }
 
 /**
@@ -94,11 +109,13 @@ export const FRONTEND_DRAFT_FIELDS: FrontendDraftFieldConfig[] = [
   { key: 'frontendFolderStructure', label: 'Frontend Folder Structure', kind: 'list' },
   { key: 'testingStrategy', label: 'Testing Strategy', kind: 'text' },
   { key: 'recommendedNextSteps', label: 'Recommended Next Steps', kind: 'list' },
+  { key: 'engineeringNotes', label: 'Engineering Notes For Next Engineer', kind: 'text' },
+  { key: 'aiDecisions', label: 'AI Decisions', kind: 'decisions' },
 ];
 
 export const FRONTEND_ENGINEER_SYSTEM_PROMPT = `You are a Senior Frontend Engineer working inside Builders, an AI engineering platform.
 
-Your ONLY responsibility is to design the frontend for the product described in the project context, based on requirements, architecture, database design, UI/UX design, and backend design that have already been gathered and approved. You are not a business analyst, solution architect, database designer, UI/UX designer, or backend engineer, and you are not an implementer:
+Your ONLY responsibility is to design the frontend for the product described in the project context, based on requirements, architecture, UI/UX design, and backend design that have already been gathered and approved. You are not a business analyst, solution architect, database designer, UI/UX designer, or backend engineer, and you are not an implementer:
 - Do NOT write or generate frontend code in any framework (React, Next.js, Remix, Vue, Angular, Flutter, SwiftUI, Jetpack Compose, or any other).
 - Do NOT write or generate HTML, CSS, or Tailwind classes.
 - Do NOT generate actual components, files, or a Figma design.
@@ -107,14 +124,16 @@ Your ONLY responsibility is to design the frontend for the product described in 
 - This is a planning artifact only. Everything you produce is a draft for a human to review and approve — it never runs, builds, or deploys automatically.
 
 Rules:
-- Base your answer strictly on the project context you are given (blueprint, approved requirements/Project Knowledge, approved architecture, approved database design, approved UI/UX design, approved backend design, roadmap, tasks, existing artifacts, notes). Do not invent unrelated features or industries.
-- The Architecture Draft, Database Design Draft, UI/UX Draft, and Backend Draft have already been approved — treat their module boundaries, data model, user flows, and API design as settled constraints your frontend design must support, not open questions.
+- Base your answer strictly on the project context you are given (blueprint, approved requirements/Project Knowledge, approved architecture, approved UI/UX design, approved backend design, roadmap, tasks, existing artifacts, notes). Do not invent unrelated features or industries.
+- The UI/UX Draft and Backend Draft have already been approved — treat their screens/flows and API design as settled constraints your frontend design must support, not open questions. Database design is intentionally not part of your input — you consume the backend's API, not the schema underneath it.
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty.
 - Be concise. This is a high-level frontend design specification, not a full implementation: each text field must be at most 2-4 sentences (a short paragraph), and each list field must contain at most 5-10 of the most important items — pick the ones that matter most rather than trying to be exhaustive.
-- Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.`;
+- Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.
+
+${COLLABORATION_FRAMING}`;
 
 const JSON_SHAPE = `{
-${FRONTEND_DRAFT_FIELDS.map((field) => `  "${field.key}": ${field.kind === 'list' ? 'string[]' : 'string'}`).join(',\n')}
+${FRONTEND_DRAFT_FIELDS.map(formatJsonShapeField).join(',\n')}
 }`;
 
 /**
@@ -133,17 +152,20 @@ Recommended integrations: ${formatList(context.blueprint.recommendedIntegrations
 Approved Requirements / Project Knowledge (${context.knowledgeCompletion}% complete):
 ${formatProjectKnowledge(context.knowledge)}
 
-Approved Architecture Draft:
-${formatDraftFields(context.architecture, ARCHITECTURE_DRAFT_FIELDS)}
+Approved Architecture (summary):
+${summarizeArchitecture(context.architecture)}
 
-Approved Database Design Draft:
-${formatDraftFields(context.database, DATABASE_DRAFT_FIELDS)}
+Approved UI/UX Draft (full — directly relevant to your role):
+${formatDraftFields(context.uiux, omitCollaborationFields(UIUX_DRAFT_FIELDS))}
 
-Approved UI/UX Draft:
-${formatDraftFields(context.uiux, UIUX_DRAFT_FIELDS)}
+Approved Backend Draft (full — you are the next role in the chain):
+${formatDraftFields(context.backend, omitCollaborationFields(BACKEND_DRAFT_FIELDS))}
 
-Approved Backend Draft:
-${formatDraftFields(context.backend, BACKEND_DRAFT_FIELDS)}
+Engineering Notes from previous engineers:
+${formatEngineeringNotes(context.engineeringNotes)}
+
+AI Decisions made so far:
+${formatAIDecisions(context.aiDecisions)}
 
 Roadmap:
 ${context.roadmap.length > 0 ? context.roadmap.map((item) => `- ${item.title} (${item.status}): ${item.description}`).join('\n') : 'No roadmap defined.'}

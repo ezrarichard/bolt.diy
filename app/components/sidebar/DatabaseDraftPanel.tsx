@@ -1,6 +1,7 @@
 import { classNames } from '~/utils/classNames';
 import { type Project } from '~/lib/stores/projects';
 import { ARTIFACT_TYPES, formatArtifactTimestamp } from '~/lib/projects/artifacts';
+import type { AIDecision } from '~/lib/projects/draftParsing';
 import { databaseDesignerEngine } from '~/lib/projects/databaseDesignerEngine';
 import { DATABASE_DRAFT_FIELDS, type DatabaseDraft } from '~/lib/projects/prompts/database';
 import { useDraftPanel } from '~/lib/hooks/useDraftPanel';
@@ -47,6 +48,7 @@ export function DatabaseDraftPanel({ project }: DatabaseDraftPanelProps) {
     latest,
     latestDraft,
     isPreviewing,
+    isPendingApproval,
     statusMeta,
     runGeneration,
     handleApprove,
@@ -93,15 +95,71 @@ export function DatabaseDraftPanel({ project }: DatabaseDraftPanelProps) {
             <div className="text-[11px] font-semibold uppercase tracking-wide text-purple-600 dark:text-purple-300">
               Database Design Draft Preview
             </div>
-            <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-purple-500/30 text-purple-600 dark:text-purple-300">
-              v{latest?.version ?? 1}
-            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              {!isPendingApproval && statusMeta && (
+                <span
+                  className={classNames(
+                    'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border',
+                    statusMeta.className,
+                  )}
+                >
+                  {statusMeta.label}
+                </span>
+              )}
+              <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-purple-500/30 text-purple-600 dark:text-purple-300">
+                v{latest?.version ?? 1}
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {DATABASE_DRAFT_FIELDS.map((field) => {
               const value = latestDraft?.[field.key];
-              const display = Array.isArray(value) ? value.join(', ') : value;
+
+              if (field.kind === 'decisions') {
+                const decisions = value as AIDecision[] | undefined;
+
+                if (!decisions || decisions.length === 0) {
+                  return null;
+                }
+
+                return (
+                  <div key={field.key} className="md:col-span-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+                      {field.label}
+                    </div>
+                    <ul className="space-y-2">
+                      {decisions.map((entry, index) => (
+                        <li
+                          key={index}
+                          className="text-sm text-bolt-elements-textSecondary rounded-lg border border-bolt-elements-borderColor/30 p-2.5"
+                        >
+                          <div className="font-medium text-bolt-elements-textPrimary">{entry.decision}</div>
+                          <div>{entry.reason}</div>
+                          {entry.alternativeConsidered && (
+                            <div className="text-xs text-bolt-elements-textTertiary mt-1">
+                              Alternative considered: {entry.alternativeConsidered}
+                              {entry.whyRejected ? ` — rejected: ${entry.whyRejected}` : ''}
+                            </div>
+                          )}
+                          {entry.recommendation && (
+                            <div className="text-xs text-bolt-elements-textTertiary mt-1">
+                              Recommendation: {entry.recommendation}
+                            </div>
+                          )}
+                          {entry.futureImprovements && (
+                            <div className="text-xs text-bolt-elements-textTertiary mt-1">
+                              Future improvements: {entry.futureImprovements}
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              }
+
+              const display = Array.isArray(value) ? (value as string[]).join(', ') : (value as string | undefined);
 
               if (!display) {
                 return null;
@@ -119,20 +177,24 @@ export function DatabaseDraftPanel({ project }: DatabaseDraftPanelProps) {
           </div>
 
           <div className="mt-5 pt-4 border-t border-purple-500/20 flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={handleApprove}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-purple-500 text-white hover:bg-purple-600 transition-colors"
-            >
-              Approve
-            </button>
-            <button
-              type="button"
-              onClick={handleDiscard}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/50 text-bolt-elements-textSecondary hover:text-bolt-elements-textPrimary"
-            >
-              Discard
-            </button>
+            {isPendingApproval && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleApprove}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-purple-500 text-white hover:bg-purple-600 transition-colors"
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDiscard}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/50 text-bolt-elements-textSecondary hover:text-bolt-elements-textPrimary"
+                >
+                  Discard
+                </button>
+              </>
+            )}
             <button
               type="button"
               disabled={isGenerating}

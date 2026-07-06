@@ -5,6 +5,12 @@ import type { ProjectKnowledge } from './knowledge';
 import { ARTIFACT_TYPES, createArtifact, getApprovedArtifactContent, type ProjectArtifact } from './artifacts';
 import { parseStructuredDraft, type ParsedDraftResult } from './draftParsing';
 import {
+  gatherAIDecisions,
+  gatherEngineeringNotes,
+  type AIDecisionEntry,
+  type EngineeringNoteEntry,
+} from './collaborationContext';
+import {
   getProjectArtifacts,
   getProjectKnowledge,
   getRoadmapItemStatus,
@@ -12,7 +18,6 @@ import {
   type Project,
 } from '~/lib/stores/projects';
 import type { ArchitectureDraft } from './prompts/architecture';
-import type { DatabaseDraft } from './prompts/database';
 import { buildUIUXUserPrompt, UIUX_DESIGNER_SYSTEM_PROMPT, UIUX_DRAFT_FIELDS, type UIUXDraft } from './prompts/uiux';
 
 /**
@@ -33,6 +38,15 @@ import { buildUIUXUserPrompt, UIUX_DESIGNER_SYSTEM_PROMPT, UIUX_DRAFT_FIELDS, ty
  * Project Knowledge, the Architecture Draft, or the Database Design Draft —
  * it only marks this artifact approved. No React, no UI, no prompt strings
  * inlined here — those live in app/lib/projects/prompts/uiux.ts.
+ *
+ * Sprint 32 — the UX Engineer's curated input is Business Analyst +
+ * Architecture only (not Database): UX flows from product intent and
+ * system boundaries, not schema detail, and the autonomous pipeline still
+ * runs Database Engineer before UX Engineer (array order in
+ * autoEngineeringEngine.ts), so this is a deliberate narrowing of *content*
+ * relevance, not a change to execution order. See the "VERY IMPORTANT"
+ * anti-duplication guidance this sprint added — every role reads only what
+ * a real engineer in that role would actually need.
  */
 
 export interface UIUXContext {
@@ -47,8 +61,15 @@ export interface UIUXContext {
   };
   knowledge: ProjectKnowledge | undefined;
   knowledgeCompletion: number;
+
+  /** Full content — UX Engineer's directly relevant upstream role per Sprint 32's curated dependency map (Database is deliberately excluded here). */
   architecture: ArchitectureDraft | undefined;
-  database: DatabaseDraft | undefined;
+
+  /** Sprint 32 — every upstream role's Engineering Notes gathered so far. See collaborationContext.ts. */
+  engineeringNotes: EngineeringNoteEntry[];
+
+  /** Sprint 32 — every upstream role's AI Decisions log gathered so far. */
+  aiDecisions: AIDecisionEntry[];
   roadmap: { title: string; description: string; status: string }[];
   tasks: { title: string; category: string; status: string }[];
   existingArtifacts: { title: string; type: string; status: string }[];
@@ -69,33 +90,31 @@ const ARTIFACT_TYPE = ARTIFACT_TYPES.UIUX_DRAFT;
 const ARTIFACT_TASK_ID = 'requirements';
 
 /**
- * UI/UX Design can only be generated once the Database Design Draft has
- * been approved — the UI/UX Design Panel gates on this and explains why the
- * button is disabled otherwise.
+ * UI/UX Design can only be generated once the Architecture Draft has been
+ * approved — the UI/UX Design Panel gates on this and explains why the
+ * button is disabled otherwise. Sprint 32 — narrowed from requiring Database
+ * (UX's curated input is Business Analyst + Architecture only); the
+ * autonomous pipeline still runs Database Engineer before UX Engineer via
+ * array order in autoEngineeringEngine.ts regardless of this gate.
  */
 function canGenerateUIUX(project: Project): boolean {
   return (
-    getApprovedArtifactContent<DatabaseDraft>(getProjectArtifacts(project), ARTIFACT_TYPES.DATABASE_DRAFT) !== undefined
+    getApprovedArtifactContent<ArchitectureDraft>(getProjectArtifacts(project), ARTIFACT_TYPES.ARCHITECTURE_DRAFT) !==
+    undefined
   );
 }
 
 /**
  * Gathers Project + Blueprint + approved Requirements/Project Knowledge +
- * approved Architecture Draft + approved Database Design Draft + Roadmap +
- * Current Tasks + existing Artifacts + Notes into one structured context
- * object — same pattern as databaseDesignerEngine.buildDatabaseContext.
+ * approved Architecture Draft + Engineering Notes/AI Decisions so far +
+ * Roadmap + Current Tasks + existing Artifacts + Notes into one structured
+ * context object — same pattern as databaseDesignerEngine.buildDatabaseContext.
  */
 function buildUIUXContext(project: Project): UIUXContext {
   const blueprint = blueprintEngine.getBlueprint(project.blueprintId) ?? blueprintEngine.getDefaultBlueprint();
   const knowledge = getProjectKnowledge(project);
-  const architecture = getApprovedArtifactContent<ArchitectureDraft>(
-    getProjectArtifacts(project),
-    ARTIFACT_TYPES.ARCHITECTURE_DRAFT,
-  );
-  const database = getApprovedArtifactContent<DatabaseDraft>(
-    getProjectArtifacts(project),
-    ARTIFACT_TYPES.DATABASE_DRAFT,
-  );
+  const artifacts = getProjectArtifacts(project);
+  const architecture = getApprovedArtifactContent<ArchitectureDraft>(artifacts, ARTIFACT_TYPES.ARCHITECTURE_DRAFT);
 
   const roadmap = blueprintEngine.getRoadmap(blueprint.id).map((item) => ({
     title: item.title,
@@ -109,7 +128,7 @@ function buildUIUXContext(project: Project): UIUXContext {
     status: task.status,
   }));
 
-  const existingArtifacts = getProjectArtifacts(project).map((artifact) => ({
+  const existingArtifacts = artifacts.map((artifact) => ({
     title: artifact.title,
     type: artifact.type,
     status: artifact.status,
@@ -130,7 +149,8 @@ function buildUIUXContext(project: Project): UIUXContext {
     knowledge,
     knowledgeCompletion: projectKnowledgeEngine.getCompletion(knowledge).overall,
     architecture,
-    database,
+    engineeringNotes: gatherEngineeringNotes(artifacts, 'UX Engineer'),
+    aiDecisions: gatherAIDecisions(artifacts, 'UX Engineer'),
     roadmap,
     tasks,
     existingArtifacts,

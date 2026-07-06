@@ -1,20 +1,25 @@
 /**
- * BuildersDB client — Sprint 18.
+ * BuildersDB client — Sprint 18, wired up for real in Sprint 34.
  *
- * Configuration/connection point for the future BuildersDB Supabase
- * project — the Builders PLATFORM's own control-plane database. This is
- * NEVER the generated application's database; see types.ts for that
- * distinction. Nothing here talks to app/lib/stores/supabase.ts or
+ * Configuration/connection point for the BuildersDB Supabase project — the
+ * Builders PLATFORM's own control-plane database. This is NEVER the
+ * generated application's database; see types.ts for that distinction.
+ * Nothing here talks to app/lib/stores/supabase.ts or
  * app/routes/api.supabase*.ts (the existing, unrelated feature that
- * connects a user's in-progress product to ITS OWN Supabase project).
+ * connects a user's in-progress product to ITS OWN Supabase project) —
+ * hence the deliberately different env var names below.
  *
- * No `@supabase/supabase-js` dependency exists in this project yet, and
- * this sprint deliberately does not add one — see docs/buildersdb.md.
- * `getBuildersDbClient()` always returns null until a future sprint adds
- * that dependency and wires up a real client here. Reading configuration
- * below never throws and never requires the environment variables to be
- * set — an unconfigured BuildersDB is the expected state today.
+ * `getBuildersDbClient()` returns null whenever `BUILDERS_DB_SUPABASE_URL`/
+ * `BUILDERS_DB_SUPABASE_ANON_KEY` aren't set (the expected state until a
+ * real BuildersDB Supabase project — see
+ * supabase/migrations/20260706120000_buildersdb_foundation.sql for the
+ * schema to run against it — is provisioned and configured). Every caller
+ * in app/lib/builders-db/repositories/buildersDbRepository.ts treats a null
+ * client as "BuildersDB unavailable, fall back to local-only behavior" —
+ * never a crash.
  */
+
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 export interface BuildersDbConfig {
   url: string;
@@ -49,13 +54,33 @@ export function isBuildersDbConfigured(): boolean {
   return getBuildersDbConfig() !== undefined;
 }
 
+let cachedClient: SupabaseClient | null | undefined;
+
 /**
- * TODO (future sprint): once `@supabase/supabase-js` is added as a
- * dependency, replace this stub with `createClient(config.url,
- * config.anonKey)` from that package and return a real `SupabaseClient`.
- * Returns null unconditionally today, regardless of configuration — no
- * client library is installed yet.
+ * Returns a memoized `SupabaseClient` once `BUILDERS_DB_SUPABASE_URL`/
+ * `BUILDERS_DB_SUPABASE_ANON_KEY` are both set, or `null` otherwise —
+ * never throws. `cachedClient` is deliberately allowed to be `null` (not
+ * just `undefined`) so an unconfigured environment doesn't retry
+ * `createClient` on every call.
  */
-export function getBuildersDbClient(): null {
-  return null;
+export function getBuildersDbClient(): SupabaseClient | null {
+  if (cachedClient !== undefined) {
+    return cachedClient;
+  }
+
+  const config = getBuildersDbConfig();
+
+  if (!config) {
+    cachedClient = null;
+    return cachedClient;
+  }
+
+  try {
+    cachedClient = createClient(config.url, config.anonKey);
+  } catch (error) {
+    console.error('[BuildersDB] Failed to create Supabase client:', error);
+    cachedClient = null;
+  }
+
+  return cachedClient;
 }

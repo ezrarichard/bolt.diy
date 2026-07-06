@@ -16,6 +16,12 @@ import type { DatabaseDraft } from './prompts/database';
 import type { UIUXDraft } from './prompts/uiux';
 import type { BackendDraft } from './prompts/backend';
 import type { FrontendDraft } from './prompts/frontend';
+import {
+  gatherAIDecisions,
+  gatherEngineeringNotes,
+  type AIDecisionEntry,
+  type EngineeringNoteEntry,
+} from './collaborationContext';
 import { buildQAUserPrompt, QA_DRAFT_FIELDS, QA_ENGINEER_SYSTEM_PROMPT, type QADraft } from './prompts/qa';
 
 /**
@@ -53,11 +59,19 @@ export interface QAContext {
   };
   knowledge: ProjectKnowledge | undefined;
   knowledgeCompletion: number;
+
+  /** Sprint 32 — QA reads every upstream role (per spec: "reads EVERYTHING"); architecture/database/uiux are carried as summaries and backend/frontend in full — see prompts/qa.ts for that split. */
   architecture: ArchitectureDraft | undefined;
   database: DatabaseDraft | undefined;
   uiux: UIUXDraft | undefined;
   backend: BackendDraft | undefined;
   frontend: FrontendDraft | undefined;
+
+  /** Sprint 32 — every upstream role's Engineering Notes gathered so far. */
+  engineeringNotes: EngineeringNoteEntry[];
+
+  /** Sprint 32 — every upstream role's AI Decisions log gathered so far. */
+  aiDecisions: AIDecisionEntry[];
   roadmap: { title: string; description: string; status: string }[];
   tasks: { title: string; category: string; status: string }[];
   existingArtifacts: { title: string; type: string; status: string }[];
@@ -143,6 +157,8 @@ function buildQAContext(project: Project): QAContext {
     uiux,
     backend,
     frontend,
+    engineeringNotes: gatherEngineeringNotes(artifacts, 'QA Engineer'),
+    aiDecisions: gatherAIDecisions(artifacts, 'QA Engineer'),
     roadmap,
     tasks,
     existingArtifacts,

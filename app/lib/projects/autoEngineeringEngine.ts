@@ -50,6 +50,9 @@ export interface AutoEngineeringRole {
 /** Matches every "*DraftPanel" component's MAX_OUTPUT_TOKENS today (Architecture, Database, UI/UX, Backend, Frontend, QA, DevOps all use 8192) — the autonomous pipeline asks for exactly the same budget a human-driven generation would have. */
 const AUTO_ENGINEERING_MAX_OUTPUT_TOKENS = 8192;
 
+/** Rough, presentation-only estimate shown next to the currently-generating role in the AI Engineering Team panel — not a real measurement, just a "this takes a moment" hint sized to the shared 8192-token budget above. */
+export const AUTO_ENGINEERING_ESTIMATED_SECONDS = 20;
+
 /**
  * Fixed order, one entry per non-Requirements engineering role. Each role's
  * `canGenerate` already encodes "the previous role's artifact is approved"

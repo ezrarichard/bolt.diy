@@ -1,5 +1,6 @@
 import type { RequirementsContext } from '~/lib/projects/businessAnalystEngine';
-import { formatList, formatProjectKnowledge } from './shared';
+import type { AIDecision } from '~/lib/projects/draftParsing';
+import { formatJsonShapeField, formatList, formatProjectKnowledge } from './shared';
 
 /**
  * Business Analyst prompt — Sprint 13.
@@ -21,10 +22,14 @@ export interface RequirementsDraft {
   businessVision?: string;
   targetAudience?: string;
   businessModel?: string;
+  personas?: string[];
   coreFeatures?: string[];
   pages?: string[];
   userRoles?: string[];
   businessRules?: string[];
+  functionalRequirements?: string[];
+  nonFunctionalRequirements?: string[];
+  acceptanceCriteria?: string[];
   compliance?: string[];
   payments?: string[];
   shipping?: string[];
@@ -34,12 +39,18 @@ export interface RequirementsDraft {
   successMetrics?: string[];
   technologyRecommendations?: string[];
   openQuestions?: string[];
+
+  /** Sprint 32 — freeform recommendations for whichever engineer picks up next (the Solution Architect). See app/lib/projects/collaborationContext.ts. */
+  engineeringNotes?: string;
+
+  /** Sprint 32 — structured decision log (see draftParsing.ts's `AIDecision`), carried forward to every later role via collaborationContext.ts. */
+  aiDecisions?: AIDecision[];
 }
 
 export interface RequirementsDraftFieldConfig {
   key: keyof RequirementsDraft;
   label: string;
-  kind: 'text' | 'list';
+  kind: 'text' | 'list' | 'decisions';
 }
 
 /**
@@ -52,10 +63,14 @@ export const REQUIREMENTS_DRAFT_FIELDS: RequirementsDraftFieldConfig[] = [
   { key: 'businessVision', label: 'Business Vision', kind: 'text' },
   { key: 'targetAudience', label: 'Target Audience', kind: 'text' },
   { key: 'businessModel', label: 'Business Model', kind: 'text' },
+  { key: 'personas', label: 'Personas', kind: 'list' },
   { key: 'coreFeatures', label: 'Core Features', kind: 'list' },
   { key: 'pages', label: 'Pages', kind: 'list' },
   { key: 'userRoles', label: 'User Roles', kind: 'list' },
   { key: 'businessRules', label: 'Business Rules', kind: 'list' },
+  { key: 'functionalRequirements', label: 'Functional Requirements', kind: 'list' },
+  { key: 'nonFunctionalRequirements', label: 'Non-Functional Requirements', kind: 'list' },
+  { key: 'acceptanceCriteria', label: 'Acceptance Criteria', kind: 'list' },
   { key: 'compliance', label: 'Compliance', kind: 'list' },
   { key: 'payments', label: 'Payments', kind: 'list' },
   { key: 'shipping', label: 'Shipping', kind: 'list' },
@@ -65,6 +80,8 @@ export const REQUIREMENTS_DRAFT_FIELDS: RequirementsDraftFieldConfig[] = [
   { key: 'successMetrics', label: 'Success Metrics', kind: 'list' },
   { key: 'technologyRecommendations', label: 'Technology Recommendations', kind: 'list' },
   { key: 'openQuestions', label: 'Open Questions', kind: 'list' },
+  { key: 'engineeringNotes', label: 'Engineering Notes For Next Engineer', kind: 'text' },
+  { key: 'aiDecisions', label: 'AI Decisions', kind: 'decisions' },
 ];
 
 export const BUSINESS_ANALYST_SYSTEM_PROMPT = `You are a Senior Business Analyst working inside Builders, an AI engineering platform.
@@ -78,10 +95,11 @@ Rules:
 - Think like an experienced business analyst gathering requirements for a real client engagement.
 - Base your answer strictly on the project context you are given (blueprint, existing knowledge, roadmap, tasks, notes). Do not invent unrelated features or industries.
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty — but list genuine uncertainties under "openQuestions" instead of guessing wildly.
+- You are the first engineer on this project — there is no prior work to build on, but the Solution Architect who works from your output next has nothing else to go on. Use "engineeringNotes" to flag anything they specifically need to design around (e.g. "this will likely need multi-tenant support later — keep data structures extensible"). Use "aiDecisions" for the handful of real judgment calls you made (e.g. choosing a business model interpretation, scoping a feature in or out) — each entry needs a "decision" and a "reason" at minimum.
 - Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.`;
 
 const JSON_SHAPE = `{
-${REQUIREMENTS_DRAFT_FIELDS.map((field) => `  "${field.key}": ${field.kind === 'list' ? 'string[]' : 'string'}`).join(',\n')}
+${REQUIREMENTS_DRAFT_FIELDS.map(formatJsonShapeField).join(',\n')}
 }`;
 
 /**

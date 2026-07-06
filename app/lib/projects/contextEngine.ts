@@ -17,7 +17,36 @@ import { BACKEND_DRAFT_FIELDS, type BackendDraft } from './prompts/backend';
 import { FRONTEND_DRAFT_FIELDS, type FrontendDraft } from './prompts/frontend';
 import { QA_DRAFT_FIELDS, type QADraft } from './prompts/qa';
 import { DEVOPS_DRAFT_FIELDS, type DevOpsDraft } from './prompts/devops';
-import { formatDraftFields, formatList, formatProjectKnowledge } from './prompts/shared';
+import { formatDraftFields, formatList } from './prompts/shared';
+import {
+  summarizeArchitecture,
+  summarizeBackend,
+  summarizeDatabase,
+  summarizeDevOps,
+  summarizeFrontend,
+  summarizeQA,
+  summarizeRequirements,
+  summarizeUIUX,
+} from './prompts/summaries';
+
+/**
+ * Sprint 32 — re-exported unchanged so this file's existing public shape
+ * doesn't move; the actual implementations now live in
+ * prompts/summaries.ts so `prompts/backend.ts`/`frontend.ts`/`qa.ts`/
+ * `devops.ts` can import them directly (importing them from here would
+ * cycle, since this file already imports each of those prompt files'
+ * `*_DRAFT_FIELDS`/Draft type).
+ */
+export {
+  summarizeArchitecture,
+  summarizeBackend,
+  summarizeDatabase,
+  summarizeDevOps,
+  summarizeFrontend,
+  summarizeQA,
+  summarizeRequirements,
+  summarizeUIUX,
+};
 
 /**
  * Context Engine — Sprint 17, extended Sprint 19 for the real Backend
@@ -160,133 +189,6 @@ function bulletList(items: string[] | undefined): string | undefined {
 function joinTruthy(lines: (string | number | false | undefined)[]): string | undefined {
   const filtered = lines.filter((line): line is string => typeof line === 'string' && line.length > 0);
   return filtered.length > 0 ? filtered.join('\n') : undefined;
-}
-
-/**
- * Deterministic, AI-free summarizers — Sprint 17. Each picks a handful of
- * the most decision-relevant fields from an approved draft rather than
- * dumping every field (that's what `formatDraftFields` from
- * prompts/shared.ts already does, reused below for the `includeFullArtifacts`
- * escape hatch). "Requirements" in this codebase means Project Knowledge —
- * the Requirements Draft artifact only ever folds into Project Knowledge on
- * approval (see businessAnalystEngine.summarizeRequirements), so this
- * summarizer wraps the same `formatProjectKnowledge` helper every other
- * engine already uses to describe it.
- */
-export function summarizeRequirements(knowledge: ProjectKnowledge | undefined): string {
-  return formatProjectKnowledge(knowledge);
-}
-
-export function summarizeArchitecture(draft: ArchitectureDraft | undefined): string {
-  if (!draft) {
-    return 'No approved Architecture Draft yet.';
-  }
-
-  return (
-    joinTruthy([
-      draft.architectureSummary && `Summary: ${draft.architectureSummary}`,
-      draft.applicationModules?.length && `Modules: ${formatList(draft.applicationModules)}`,
-      draft.backendArchitecture && `Backend: ${draft.backendArchitecture}`,
-      draft.databaseArchitecture && `Database: ${draft.databaseArchitecture}`,
-      draft.integrations?.length && `Integrations: ${formatList(draft.integrations)}`,
-      draft.deploymentArchitecture && `Deployment: ${draft.deploymentArchitecture}`,
-    ]) ?? 'No approved Architecture Draft yet.'
-  );
-}
-
-export function summarizeDatabase(draft: DatabaseDraft | undefined): string {
-  if (!draft) {
-    return 'No approved Database Design Draft yet.';
-  }
-
-  return (
-    joinTruthy([
-      draft.databaseOverview && `Overview: ${draft.databaseOverview}`,
-      draft.entities?.length && `Entities: ${formatList(draft.entities)}`,
-      draft.relationships?.length && `Relationships: ${formatList(draft.relationships)}`,
-      draft.multiTenantStrategy && `Multi-tenant: ${draft.multiTenantStrategy}`,
-      draft.securityModel && `Security: ${draft.securityModel}`,
-    ]) ?? 'No approved Database Design Draft yet.'
-  );
-}
-
-export function summarizeUIUX(draft: UIUXDraft | undefined): string {
-  if (!draft) {
-    return 'No approved UI/UX Draft yet.';
-  }
-
-  return (
-    joinTruthy([
-      draft.designVision && `Vision: ${draft.designVision}`,
-      draft.userFlows?.length && `User flows: ${formatList(draft.userFlows)}`,
-      draft.screenHierarchy?.length && `Screens: ${formatList(draft.screenHierarchy)}`,
-      draft.navigationStructure && `Navigation: ${draft.navigationStructure}`,
-      draft.componentLibrary?.length && `Components: ${formatList(draft.componentLibrary)}`,
-    ]) ?? 'No approved UI/UX Draft yet.'
-  );
-}
-
-export function summarizeBackend(draft: BackendDraft | undefined): string {
-  if (!draft) {
-    return 'No approved Backend Draft yet.';
-  }
-
-  return (
-    joinTruthy([
-      draft.backendOverview && `Overview: ${draft.backendOverview}`,
-      draft.apiArchitecture && `API architecture: ${draft.apiArchitecture}`,
-      draft.apiEndpoints?.length && `Endpoints: ${formatList(draft.apiEndpoints)}`,
-      draft.authenticationFlow && `Authentication: ${draft.authenticationFlow}`,
-      draft.externalIntegrations?.length && `Integrations: ${formatList(draft.externalIntegrations)}`,
-    ]) ?? 'No approved Backend Draft yet.'
-  );
-}
-
-export function summarizeFrontend(draft: FrontendDraft | undefined): string {
-  if (!draft) {
-    return 'No approved Frontend Draft yet.';
-  }
-
-  return (
-    joinTruthy([
-      draft.frontendOverview && `Overview: ${draft.frontendOverview}`,
-      draft.pageHierarchy?.length && `Pages: ${formatList(draft.pageHierarchy)}`,
-      draft.apiIntegrationStrategy && `API integration: ${draft.apiIntegrationStrategy}`,
-      draft.stateManagement && `State management: ${draft.stateManagement}`,
-      draft.authenticationUX && `Authentication UX: ${draft.authenticationUX}`,
-    ]) ?? 'No approved Frontend Draft yet.'
-  );
-}
-
-export function summarizeQA(draft: QADraft | undefined): string {
-  if (!draft) {
-    return 'No approved QA Draft yet.';
-  }
-
-  return (
-    joinTruthy([
-      draft.qaOverview && `Overview: ${draft.qaOverview}`,
-      draft.qualityObjectives?.length && `Quality objectives: ${formatList(draft.qualityObjectives)}`,
-      draft.acceptanceCriteria?.length && `Acceptance criteria: ${formatList(draft.acceptanceCriteria)}`,
-      draft.knownQualityRisks?.length && `Known risks: ${formatList(draft.knownQualityRisks)}`,
-    ]) ?? 'No approved QA Draft yet.'
-  );
-}
-
-export function summarizeDevOps(draft: DevOpsDraft | undefined): string {
-  if (!draft) {
-    return 'No approved DevOps Draft yet.';
-  }
-
-  return (
-    joinTruthy([
-      draft.devopsOverview && `Overview: ${draft.devopsOverview}`,
-      draft.deploymentStrategy && `Deployment: ${draft.deploymentStrategy}`,
-      draft.hostingRecommendation && `Hosting: ${draft.hostingRecommendation}`,
-      draft.buildersDbStrategy && `BuildersDB: ${draft.buildersDbStrategy}`,
-      draft.applicationDatabaseStrategy && `Application database: ${draft.applicationDatabaseStrategy}`,
-    ]) ?? 'No approved DevOps Draft yet.'
-  );
 }
 
 /** Everything a section builder needs, gathered once per buildContextBundle() call so no builder re-reads the store. */

@@ -1,11 +1,23 @@
 import type { DevOpsContext } from '~/lib/projects/devopsEngineerEngine';
-import { ARCHITECTURE_DRAFT_FIELDS } from './architecture';
-import { DATABASE_DRAFT_FIELDS } from './database';
-import { UIUX_DRAFT_FIELDS } from './uiux';
-import { BACKEND_DRAFT_FIELDS } from './backend';
-import { FRONTEND_DRAFT_FIELDS } from './frontend';
+import type { AIDecision } from '~/lib/projects/draftParsing';
 import { QA_DRAFT_FIELDS } from './qa';
-import { formatDraftFields, formatList, formatProjectKnowledge } from './shared';
+import {
+  summarizeArchitecture,
+  summarizeBackend,
+  summarizeDatabase,
+  summarizeFrontend,
+  summarizeUIUX,
+} from './summaries';
+import {
+  COLLABORATION_FRAMING,
+  formatAIDecisions,
+  formatDraftFields,
+  formatEngineeringNotes,
+  formatJsonShapeField,
+  formatList,
+  formatProjectKnowledge,
+  omitCollaborationFields,
+} from './shared';
 
 /**
  * DevOps Engineer prompt — Sprint 22.
@@ -53,12 +65,18 @@ export interface DevOpsDraft {
   maintenancePlan?: string;
   operationalRisks?: string[];
   recommendedNextSteps?: string[];
+
+  /** Sprint 32 — freeform recommendations for whichever role might follow in the future (e.g. a Security or Performance Engineer). See app/lib/projects/collaborationContext.ts. */
+  engineeringNotes?: string;
+
+  /** Sprint 32 — structured decision log (see draftParsing.ts's `AIDecision`). */
+  aiDecisions?: AIDecision[];
 }
 
 export interface DevOpsDraftFieldConfig {
   key: keyof DevOpsDraft;
   label: string;
-  kind: 'text' | 'list';
+  kind: 'text' | 'list' | 'decisions';
 }
 
 /**
@@ -98,6 +116,8 @@ export const DEVOPS_DRAFT_FIELDS: DevOpsDraftFieldConfig[] = [
   { key: 'maintenancePlan', label: 'Maintenance Plan', kind: 'text' },
   { key: 'operationalRisks', label: 'Operational Risks', kind: 'list' },
   { key: 'recommendedNextSteps', label: 'Recommended Next Steps', kind: 'list' },
+  { key: 'engineeringNotes', label: 'Engineering Notes For Next Engineer', kind: 'text' },
+  { key: 'aiDecisions', label: 'AI Decisions', kind: 'decisions' },
 ];
 
 export const DEVOPS_ENGINEER_SYSTEM_PROMPT = `You are a Senior DevOps Engineer working inside Builders, an AI engineering platform.
@@ -118,10 +138,12 @@ Rules:
 - The Architecture Draft, Database Design Draft, Backend Draft, Frontend Draft, and QA Draft have already been approved — treat their module boundaries, data model, API design, frontend design, and test strategy as settled constraints your operational strategy must support, not open questions.
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty.
 - Be concise. This is a high-level operational strategy, not a runbook: each text field must be at most 2-4 sentences (a short paragraph), and each list field must contain at most 5-10 of the most important items — pick the ones that matter most rather than trying to be exhaustive.
-- Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.`;
+- Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.
+
+${COLLABORATION_FRAMING}`;
 
 const JSON_SHAPE = `{
-${DEVOPS_DRAFT_FIELDS.map((field) => `  "${field.key}": ${field.kind === 'list' ? 'string[]' : 'string'}`).join(',\n')}
+${DEVOPS_DRAFT_FIELDS.map(formatJsonShapeField).join(',\n')}
 }`;
 
 /**
@@ -140,23 +162,29 @@ Recommended integrations: ${formatList(context.blueprint.recommendedIntegrations
 Approved Requirements / Project Knowledge (${context.knowledgeCompletion}% complete):
 ${formatProjectKnowledge(context.knowledge)}
 
-Approved Architecture Draft:
-${formatDraftFields(context.architecture, ARCHITECTURE_DRAFT_FIELDS)}
+Approved Architecture (summary):
+${summarizeArchitecture(context.architecture)}
 
-Approved Database Design Draft:
-${formatDraftFields(context.database, DATABASE_DRAFT_FIELDS)}
+Approved Database Design (summary):
+${summarizeDatabase(context.database)}
 
-Approved UI/UX Draft:
-${formatDraftFields(context.uiux, UIUX_DRAFT_FIELDS)}
+Approved UI/UX Design (summary):
+${summarizeUIUX(context.uiux)}
 
-Approved Backend Draft:
-${formatDraftFields(context.backend, BACKEND_DRAFT_FIELDS)}
+Approved Backend Design (summary):
+${summarizeBackend(context.backend)}
 
-Approved Frontend Draft:
-${formatDraftFields(context.frontend, FRONTEND_DRAFT_FIELDS)}
+Approved Frontend Design (summary):
+${summarizeFrontend(context.frontend)}
 
-Approved QA Draft:
-${formatDraftFields(context.qa, QA_DRAFT_FIELDS)}
+Approved QA Draft (full — you are the next role in the chain):
+${formatDraftFields(context.qa, omitCollaborationFields(QA_DRAFT_FIELDS))}
+
+Engineering Notes from previous engineers:
+${formatEngineeringNotes(context.engineeringNotes)}
+
+AI Decisions made so far:
+${formatAIDecisions(context.aiDecisions)}
 
 Roadmap:
 ${context.roadmap.length > 0 ? context.roadmap.map((item) => `- ${item.title} (${item.status}): ${item.description}`).join('\n') : 'No roadmap defined.'}

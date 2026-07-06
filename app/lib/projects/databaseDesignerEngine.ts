@@ -5,6 +5,12 @@ import type { ProjectKnowledge } from './knowledge';
 import { ARTIFACT_TYPES, createArtifact, getApprovedArtifactContent, type ProjectArtifact } from './artifacts';
 import { parseStructuredDraft, type ParsedDraftResult } from './draftParsing';
 import {
+  gatherAIDecisions,
+  gatherEngineeringNotes,
+  type AIDecisionEntry,
+  type EngineeringNoteEntry,
+} from './collaborationContext';
+import {
   getProjectArtifacts,
   getProjectKnowledge,
   getRoadmapItemStatus,
@@ -51,7 +57,15 @@ export interface DatabaseContext {
   };
   knowledge: ProjectKnowledge | undefined;
   knowledgeCompletion: number;
+
+  /** Full content — Database Engineer is the immediately-next role after Solution Architect, so this is directly relevant rather than summarized. */
   architecture: ArchitectureDraft | undefined;
+
+  /** Sprint 32 — every upstream role's Engineering Notes gathered so far (Business Analyst, Solution Architect). See collaborationContext.ts. */
+  engineeringNotes: EngineeringNoteEntry[];
+
+  /** Sprint 32 — every upstream role's AI Decisions log gathered so far. */
+  aiDecisions: AIDecisionEntry[];
   roadmap: { title: string; description: string; status: string }[];
   tasks: { title: string; category: string; status: string }[];
   existingArtifacts: { title: string; type: string; status: string }[];
@@ -95,6 +109,7 @@ function buildDatabaseContext(project: Project): DatabaseContext {
   const blueprint = blueprintEngine.getBlueprint(project.blueprintId) ?? blueprintEngine.getDefaultBlueprint();
   const knowledge = getProjectKnowledge(project);
   const architecture = getApprovedArchitecture(project);
+  const artifacts = getProjectArtifacts(project);
 
   const roadmap = blueprintEngine.getRoadmap(blueprint.id).map((item) => ({
     title: item.title,
@@ -108,7 +123,7 @@ function buildDatabaseContext(project: Project): DatabaseContext {
     status: task.status,
   }));
 
-  const existingArtifacts = getProjectArtifacts(project).map((artifact) => ({
+  const existingArtifacts = artifacts.map((artifact) => ({
     title: artifact.title,
     type: artifact.type,
     status: artifact.status,
@@ -129,6 +144,8 @@ function buildDatabaseContext(project: Project): DatabaseContext {
     knowledge,
     knowledgeCompletion: projectKnowledgeEngine.getCompletion(knowledge).overall,
     architecture,
+    engineeringNotes: gatherEngineeringNotes(artifacts, 'Database Engineer'),
+    aiDecisions: gatherAIDecisions(artifacts, 'Database Engineer'),
     roadmap,
     tasks,
     existingArtifacts,

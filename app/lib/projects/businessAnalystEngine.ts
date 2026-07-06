@@ -205,7 +205,11 @@ function summarizeRequirements(
     }
   };
 
+  addNoteSection('Personas', draft.personas);
   addNoteSection('Business Rules', draft.businessRules);
+  addNoteSection('Functional Requirements', draft.functionalRequirements);
+  addNoteSection('Non-Functional Requirements', draft.nonFunctionalRequirements);
+  addNoteSection('Acceptance Criteria', draft.acceptanceCriteria);
   addNoteSection('Risks', draft.risks);
   addNoteSection('Future Enhancements', draft.futureEnhancements);
   addNoteSection('Success Metrics', draft.successMetrics);

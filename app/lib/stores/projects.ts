@@ -11,6 +11,7 @@ import type {
 } from '~/lib/projects/reviewEngine';
 import type { GenerationSession } from '~/lib/projects/generationSessionEngine';
 import { createProjectRepository } from '~/lib/builders-db/repositories/projectsRepository';
+import { buildersDbRepository, isBuildersDbAvailable } from '~/lib/builders-db/repositories/buildersDbRepository';
 
 /**
  * Project data model — Sprint 1 (UI-only).
@@ -151,6 +152,56 @@ const projectRepository = createProjectRepository();
 export const projectsStore = atom<Project[]>(projectRepository.loadProjects());
 
 /**
+ * Sprint 34 — BuildersDB write-through.
+ *
+ * `projectRepository` above stays exactly as Sprint 18 left it: synchronous,
+ * localStorage-backed, and the only thing every mutator below awaits/reads
+ * back from. Every mutator ALSO fires an async, best-effort mirror to
+ * BuildersDB's normalized tables (see
+ * app/lib/builders-db/repositories/buildersDbRepository.ts) — deliberately
+ * NOT awaited, so a slow/unreachable/misconfigured BuildersDB can never
+ * block or fail a local write. When `isBuildersDbAvailable()` is false
+ * (no BUILDERS_DB_SUPABASE_URL/BUILDERS_DB_SUPABASE_ANON_KEY set — true for
+ * everyone until BuildersDB is actually provisioned), every mirror call is a
+ * cheap no-op that logs a warning and returns, so local-only usage is
+ * unaffected.
+ */
+function mirrorToBuildersDb(work: () => Promise<unknown>): void {
+  if (!isBuildersDbAvailable()) {
+    return;
+  }
+
+  work().catch((error) => console.error('[BuildersDB] Write-through failed:', error));
+}
+
+/**
+ * Sprint 34 — best-effort initial hydration from BuildersDB, called once by
+ * ProjectList.tsx on mount. Local-first, safe-fallback: `projectsStore`
+ * already holds whatever localStorage had (see the atom initializer above)
+ * before this ever resolves, so the UI never blocks on network. If
+ * BuildersDB is unavailable, or returns zero projects (e.g. a fresh/empty
+ * BuildersDB project), the local list is left untouched — this only ever
+ * REPLACES local state with remote state when BuildersDB actually returned
+ * at least one project, never the other way around.
+ */
+export async function hydrateProjectsFromBuildersDb(): Promise<void> {
+  if (!isBuildersDbAvailable()) {
+    return;
+  }
+
+  try {
+    const remoteProjects = await buildersDbRepository.listProjects();
+
+    if (remoteProjects.length > 0) {
+      projectsStore.set(remoteProjects);
+      projectRepository.saveProjects(remoteProjects);
+    }
+  } catch (error) {
+    console.error('[BuildersDB] hydrateProjectsFromBuildersDb() failed, keeping local projects:', error);
+  }
+}
+
+/**
  * The "Current Project" — Sprint 2 concept. Set when a project is opened
  * from the sidebar (opens the Project Dashboard modal); null when no
  * project is active. Pure UI state, not persisted, not yet consumed by
@@ -214,6 +265,15 @@ export function addProject(input: {
   projectsStore.set([...projectsStore.get(), project]);
   projectRepository.saveProject(project);
 
+  mirrorToBuildersDb(async () => {
+    await buildersDbRepository.createProject(project);
+    await buildersDbRepository.addProjectActivity({
+      projectId: project.id,
+      activityType: 'project_created',
+      description: `Project "${project.name}" created`,
+    });
+  });
+
   return project;
 }
 
@@ -229,8 +289,25 @@ export function addProject(input: {
  * exists.
  */
 export function deleteProject(projectId: string): void {
-  projectsStore.set(projectsStore.get().filter((project) => project.id !== projectId));
+  const project = projectsStore.get().find((candidate) => candidate.id === projectId);
+
+  projectsStore.set(projectsStore.get().filter((candidate) => candidate.id !== projectId));
   projectRepository.deleteProject(projectId);
+
+  mirrorToBuildersDb(async () => {
+    /*
+     * Logged before the delete below (not after): builders_project_activity's
+     * project_id column requires a still-existing row unless it's null, and we want
+     * this entry to record the real project_id, not null (see the migration's
+     * "on delete set null" comment for why the row survives the delete anyway).
+     */
+    await buildersDbRepository.addProjectActivity({
+      projectId,
+      activityType: 'project_deleted',
+      description: `Project "${project?.name ?? projectId}" deleted`,
+    });
+    await buildersDbRepository.deleteProject(projectId);
+  });
 
   if (currentProjectIdStore.get() === projectId) {
     currentProjectIdStore.set(null);
@@ -264,6 +341,12 @@ export function setRoadmapItemStatus(projectId: string, itemKey: string, status:
     );
   projectsStore.set(next);
   projectRepository.saveProjects(next);
+
+  const updated = next.find((project) => project.id === projectId);
+
+  if (updated) {
+    mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
+  }
 }
 
 /**
@@ -321,6 +404,14 @@ export function setTaskStatus(projectId: string, taskId: string, status: Project
 
   projectsStore.set(next);
   projectRepository.updateTasks(next);
+
+  mirrorToBuildersDb(async () => {
+    await buildersDbRepository.updateProjectTask(projectId, { taskId, status });
+
+    if (historyEvent) {
+      await buildersDbRepository.createExecutionLog(projectId, { taskId, eventType: historyEvent });
+    }
+  });
 }
 
 /** Sprint 11 — read a task's notes. Defaults to '' when nothing has been saved yet. */
@@ -342,6 +433,8 @@ export function setTaskNotes(projectId: string, taskId: string, notes: string): 
     );
   projectsStore.set(next);
   projectRepository.updateTasks(next);
+
+  mirrorToBuildersDb(() => buildersDbRepository.updateProjectTask(projectId, { taskId, notes }));
 }
 
 /** Sprint 11 — a project's artifacts (see app/lib/projects/artifacts.ts). Empty array when none exist yet. */
@@ -365,6 +458,15 @@ export function addProjectArtifact(projectId: string, artifact: ProjectArtifact)
     );
   projectsStore.set(next);
   projectRepository.updateArtifacts(next);
+
+  mirrorToBuildersDb(async () => {
+    await buildersDbRepository.createOrUpdateRoleOutput(projectId, artifact);
+    await buildersDbRepository.addProjectActivity({
+      projectId,
+      activityType: 'role_output_saved',
+      description: `${artifact.generatedBy ?? artifact.type} output saved (${artifact.status})`,
+    });
+  });
 }
 
 /**
@@ -389,6 +491,21 @@ export function updateProjectArtifact(projectId: string, artifactId: string, par
   });
   projectsStore.set(next);
   projectRepository.updateArtifacts(next);
+
+  const updatedArtifact = next
+    .find((project) => project.id === projectId)
+    ?.artifacts?.find((artifact) => artifact.id === artifactId);
+
+  if (updatedArtifact) {
+    mirrorToBuildersDb(async () => {
+      await buildersDbRepository.createOrUpdateRoleOutput(projectId, updatedArtifact);
+      await buildersDbRepository.addProjectActivity({
+        projectId,
+        activityType: 'role_output_saved',
+        description: `${updatedArtifact.generatedBy ?? updatedArtifact.type} output ${updatedArtifact.status}`,
+      });
+    });
+  }
 }
 
 /** Sprint 12 — a task's latest review verdict. Returns undefined when it has never been reviewed. */
@@ -442,6 +559,38 @@ export function applyReviewDecision(projectId: string, decision: ReviewDecision)
 
   projectsStore.set(next);
   projectRepository.updateReviews(next);
+
+  mirrorToBuildersDb(async () => {
+    await buildersDbRepository.updateProjectTask(projectId, { taskId: decision.taskId, status: decision.taskStatus });
+    await buildersDbRepository.createTaskReview(projectId, {
+      taskId: decision.review.taskId,
+      reviewStatus: decision.review.reviewStatus,
+      reviewedBy: decision.review.reviewedBy,
+      reviewedAt: decision.review.reviewedAt,
+      reviewNotes: decision.review.reviewNotes,
+    });
+    await buildersDbRepository.createExecutionLog(projectId, {
+      taskId: decision.taskId,
+      eventType: decision.historyEvent.event,
+      note: decision.historyEvent.note,
+    });
+
+    if (decision.artifact) {
+      await buildersDbRepository.createOrUpdateRoleOutput(projectId, decision.artifact);
+    }
+
+    const updatedProject = next.find((project) => project.id === projectId);
+
+    if (updatedProject && decision.roadmapKey) {
+      await buildersDbRepository.updateProject(updatedProject);
+    }
+
+    await buildersDbRepository.addProjectActivity({
+      projectId,
+      activityType: decision.review.reviewStatus === 'approved' ? 'task_approved' : 'task_changes_requested',
+      description: `Task ${decision.taskId} ${decision.review.reviewStatus}`,
+    });
+  });
 }
 
 /**
@@ -474,6 +623,12 @@ export function updateProjectKnowledge(projectId: string, partialKnowledge: Part
   );
   projectsStore.set(next);
   projectRepository.updateKnowledge(next);
+
+  const updated = next.find((project) => project.id === projectId);
+
+  if (updated) {
+    mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
+  }
 }
 
 /**
@@ -493,6 +648,12 @@ export function clearProjectKnowledge(projectId: string): void {
   });
   projectsStore.set(next);
   projectRepository.updateKnowledge(next);
+
+  const updated = next.find((project) => project.id === projectId);
+
+  if (updated) {
+    mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
+  }
 }
 
 /** Sprint 28 — a project's generation session (see app/lib/projects/generationSessionEngine.ts). Undefined until one is explicitly created and persisted. */
@@ -515,6 +676,12 @@ export function setGenerationSession(projectId: string, session: GenerationSessi
     .map((project) => (project.id === projectId ? { ...project, generationSession: session } : project));
   projectsStore.set(next);
   projectRepository.saveProjects(next);
+
+  const updated = next.find((project) => project.id === projectId);
+
+  if (updated) {
+    mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
+  }
 }
 
 export const PROJECT_COLOR_OPTIONS = ['purple', 'blue', 'green', 'orange', 'pink', 'teal'] as const;

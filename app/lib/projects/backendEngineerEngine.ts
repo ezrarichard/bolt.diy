@@ -11,9 +11,14 @@ import {
   getTaskNotes,
   type Project,
 } from '~/lib/stores/projects';
+import {
+  gatherAIDecisions,
+  gatherEngineeringNotes,
+  type AIDecisionEntry,
+  type EngineeringNoteEntry,
+} from './collaborationContext';
 import type { ArchitectureDraft } from './prompts/architecture';
 import type { DatabaseDraft } from './prompts/database';
-import type { UIUXDraft } from './prompts/uiux';
 import {
   BACKEND_DRAFT_FIELDS,
   BACKEND_ENGINEER_SYSTEM_PROMPT,
@@ -38,9 +43,16 @@ import {
  * that (both reused unchanged). Approving a Backend Draft never generates
  * backend code, SQL, Prisma/Drizzle/Supabase schemas, connects to GitHub,
  * or deploys anything, and never mutates Project Knowledge, the
- * Architecture Draft, the Database Design Draft, or the UI/UX Draft — it
+ * Architecture Draft, or the Database Design Draft — it
  * only marks this artifact approved. No React, no UI, no prompt strings
  * inlined here — those live in app/lib/projects/prompts/backend.ts.
+ *
+ * Sprint 32 — Backend Engineer's curated input is Business Analyst +
+ * Architecture + Database (not UI/UX): backend design flows from data model
+ * and system boundaries, not screen layout. Architecture is carried as a
+ * summary (two roles back) and Database in full (the immediately preceding
+ * role) — see prompts/backend.ts for where that full-vs-summary split
+ * happens.
  */
 
 export interface BackendContext {
@@ -56,8 +68,15 @@ export interface BackendContext {
   knowledge: ProjectKnowledge | undefined;
   knowledgeCompletion: number;
   architecture: ArchitectureDraft | undefined;
+
+  /** Full content — Backend Engineer's directly relevant upstream role (UI/UX is deliberately excluded per Sprint 32's curated dependency map). */
   database: DatabaseDraft | undefined;
-  uiux: UIUXDraft | undefined;
+
+  /** Sprint 32 — every upstream role's Engineering Notes gathered so far. */
+  engineeringNotes: EngineeringNoteEntry[];
+
+  /** Sprint 32 — every upstream role's AI Decisions log gathered so far. */
+  aiDecisions: AIDecisionEntry[];
   roadmap: { title: string; description: string; status: string }[];
   tasks: { title: string; category: string; status: string }[];
   existingArtifacts: { title: string; type: string; status: string }[];
@@ -79,19 +98,25 @@ const ARTIFACT_TYPE = ARTIFACT_TYPES.BACKEND_DRAFT;
 const ARTIFACT_TASK_ID = 'requirements';
 
 /**
- * Backend Design can only be generated once the UI/UX Draft has been
- * approved — the Backend Design Panel gates on this and explains why the
- * button is disabled otherwise.
+ * Backend Design can only be generated once the Database Design Draft has
+ * been approved — the Backend Design Panel gates on this and explains why
+ * the button is disabled otherwise. Sprint 32 — narrowed from requiring
+ * UI/UX (Backend's curated input is Business Analyst + Architecture +
+ * Database only); the autonomous pipeline still runs UX Engineer before
+ * Backend Engineer via array order in autoEngineeringEngine.ts regardless
+ * of this gate.
  */
 function canGenerateBackend(project: Project): boolean {
-  return getApprovedArtifactContent<UIUXDraft>(getProjectArtifacts(project), ARTIFACT_TYPES.UIUX_DRAFT) !== undefined;
+  return (
+    getApprovedArtifactContent<DatabaseDraft>(getProjectArtifacts(project), ARTIFACT_TYPES.DATABASE_DRAFT) !== undefined
+  );
 }
 
 /**
  * Gathers Project + Blueprint + approved Requirements/Project Knowledge +
- * approved Architecture Draft + approved Database Design Draft + approved
- * UI/UX Draft + Roadmap + Current Tasks + existing Artifacts + Notes into
- * one structured context object — same pattern as
+ * approved Architecture Draft + approved Database Design Draft + Engineering
+ * Notes/AI Decisions so far + Roadmap + Current Tasks + existing Artifacts +
+ * Notes into one structured context object — same pattern as
  * uiuxDesignerEngine.buildUIUXContext.
  */
 function buildBackendContext(project: Project): BackendContext {
@@ -100,7 +125,6 @@ function buildBackendContext(project: Project): BackendContext {
   const artifacts = getProjectArtifacts(project);
   const architecture = getApprovedArtifactContent<ArchitectureDraft>(artifacts, ARTIFACT_TYPES.ARCHITECTURE_DRAFT);
   const database = getApprovedArtifactContent<DatabaseDraft>(artifacts, ARTIFACT_TYPES.DATABASE_DRAFT);
-  const uiux = getApprovedArtifactContent<UIUXDraft>(artifacts, ARTIFACT_TYPES.UIUX_DRAFT);
 
   const roadmap = blueprintEngine.getRoadmap(blueprint.id).map((item) => ({
     title: item.title,
@@ -136,7 +160,8 @@ function buildBackendContext(project: Project): BackendContext {
     knowledgeCompletion: projectKnowledgeEngine.getCompletion(knowledge).overall,
     architecture,
     database,
-    uiux,
+    engineeringNotes: gatherEngineeringNotes(artifacts, 'Backend Engineer'),
+    aiDecisions: gatherAIDecisions(artifacts, 'Backend Engineer'),
     roadmap,
     tasks,
     existingArtifacts,
