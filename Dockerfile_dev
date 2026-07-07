@@ -24,6 +24,7 @@ RUN pnpm fetch
 # Copy source and build
 COPY . .
 # install with dev deps (needed to build)
+RUN pnpm install wrangler --save-dev
 RUN pnpm install --offline --frozen-lockfile
 
 # Build the Remix app (SSR + client)
@@ -66,6 +67,7 @@ COPY --from=prod-deps /app/build /app/build
 COPY --from=prod-deps /app/node_modules /app/node_modules
 COPY --from=prod-deps /app/package.json /app/package.json
 COPY --from=prod-deps /app/bindings.sh /app/bindings.sh
+
 
 # Pre-configure wrangler to disable metrics
 RUN mkdir -p /root/.config/.wrangler && \
