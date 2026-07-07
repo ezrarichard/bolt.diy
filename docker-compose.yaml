@@ -31,7 +31,7 @@ services:
       - RUNNING_IN_DOCKER=true
     extra_hosts:
       - 'host.docker.internal:host-gateway'
-    command: pnpm run dockerstart
+    command: pnpm run dockerrun
     profiles:
       - production
 
