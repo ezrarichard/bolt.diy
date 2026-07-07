@@ -1,10 +1,11 @@
 name: Docker Image CI
 
 on:
-  push:
-    branches: [ "builders-v1" ]
-  pull_request:
-    branches: [ "builders-v1" ]
+  workflow_dispatch:   # ← This enables manual trigger only
+#  push:
+#    branches: [ "builders-v1" ]
+#  pull_request:
+#    branches: [ "builders-v1" ]
 
 jobs:
 
