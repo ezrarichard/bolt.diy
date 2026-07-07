@@ -37,6 +37,7 @@ import { AiEngineeringTeamPanel } from './AIEngineeringTeamPanel';
 import { ProjectManagerPanel } from './ProjectManagerPanel';
 import { GenerationPlanPanel } from './GenerationPlanPanel';
 import { ContextPreviewPanel } from './ContextPreviewPanel';
+import { ProductPackagePanel } from './ProductPackagePanel';
 
 interface ProjectDashboardProps {
   project: Project | null;
@@ -459,6 +460,7 @@ const NAV_SECTION_IDS = [
   'frontend',
   'qa',
   'devops',
+  'package',
   'generation',
   'workspace',
   'execution',
@@ -477,6 +479,7 @@ const NAV_SECTION_LABELS: Record<NavSectionId, string> = {
   frontend: 'Frontend',
   qa: 'QA',
   devops: 'DevOps',
+  package: 'Package',
   generation: 'Generation',
   workspace: 'Workspace',
   execution: 'Execution',
@@ -1030,6 +1033,19 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                           </div>
                         </div>
                       </div>
+                    </section>
+
+                    {/* SECTION 4.5 — Product Package (Sprint 37: assembles every approved/latest-draft AI role output into a structured, previewable package) */}
+                    <section
+                      className="pt-10 border-t border-bolt-elements-borderColor/40"
+                      ref={registerSection('package')}
+                      data-nav-section="package"
+                    >
+                      <GroupHeading
+                        title="Product Package"
+                        subtitle="Assembles every approved (or latest draft) AI role output into a structured set of Markdown files — no code generation yet."
+                      />
+                      <ProductPackagePanel project={project} />
                     </section>
 
                     {/* SECTION 5 — Generation Center (Generation Plan, Queue, Execution Plan, Execution Session, Prototype Generation Test — one workflow) */}

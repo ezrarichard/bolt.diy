@@ -434,7 +434,9 @@ export const Menu = () => {
         </div>
         <CurrentDateTime />
         <div className="flex-1 flex flex-col h-full w-full overflow-hidden">
-          <ProjectList onSelectProject={handleSelectProject} />
+          <div className="flex-1 min-h-0 flex flex-col">
+            <ProjectList onSelectProject={handleSelectProject} />
+          </div>
 
           <div className="px-4">
             <div className="h-px bg-bolt-elements-borderColor/40 my-1" />

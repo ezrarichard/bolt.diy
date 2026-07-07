@@ -214,3 +214,50 @@ sprint's own scope — no new UI.
   scoped ("large AI summarisation unnecessary").
 - No UI surfaces any of this yet (version history, context trace, change summaries) —
   everything is a backend/helper implementation, per the sprint's own scope.
+
+## Sprint 37 — AI Product Assembly Engine
+
+New domain, deliberately separate from `app/lib/builders-db/`: `app/lib/product-assembly/`
+(`assemblyTypes.ts`, `productAssembler.ts`, `assemblyMarkdown.ts`, `assemblyRepository.ts`).
+Assembles every role's latest approved (or, failing that, latest draft) output into a
+`ProductPackage` — a set of readable Markdown plan/spec files (`Requirements/BRD.md`,
+`Architecture/architecture.md`, ...), reusing each role's own `*_DRAFT_FIELDS` config and
+`formatDraftFields` (`app/lib/projects/prompts/shared.ts`) rather than inventing new
+formatting. No code generation, file tree, or live preview — that's Sprint 38.
+
+Two adaptations from the sprint brief's suggested structure, since this codebase has
+exactly 8 AI roles (no "Project Manager" generation role/artifact exists —
+`ProjectManagerPanel.tsx` is a read-only, locally-computed readiness view, never an LLM
+call): "API" is derived from the Backend Engineer's own output (a curated field subset,
+`api-spec.md`) rather than a separate role, and there is no "Project Management" section
+at all — `Documentation/product-summary.md` (rule-based, no AI call) notes this
+explicitly rather than silently omitting it.
+
+`assembleProductPackage(project)` (`productAssembler.ts`) is synchronous and reads only
+the in-memory `Project` — assembly always works identically regardless of whether
+BuildersDB is configured. Persisting to `builders_product_packages`/
+`builders_product_package_files` (see
+`supabase/migrations/20260707150000_sprint37_product_assembly.sql`) is a separate,
+best-effort step (`assemblyRepository.ts`'s `saveProductPackage`/`getProductPackage`/
+`listProductPackageFiles`/`deleteProductPackage`) — one package per project (a
+re-assembly deletes-then-reinserts rather than keeping assembly history; Sprint 36
+already owns role-output version history). A discarded or still-empty-placeholder
+artifact is treated as "missing", never as usable content.
+
+UI: a new "Package" section in `ProjectDashboard.tsx` (`ProductPackagePanel.tsx`) — a
+manual "Assemble Product Package" button, a file list grouped by section with
+approved/draft/missing badges, and a read-only content preview. No file tree, no
+editing, no redesign of any existing section.
+
+### Known limitations (as of Sprint 37)
+
+- One package per project (no assembly history) — re-assembling replaces the previous
+  snapshot entirely.
+- `Documentation/product-summary.md` is the only generated file with no AI-role source;
+  everything else is a reformatted AI role output, not new content.
+- No UI affordance to download/export the assembled package as an actual file tree yet
+  (`ProductPackagePanel.tsx` is preview-only) — reading it back via
+  `listProductPackageFiles()`/`getProductPackage()` already works for a future exporter.
+- Sprint 38 is expected to consume `ProductPackage` as its input for real code
+  generation; nothing here generates runnable code, a file tree on disk, or a live
+  preview.
