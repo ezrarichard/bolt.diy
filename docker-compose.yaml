@@ -3,7 +3,7 @@ services:
     image: bolt-ai:development
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile_dev
       target: development
     env_file: 
       - '.env'
