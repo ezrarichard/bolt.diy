@@ -1,29 +1,28 @@
 services:
-  app-dev:
-    image: bolt-ai:development
+  app-prod:
+    image: bolt-ai:production
     build:
       context: .
       dockerfile: Dockerfile_dev
-      target: development
+      target: bolt-ai-production
+    ports:
+      - '5173:5173'
     env_file: 
       - '.env'
       - '.env.local'
     environment:
-      - NODE_ENV=development
-      - VITE_HMR_PROTOCOL=ws
-      - VITE_HMR_HOST=localhost
-      - VITE_HMR_PORT=5173
-      - CHOKIDAR_USEPOLLING=true
-      - WATCHPACK_POLLING=true
+      - NODE_ENV=production
+      - COMPOSE_PROFILES=production
+      # No strictly needed but serving as hints for Coolify
       - PORT=5173
       - GROQ_API_KEY=${GROQ_API_KEY}
       - HuggingFace_API_KEY=${HuggingFace_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPEN_ROUTER_API_KEY=${OPEN_ROUTER_API_KEY}
-      - XAI_API_KEY=${XAI_API_KEY}
       - GOOGLE_GENERATIVE_AI_API_KEY=${GOOGLE_GENERATIVE_AI_API_KEY}
       - OLLAMA_API_BASE_URL=${OLLAMA_API_BASE_URL}
+      - XAI_API_KEY=${XAI_API_KEY}
       - TOGETHER_API_KEY=${TOGETHER_API_KEY}
       - TOGETHER_API_BASE_URL=${TOGETHER_API_BASE_URL}
       - AWS_BEDROCK_CONFIG=${AWS_BEDROCK_CONFIG}
@@ -32,14 +31,7 @@ services:
       - RUNNING_IN_DOCKER=true
     extra_hosts:
       - 'host.docker.internal:host-gateway'
-    volumes:
-      - type: bind
-        source: .
-        target: /app
-        consistency: cached
-      - /app/node_modules
-    ports:
-      - '5173:5173'
-    command: pnpm run dev --host 0.0.0.0
-    profiles: ['development', 'default']
+    command: pnpm run dockerstart
+    profiles:
+      - production
 
