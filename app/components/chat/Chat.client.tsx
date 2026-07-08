@@ -110,7 +110,7 @@ export const ChatImpl = memo(
       const savedProvider = Cookies.get('selectedProvider');
       return (PROVIDER_LIST.find((p) => p.name === savedProvider) || DEFAULT_PROVIDER) as ProviderInfo;
     });
-    const { showChat } = useStore(chatStore);
+    const { showChat, started: chatStoreStarted } = useStore(chatStore);
     const [animationScope, animate] = useAnimate();
     const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
     const [chatMode, setChatMode] = useState<'discuss' | 'build'>('build');
@@ -199,6 +199,19 @@ export const ChatImpl = memo(
     useEffect(() => {
       chatStore.setKey('started', initialMessages.length > 0);
     }, []);
+
+    /*
+     * Code generation started from the Project Dashboard/Product Package flips
+     * `chatStore.started` directly (see useCodeGeneration.ts) rather than going through
+     * `runAnimation` below, since that flow never sends a chat message. Mirror it into
+     * this component's local `chatStarted` state so BaseChat hides the landing hero the
+     * same way it already does for a normal first chat message.
+     */
+    useEffect(() => {
+      if (chatStoreStarted && !chatStarted) {
+        setChatStarted(true);
+      }
+    }, [chatStoreStarted, chatStarted]);
 
     useEffect(() => {
       processSampledMessages({
