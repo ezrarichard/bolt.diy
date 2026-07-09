@@ -2,6 +2,7 @@ import { classNames } from '~/utils/classNames';
 import { useActiveProjectContext } from '~/lib/projects/useActiveProjectContext';
 import { isProjectDashboardOpenStore } from '~/lib/stores/projects';
 import { PROJECT_COLOR_CLASSES } from '~/components/sidebar/ProjectListItem';
+import { getProjectTypeDefinition } from '~/lib/project-types/projectTypeRegistry';
 
 /**
  * Small, subtle pill shown above the chat prompt box when a project is
@@ -17,6 +18,7 @@ export function CurrentProjectBadge() {
   }
 
   const colorClasses = PROJECT_COLOR_CLASSES[context.project.color] || PROJECT_COLOR_CLASSES.purple;
+  const projectType = getProjectTypeDefinition(context.project.projectType);
 
   return (
     <button
@@ -53,7 +55,7 @@ export function CurrentProjectBadge() {
       </span>
       <span className="text-xs text-bolt-elements-textTertiary shrink-0">·</span>
       <span className="text-xs text-bolt-elements-textTertiary truncate max-w-[160px] group-hover:text-purple-500/80 transition-colors">
-        {context.blueprint.name}
+        {projectType.icon} {projectType.displayName}
       </span>
     </button>
   );

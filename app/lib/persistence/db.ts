@@ -4,9 +4,12 @@ import type { ChatHistoryItem } from './useChatHistory';
 import type { Snapshot } from './types'; // Import Snapshot type
 
 export interface IChatMetadata {
-  gitUrl: string;
+  gitUrl?: string;
   gitBranch?: string;
   netlifySiteId?: string;
+
+  /** Sprint 39.7 — the Builders project (see app/lib/stores/projects.ts) this chat belongs to. */
+  projectId?: string;
 }
 
 const logger = createScopedLogger('ChatHistory');

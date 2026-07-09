@@ -86,7 +86,7 @@ export interface GenerationResult {
 export type GenerateFn = (
   system: string | undefined,
   prompt: string,
-  options?: { maxTokens?: number },
+  options?: { maxTokens?: number; model?: string; provider?: string; temperature?: number },
 ) => Promise<{ ok: true; text: string } | { ok: false; error: string }>;
 
 /** Reported once per stage as it starts, so the UI can show "Generating page 2 of 4: About" style detail, not just the bare stage name. */

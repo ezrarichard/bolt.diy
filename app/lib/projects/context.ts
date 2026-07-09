@@ -19,6 +19,9 @@ export interface ProjectWorkspaceContext {
   description?: string;
   icon: string;
   color: string;
+
+  /** Sprint 39.7 — see app/lib/project-types/projectTypeRegistry.ts. */
+  projectType: Project['projectType'];
 }
 
 export interface ProjectBlueprintContext {
@@ -53,6 +56,7 @@ export function getProjectWorkspaceContext(project: Project): ProjectWorkspaceCo
     description: project.description,
     icon: project.icon,
     color: project.color,
+    projectType: project.projectType,
   };
 }
 

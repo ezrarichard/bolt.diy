@@ -3,6 +3,7 @@ import { generateText } from 'ai';
 import type { ProviderInfo } from '~/types/model';
 import { PROVIDER_LIST, DEFAULT_PROVIDER } from '~/utils/constants';
 import { getApiKeysFromCookie, getProviderSettingsFromCookie } from '~/lib/api/cookies';
+import { isClaudeReasoningModel } from '~/lib/.server/llm/constants';
 import { createScopedLogger } from '~/utils/logger';
 
 const logger = createScopedLogger('api.generate-text');
@@ -28,14 +29,21 @@ export async function action(args: ActionFunctionArgs) {
  * provider resolution and cookie handling, but returns the full generated
  * text as JSON (not a stream), since callers need the complete response
  * before parsing it as structured data.
+ *
+ * Sprint 39.5 — `temperature` is now accepted too, for Generation Profile-routed callers
+ * (see app/lib/generation-profiles/) that want a role-specific value. Only ever forwarded
+ * to `generateText()` when the selected model is confirmed to accept it
+ * (`!isClaudeReasoningModel`, app/lib/.server/llm/constants.ts) — omitted otherwise,
+ * exactly like every other caller of that same centralized guard.
  */
 async function generateTextAction({ context, request }: ActionFunctionArgs) {
-  const { system, prompt, model, provider, maxTokens } = await request.json<{
+  const { system, prompt, model, provider, maxTokens, temperature } = await request.json<{
     system?: string;
     prompt: string;
     model: string;
     provider: ProviderInfo;
     maxTokens?: number;
+    temperature?: number;
   }>();
 
   if (!prompt || typeof prompt !== 'string') {
@@ -57,10 +65,13 @@ async function generateTextAction({ context, request }: ActionFunctionArgs) {
   const providerSettings = getProviderSettingsFromCookie(cookieHeader);
 
   try {
+    const canSendTemperature = !isClaudeReasoningModel(model);
+
     const result = await generateText({
       system,
       prompt,
       ...(typeof maxTokens === 'number' && maxTokens > 0 ? { maxTokens } : {}),
+      ...(typeof temperature === 'number' && canSendTemperature ? { temperature } : {}),
       model: resolvedProvider.getModelInstance({
         model,
         serverEnv: context.cloudflare?.env as any,

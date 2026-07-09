@@ -9,6 +9,7 @@ import {
 } from '~/lib/projects/artifacts';
 import type { ParsedDraftResult } from '~/lib/projects/draftParsing';
 import { buildRoleContextBlock } from '~/lib/ai/context/buildersDbContextProvider';
+import { getRoleGenerateOptions } from '~/lib/generation-profiles/generationProfileRepository';
 import { useGenerateText } from './useGenerateText';
 
 export type DraftPanelPhase = 'idle' | 'confirm' | 'generating' | 'error';
@@ -118,11 +119,11 @@ export function useDraftPanel<TDraft extends object, TContext>(
     );
     const fullPrompt = buildersDbContext ? `${prompt}\n\n${buildersDbContext}` : prompt;
 
-    const result = await generate(
-      system,
-      fullPrompt,
-      maxOutputTokens !== undefined ? { maxTokens: maxOutputTokens } : undefined,
-    );
+    // Sprint 39.5 — routes this call through the project's selected Generation Profile (artifactType matches builders_ai_roles.role_key exactly), falling back to the user's own model selection if unresolved.
+    const result = await generate(system, fullPrompt, {
+      ...(maxOutputTokens !== undefined ? { maxTokens: maxOutputTokens } : {}),
+      ...getRoleGenerateOptions(project, artifactType),
+    });
 
     if (!result.ok) {
       setErrorMessage(result.error);

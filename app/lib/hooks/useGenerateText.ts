@@ -19,6 +19,21 @@ export interface GenerateTextError {
 export interface GenerateTextOptions {
   /** Optional output token ceiling — passed straight through to app/routes/api.generate-text.ts. Omit to use the provider's default. */
   maxTokens?: number;
+
+  /**
+   * Sprint 39.5 — Generation Profile routing. When a caller (useDraftPanel.ts,
+   * useAutoEngineeringPipeline.ts, useCodeGeneration.ts) has resolved a role-specific
+   * model via app/lib/generation-profiles/, it passes `model`/`provider` here to override
+   * the user's own `selectedModel`/`selectedProvider` cookies for JUST this call — Chat's
+   * own dropdown selection and every cookie it writes are completely untouched. Omit
+   * either (or both) to fall back to the cookie-selected value, exactly as before this
+   * sprint.
+   */
+  model?: string;
+
+  /** Provider NAME (e.g. "Anthropic"), resolved against PROVIDER_LIST the same way the `selectedProvider` cookie already is — not a full ProviderInfo object, so callers never need to import/construct one. */
+  provider?: string;
+  temperature?: number;
 }
 
 /**
@@ -49,15 +64,22 @@ export function useGenerateText() {
     setIsGenerating(true);
 
     try {
-      const model = Cookies.get('selectedModel') || DEFAULT_MODEL;
-      const savedProviderName = Cookies.get('selectedProvider');
-      const provider: ProviderInfo = (PROVIDER_LIST.find((p) => p.name === savedProviderName) ||
+      const model = options?.model || Cookies.get('selectedModel') || DEFAULT_MODEL;
+      const providerName = options?.provider || Cookies.get('selectedProvider');
+      const provider: ProviderInfo = (PROVIDER_LIST.find((p) => p.name === providerName) ||
         DEFAULT_PROVIDER) as ProviderInfo;
 
       const response = await fetch('/api/generate-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system, prompt, model, provider, maxTokens: options?.maxTokens }),
+        body: JSON.stringify({
+          system,
+          prompt,
+          model,
+          provider,
+          maxTokens: options?.maxTokens,
+          temperature: options?.temperature,
+        }),
       });
 
       if (!response.ok) {

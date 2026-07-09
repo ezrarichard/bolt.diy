@@ -18,8 +18,14 @@ interface ActivityEntry {
   createdAt: string;
 }
 
-/** One icon per activity type actually logged across the codebase (useCodeGeneration.ts, projects.ts, assemblyRepository.ts, buildersDbContextProvider.ts) — falls back to a generic dot for anything unrecognized, so a future activity type never renders broken. */
-const ACTIVITY_ICON: Record<string, string> = {
+/**
+ * One icon per activity type actually logged across the codebase (useCodeGeneration.ts,
+ * projects.ts, assemblyRepository.ts, buildersDbContextProvider.ts) — falls back to a
+ * generic dot for anything unrecognized, so a future activity type never renders broken.
+ * Exported (Sprint 39.8) so HomeDashboardSections.tsx's Builders Activity feed can reuse
+ * the exact same icon mapping instead of duplicating it.
+ */
+export const ACTIVITY_ICON: Record<string, string> = {
   generation_started: 'i-ph:rocket-launch-duotone text-purple-500',
   generation_stage_completed: 'i-ph:gear-duotone text-blue-500',
   generation_failed: 'i-ph:x-circle-duotone text-red-500',
@@ -45,7 +51,9 @@ const REPAIR_STATUS_ICON: Record<RepairAttemptRecord['status'], string> = {
   failed: 'i-ph:x-circle-duotone text-red-500',
 };
 
-const DEFAULT_ICON = 'i-ph:circle-duotone text-bolt-elements-textTertiary';
+export const DEFAULT_ACTIVITY_ICON = 'i-ph:circle-duotone text-bolt-elements-textTertiary';
+
+const DEFAULT_ICON = DEFAULT_ACTIVITY_ICON;
 
 /**
  * Sprint 38.5 — History tab. Reads `builders_project_activity` via `getProjectActivity`

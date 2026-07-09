@@ -12,6 +12,7 @@ import { getLatestArtifact } from '~/lib/projects/artifacts';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
 import { getNextAutoRole, type AutoEngineeringRoleId } from '~/lib/projects/autoEngineeringEngine';
 import { buildRoleContextBlock } from '~/lib/ai/context/buildersDbContextProvider';
+import { getRoleGenerateOptions } from '~/lib/generation-profiles/generationProfileRepository';
 import { useGenerateText } from './useGenerateText';
 
 /**
@@ -125,7 +126,11 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
             );
             const fullPrompt = buildersDbContext ? `${prompt}\n\n${buildersDbContext}` : prompt;
 
-            result = await generateRef.current(system, fullPrompt, { maxTokens: role.maxOutputTokens });
+            // Sprint 39.5 — routes this call through the project's selected Generation Profile, falling back to the user's own model selection if unresolved.
+            result = await generateRef.current(system, fullPrompt, {
+              maxTokens: role.maxOutputTokens,
+              ...getRoleGenerateOptions(current, role.artifactType),
+            });
           } catch (error) {
             const message = error instanceof Error ? error.message : `${role.label} failed unexpectedly.`;
 

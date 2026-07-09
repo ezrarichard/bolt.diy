@@ -42,6 +42,7 @@ interface WorkspaceStateRow {
   product_package_assembled: boolean;
   repair_attempts: number;
   last_repair_status: string | null;
+  selected_generation_profile_id: string | null;
 }
 
 function fromRow(row: WorkspaceStateRow): ProjectWorkspaceState {
@@ -61,6 +62,7 @@ function fromRow(row: WorkspaceStateRow): ProjectWorkspaceState {
     productPackageAssembled: row.product_package_assembled,
     repairAttempts: row.repair_attempts,
     lastRepairStatus: (row.last_repair_status ?? undefined) as ProjectWorkspaceState['lastRepairStatus'],
+    selectedGenerationProfileId: row.selected_generation_profile_id ?? undefined,
   };
 }
 
@@ -127,6 +129,7 @@ export async function upsertWorkspaceState(projectId: string, patch: Partial<Pro
         product_package_assembled: next.productPackageAssembled ?? false,
         repair_attempts: next.repairAttempts ?? 0,
         last_repair_status: next.lastRepairStatus ?? null,
+        selected_generation_profile_id: next.selectedGenerationProfileId ?? null,
       },
       { onConflict: 'project_id' },
     );

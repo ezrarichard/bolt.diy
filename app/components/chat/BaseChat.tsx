@@ -19,7 +19,14 @@ import { ImportButtons } from '~/components/chat/chatExportAndImport/ImportButto
 import { ExamplePrompts } from '~/components/chat/ExamplePrompts';
 import GitCloneButton from './GitCloneButton';
 import type { ProviderInfo } from '~/types/model';
-import { HomeWorkflows, ContinueProjectSection } from './HomeWorkflows';
+import { HomeWorkflows } from './HomeWorkflows';
+import {
+  ContinueWorkingSection,
+  BuildersStatsSection,
+  RecentProjectsSection,
+  BuildersActivitySection,
+  ComingSoonStrip,
+} from './HomeDashboardSections';
 import type { ActionAlert, SupabaseAlert, DeployAlert, LlmErrorAlertType } from '~/types/actions';
 import DeployChatAlert from '~/components/deploy/DeployAlert';
 import ChatAlert from './ChatAlert';
@@ -494,7 +501,16 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
               </StickToBottom.Content>
               {chatStarted && promptBox}
             </StickToBottom>
-            {!chatStarted && <ContinueProjectSection />}
+            {/* Sprint 39.8 — ordered home-dashboard sections, each independently no-op when empty; a future "Pinned Project" section only needs inserting before ContinueWorkingSection here. */}
+            {!chatStarted && (
+              <>
+                <ContinueWorkingSection />
+                <BuildersStatsSection />
+                <RecentProjectsSection />
+                <BuildersActivitySection />
+                <ComingSoonStrip />
+              </>
+            )}
             <div className="flex flex-col justify-center">
               {!chatStarted && (
                 <div className="flex justify-center gap-2">

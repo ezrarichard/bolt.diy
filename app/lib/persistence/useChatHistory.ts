@@ -22,6 +22,8 @@ import type { Snapshot } from './types';
 import { webcontainer } from '~/lib/webcontainer';
 import { detectProjectCommands, createCommandActionsString } from '~/utils/projectCommands';
 import type { ContextAnnotation } from '~/types/context';
+import { addProject, currentProjectIdStore, linkProjectChat } from '~/lib/stores/projects';
+import { PROJECT_TYPE_REGISTRY } from '~/lib/project-types/projectTypeRegistry';
 
 export interface ChatHistoryItem {
   id: string;
@@ -179,6 +181,7 @@ ${value.content}
             description.set(storedMessages.description);
             chatId.set(storedMessages.id);
             chatMetadata.set(storedMessages.metadata);
+            currentProjectIdStore.set(storedMessages.metadata?.projectId ?? null);
           } else {
             navigate('/', { replace: true });
           }
@@ -281,6 +284,43 @@ ${value.content}
       const { firstArtifact } = workbenchStore;
       messages = messages.filter((m) => !m.annotations?.includes('no-store'));
 
+      /*
+       * Sprint 39.7 — every chat becomes a Project. `isNewChat` mirrors the existing
+       * "brand-new chat" check a few lines below (initialMessages.length === 0 &&
+       * !chatId.get()) so this only runs once per chat, on its very first stored message.
+       * If a project is already active (currentProjectIdStore) — e.g. "Start Chat" from an
+       * existing project's dashboard — reuse it instead of creating a new one.
+       */
+      const isNewChat = initialMessages.length === 0 && !chatId.get();
+      let activeProjectId = currentProjectIdStore.get();
+
+      if (isNewChat && !activeProjectId) {
+        const firstUserMessage = messages.find((m) => m.role === 'user');
+        const rawContent = typeof firstUserMessage?.content === 'string' ? firstUserMessage.content : '';
+
+        /*
+         * Strip the "[Model: ...]\n\n[Provider: ...]\n\n" prefix Chat.client.tsx prepends to
+         * the first message's content (see its sendMessage) — irrelevant noise for a project name.
+         */
+        const rawName = rawContent.replace(/^(\[Model:[^\]]*\]\s*)?(\[Provider:[^\]]*\]\s*)?/, '');
+        const name = rawName.trim().slice(0, 60) || PROJECT_TYPE_REGISTRY.quick_build.displayName;
+
+        const project = addProject({
+          name,
+          icon: PROJECT_TYPE_REGISTRY.quick_build.icon,
+          color: PROJECT_TYPE_REGISTRY.quick_build.color,
+          projectType: 'quick_build',
+          createdFrom: 'quick_build',
+        });
+
+        activeProjectId = project.id;
+        currentProjectIdStore.set(activeProjectId);
+      }
+
+      if (isNewChat && activeProjectId) {
+        chatMetadata.set({ ...chatMetadata.get(), projectId: activeProjectId });
+      }
+
       let _urlId = urlId;
 
       if (!urlId && firstArtifact?.id) {
@@ -288,6 +328,10 @@ ${value.content}
         _urlId = urlId;
         navigateChat(urlId);
         setUrlId(urlId);
+
+        if (activeProjectId) {
+          linkProjectChat(activeProjectId, urlId);
+        }
       }
 
       let chatSummary: string | undefined = undefined;
@@ -319,6 +363,10 @@ ${value.content}
 
         if (!urlId) {
           navigateChat(nextId);
+
+          if (activeProjectId) {
+            linkProjectChat(activeProjectId, nextId);
+          }
         }
       }
 

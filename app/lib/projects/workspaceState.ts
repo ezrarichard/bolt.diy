@@ -42,6 +42,9 @@ export interface ProjectWorkspaceState {
 
   /** Sprint 39 — outcome of the self-healing loop's most recent run, for the Workspace tab's repair status line. */
   lastRepairStatus?: 'not-attempted' | 'repairing' | 'succeeded' | 'failed';
+
+  /** Sprint 39.5 — which Generation Profile (app/lib/generation-profiles/) this project uses for every AI Engineering Team role. Undefined means "not chosen yet" — every reader falls back to DEFAULT_GENERATION_PROFILE_ID ('balanced'). */
+  selectedGenerationProfileId?: string;
 }
 
 export const DEFAULT_WORKSPACE_STATE: ProjectWorkspaceState = {

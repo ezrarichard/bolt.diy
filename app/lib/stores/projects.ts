@@ -1,4 +1,5 @@
 import { atom } from 'nanostores';
+import type { ProjectTypeId, CreatedFrom } from '~/lib/project-types/projectTypeRegistry';
 import type { RoadmapItemStatus } from '~/lib/blueprints';
 import type { ProjectKnowledge } from '~/lib/projects/knowledge';
 import type { ProjectTaskStatus } from '~/lib/projects/executionEngine';
@@ -42,6 +43,29 @@ export interface Project {
    * drive starter prompts/templates/integrations per blueprint.
    */
   blueprintId?: string;
+
+  /**
+   * Sprint 39.7 — which Builders workflow drives this project (see
+   * app/lib/project-types/projectTypeRegistry.ts). Every project has exactly one, set at
+   * creation and never inferred elsewhere — read it via getProjectTypeDefinition() rather
+   * than branching on the string directly.
+   */
+  projectType: ProjectTypeId;
+
+  /**
+   * Sprint 39.7 — how this project originated, for analytics/reporting only. Distinct from
+   * projectType: a project can be createdFrom: 'template' while projectType stays
+   * 'guided_engineering'. Set once at creation, never changes.
+   */
+  createdFrom: CreatedFrom;
+
+  /**
+   * Sprint 39.7 — for projectType: 'quick_build' projects, the IndexedDB chat id/urlId
+   * (see app/lib/persistence/db.ts) this project's chat lives at. Undefined until the
+   * chat's first message is stored (see useChatHistory.ts's storeMessageHistory) or for
+   * guided_engineering projects, which have no single associated chat.
+   */
+  linkedChatId?: string;
 
   /**
    * Sprint 8 — local-only status per roadmap item, keyed by the blueprint's
@@ -166,7 +190,20 @@ export interface Project {
  */
 const projectRepository = createProjectRepository();
 
-export const projectsStore = atom<Project[]>(projectRepository.loadProjects());
+/**
+ * Sprint 39.7 — every project persisted before this sprint predates `projectType`/
+ * `createdFrom`; both are backfilled to 'guided_engineering' here since Quick Build never
+ * persisted a project before now. New projects always pass both explicitly via addProject().
+ */
+function normalizeProjectType(projects: Project[]): Project[] {
+  return projects.map((project) =>
+    project.projectType
+      ? project
+      : { ...project, projectType: 'guided_engineering', createdFrom: project.createdFrom ?? 'guided_engineering' },
+  );
+}
+
+export const projectsStore = atom<Project[]>(normalizeProjectType(projectRepository.loadProjects()));
 
 /**
  * Sprint 34 — BuildersDB write-through.
@@ -201,9 +238,13 @@ function mirrorToBuildersDb(work: () => Promise<unknown>): void {
  * as it was — BuildersDB being unreachable never loses local work.
  *
  * Two cases once BuildersDB is confirmed reachable:
- *  - Remote already has projects: it becomes authoritative for the rest of the session —
- *    `projectsStore` is replaced with the remote list, and that same list is written back
- *    into the local cache (so the next offline load still has it).
+ *  - Remote already has projects: it becomes authoritative for every project it knows
+ *    about, but any LOCAL project not yet present remotely (Sprint 39.7 — e.g. its
+ *    `mirrorToBuildersDb()` write is still failing, such as a Quick Build project created
+ *    before a required schema migration has been applied) is kept and merged in rather than
+ *    silently dropped, and re-pushed via `buildersDbRepository.createProject()` so it
+ *    eventually syncs once possible. `projectsStore`/local cache are updated to this merged
+ *    list.
  *  - Remote is reachable but empty (a freshly-provisioned BuildersDB project): whatever
  *    projects already exist locally are pushed up once via `buildersDbRepository.createProject`
  *    (a one-time migration, not an ongoing merge — see docs/buildersdb.md) so a team
@@ -217,15 +258,22 @@ export async function hydrateProjectsFromBuildersDb(): Promise<void> {
 
   try {
     const remoteProjects = await buildersDbRepository.listProjects();
+    const localProjects = projectRepository.loadProjects();
 
     if (remoteProjects.length > 0) {
-      projectsStore.set(remoteProjects);
-      projectRepository.saveProjects(remoteProjects);
+      const remoteIds = new Set(remoteProjects.map((project) => project.id));
+      const localOnly = localProjects.filter((project) => !remoteIds.has(project.id));
+      const merged = [...remoteProjects, ...localOnly];
+
+      projectsStore.set(merged);
+      projectRepository.saveProjects(merged);
+
+      if (localOnly.length > 0) {
+        await Promise.all(localOnly.map((project) => buildersDbRepository.createProject(project)));
+      }
 
       return;
     }
-
-    const localProjects = projectRepository.loadProjects();
 
     if (localProjects.length > 0) {
       await Promise.all(localProjects.map((project) => buildersDbRepository.createProject(project)));
@@ -350,6 +398,8 @@ export function addProject(input: {
   name: string;
   icon: string;
   color: string;
+  projectType: ProjectTypeId;
+  createdFrom: CreatedFrom;
   description?: string;
   blueprintId?: string;
 }): Project {
@@ -360,6 +410,8 @@ export function addProject(input: {
     icon: input.icon,
     color: input.color,
     blueprintId: input.blueprintId,
+    projectType: input.projectType,
+    createdFrom: input.createdFrom,
     createdAt: new Date().toISOString(),
   };
 
@@ -814,5 +866,26 @@ export function setGenerationSession(projectId: string, session: GenerationSessi
   }
 }
 
-export const PROJECT_COLOR_OPTIONS = ['purple', 'blue', 'green', 'orange', 'pink', 'teal'] as const;
+/**
+ * Sprint 39.7 — links a quick_build project to its IndexedDB chat (see
+ * app/lib/persistence/useChatHistory.ts's storeMessageHistory, which calls this once when
+ * the chat's raw id is minted and again once its urlId resolves). Persisted the same way
+ * as every other Project field — local write-through instantly, BuildersDB mirror
+ * best-effort (folded into the metadata jsonb via toProjectRow's METADATA_FIELDS).
+ */
+export function linkProjectChat(projectId: string, chatMixedId: string): void {
+  const next = projectsStore
+    .get()
+    .map((project) => (project.id === projectId ? { ...project, linkedChatId: chatMixedId } : project));
+  projectsStore.set(next);
+  projectRepository.saveProjects(next);
+
+  const updated = next.find((project) => project.id === projectId);
+
+  if (updated) {
+    mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
+  }
+}
+
+export const PROJECT_COLOR_OPTIONS = ['purple', 'blue', 'green', 'orange', 'pink', 'teal', 'amber'] as const;
 export const PROJECT_ICON_OPTIONS = ['🚀', '🏪', '🤖', '🌐', '📱', '💼', '🧪', '⚙️', '📊', '🎨'] as const;

@@ -21,6 +21,7 @@ import { businessAnalystEngine } from '~/lib/projects/businessAnalystEngine';
 import { REQUIREMENTS_DRAFT_FIELDS, type RequirementsDraft } from '~/lib/projects/prompts/requirements';
 import type { AIDecision } from '~/lib/projects/draftParsing';
 import { buildRoleContextBlock } from '~/lib/ai/context/buildersDbContextProvider';
+import { getRoleGenerateOptions } from '~/lib/generation-profiles/generationProfileRepository';
 import { useGenerateText } from '~/lib/hooks/useGenerateText';
 
 interface RequirementsDraftPanelProps {
@@ -65,7 +66,8 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
     );
     const fullPrompt = buildersDbContext ? `${prompt}\n\n${buildersDbContext}` : prompt;
 
-    const result = await generate(system, fullPrompt);
+    // Sprint 39.5 — routes this call through the project's selected Generation Profile (falls back to the user's own model selection if unresolved).
+    const result = await generate(system, fullPrompt, getRoleGenerateOptions(project, ARTIFACT_TYPE));
 
     if (!result.ok) {
       setErrorMessage(result.error);

@@ -13,6 +13,7 @@ import {
 import { getProjectArtifacts } from '~/lib/stores/projects';
 import type { Project } from '~/lib/stores/projects';
 import { PROJECT_COLOR_CLASSES } from './ProjectListItem';
+import { getProjectTypeDefinition } from '~/lib/project-types/projectTypeRegistry';
 import BackgroundRays from '~/components/ui/BackgroundRays';
 import { blueprintEngine, type RoadmapItemStatus } from '~/lib/blueprints';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
@@ -48,6 +49,9 @@ import { ContextPreviewPanel } from './ContextPreviewPanel';
 import { ProductPackagePanel } from './ProductPackagePanel';
 import { ProjectHistoryPanel } from './ProjectHistoryPanel';
 import { SharedProviderStatusCard } from './SharedProviderStatusCard';
+import { GenerationProfileSelector } from './GenerationProfileSelector';
+import { DEFAULT_GENERATION_PROFILE_ID, DEFAULT_GENERATION_PROFILES } from '~/lib/generation-profiles/defaultProfiles';
+import { saveSelectedProfileForProject } from '~/lib/generation-profiles/generationProfileRepository';
 
 interface ProjectDashboardProps {
   project: Project | null;
@@ -817,6 +821,10 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                           />
                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
                             <StatusMiniCard
+                              label="Project Type"
+                              value={`${getProjectTypeDefinition(project.projectType).icon} ${getProjectTypeDefinition(project.projectType).displayName}`}
+                            />
+                            <StatusMiniCard
                               label="Current Stage"
                               value={workspaceState?.currentStage ?? 'Not started'}
                             />
@@ -836,6 +844,16 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                             <StatusMiniCard
                               label="Last Activity"
                               value={workspaceState?.lastActivity ?? 'No activity yet'}
+                            />
+                            <StatusMiniCard
+                              label="Generation Profile"
+                              value={
+                                DEFAULT_GENERATION_PROFILES.find(
+                                  (profile) =>
+                                    profile.id ===
+                                    (workspaceState?.selectedGenerationProfileId ?? DEFAULT_GENERATION_PROFILE_ID),
+                                )?.name ?? 'Balanced'
+                              }
                             />
                           </div>
                           <div className="flex flex-wrap gap-2">
@@ -1236,6 +1254,29 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                 { label: 'Attempts', value: String(workspaceState?.repairAttempts ?? 0) },
                               ]}
                             />
+                          </div>
+
+                          {/* Sprint 39.5 — small Generation Profile card, same footprint as the Self-Healing card above. Changing it here only affects future AI Engineering Team generations for this project — Quick Chat's own model dropdown is untouched. */}
+                          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                            <div
+                              className={classNames(
+                                'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4',
+                                'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                              )}
+                            >
+                              <div className="flex items-center gap-2.5 mb-3">
+                                <div className="flex items-center justify-center w-8 h-8 rounded-full bg-purple-500/10 ring-1 ring-purple-500/15 shrink-0">
+                                  <div className="i-ph:sliders-horizontal-duotone w-4 h-4 text-purple-600/80 dark:text-purple-400/80" />
+                                </div>
+                                <div className="text-[13px] font-semibold text-bolt-elements-textPrimary">
+                                  Generation Profile
+                                </div>
+                              </div>
+                              <GenerationProfileSelector
+                                value={workspaceState?.selectedGenerationProfileId ?? DEFAULT_GENERATION_PROFILE_ID}
+                                onChange={(profileId) => saveSelectedProfileForProject(project.id, profileId)}
+                              />
+                            </div>
                           </div>
 
                           {/* Sprint 38.5 — Shared AI Provider status, reads /api/shared-key-status (see SharedProviderStatusCard.tsx) — booleans only, never a key value. */}

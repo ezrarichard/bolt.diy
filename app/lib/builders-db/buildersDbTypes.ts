@@ -24,6 +24,12 @@ export interface BuildersDbProjectRow {
   blueprint_id: string | null;
   status: string;
   owner_id: string | null;
+
+  /** Sprint 39.7 — see app/lib/project-types/projectTypeRegistry.ts. Real column: queryable/constrained. */
+  project_type: string;
+
+  /** Sprint 39.7 — analytics-only provenance, see app/lib/project-types/projectTypeRegistry.ts's CreatedFrom. */
+  created_from: string;
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -49,6 +55,9 @@ const METADATA_FIELDS = [
   'templates',
   'mcpServers',
   'knowledgeBase',
+
+  /** Sprint 39.7 — the quick_build project's IndexedDB chat id/urlId; see linkProjectChat(). */
+  'linkedChatId',
 ] as const;
 
 /** ownerId is a placeholder param for a future auth sprint — always null/undefined until then (see docs/buildersdb.md). */
@@ -72,6 +81,8 @@ export function toProjectRow(project: Project, ownerId?: string | null): Builder
     blueprint_id: project.blueprintId ?? null,
     status: 'active',
     owner_id: ownerId ?? null,
+    project_type: project.projectType,
+    created_from: project.createdFrom,
     metadata,
     created_at: project.createdAt,
     updated_at: new Date().toISOString(),
@@ -89,6 +100,8 @@ export function fromProjectRow(row: BuildersDbProjectRow): Project {
     icon: row.icon ?? '',
     color: row.color ?? '',
     blueprintId: row.blueprint_id ?? undefined,
+    projectType: (row.project_type as Project['projectType']) ?? 'guided_engineering',
+    createdFrom: (row.created_from as Project['createdFrom']) ?? 'guided_engineering',
     createdAt: row.created_at,
     ...metadata,
   };

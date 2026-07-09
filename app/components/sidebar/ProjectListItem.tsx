@@ -1,6 +1,7 @@
 import type { MouseEvent } from 'react';
 import { classNames } from '~/utils/classNames';
 import type { Project } from '~/lib/stores/projects';
+import { getProjectTypeDefinition } from '~/lib/project-types/projectTypeRegistry';
 
 interface ProjectListItemProps {
   project: Project;
@@ -20,10 +21,12 @@ const COLOR_CLASSES: Record<string, { bg: string; ring: string }> = {
   orange: { bg: 'bg-orange-500/15', ring: 'ring-orange-500/20' },
   pink: { bg: 'bg-pink-500/15', ring: 'ring-pink-500/20' },
   teal: { bg: 'bg-teal-500/15', ring: 'ring-teal-500/20' },
+  amber: { bg: 'bg-amber-500/15', ring: 'ring-amber-500/20' },
 };
 
 export function ProjectListItem({ project, onClick, onDelete }: ProjectListItemProps) {
   const colorClasses = COLOR_CLASSES[project.color] || COLOR_CLASSES.purple;
+  const projectType = getProjectTypeDefinition(project.projectType);
 
   const handleDeleteClick = (event: MouseEvent<HTMLButtonElement>) => {
     // Never let the delete click also trigger the row's own onClick (which would open the project).
@@ -56,7 +59,12 @@ export function ProjectListItem({ project, onClick, onDelete }: ProjectListItemP
           <span className="text-sm leading-none">{project.icon}</span>
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium text-bolt-elements-textPrimary truncate">{project.name}</div>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <div className="text-[13px] font-medium text-bolt-elements-textPrimary truncate">{project.name}</div>
+            <span className="text-[10px] text-bolt-elements-textTertiary shrink-0">
+              {projectType.icon} {projectType.displayName}
+            </span>
+          </div>
           {project.description && (
             <div className="text-xs text-bolt-elements-textTertiary truncate">{project.description}</div>
           )}

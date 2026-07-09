@@ -7,9 +7,10 @@ import {
   installAndStartDevServer,
   writeGeneratedProjectToWebContainer,
 } from '~/lib/code-generation/webcontainerWriter';
-import type { GenerationResult, GenerationStage } from '~/lib/code-generation/codeGenerationTypes';
+import type { GenerateFn, GenerationResult, GenerationStage } from '~/lib/code-generation/codeGenerationTypes';
 import { runBuildRepairLoop, runStaticReviewLoop } from '~/lib/code-review/repairEngine';
 import type { OnRepairLoopEvent } from '~/lib/code-review/codeReviewTypes';
+import { getRoleGenerateOptions } from '~/lib/generation-profiles/generationProfileRepository';
 import { workbenchStore } from '~/lib/stores/workbench';
 import { chatStore } from '~/lib/stores/chat';
 import { resetEngineeringTimeline, upsertEngineeringTimelineEvent } from '~/lib/stores/engineeringTimeline';
@@ -211,7 +212,17 @@ export function useCodeGeneration() {
       });
       upsertEngineeringTimelineEvent('planning', { label: 'Planning', status: 'active' });
 
-      const result = await generateProject(project, productPackage, generate, (progress) => {
+      /*
+       * Sprint 39.5 — the code-generation pipeline's types/services/pages/components
+       * stages are treated as one unit driven by the Frontend Engineer's model this
+       * sprint (not split per fine-grained stage — see the plan's Known Limitations).
+       * Falls back to the user's own dropdown selection when the profile/role doesn't
+       * resolve, exactly like every other Generation Profile-routed call site.
+       */
+      const codeGenGenerate: GenerateFn = (system, prompt, opts) =>
+        generate(system, prompt, { ...opts, ...getRoleGenerateOptions(project, 'frontend-draft') });
+
+      const result = await generateProject(project, productPackage, codeGenGenerate, (progress) => {
         setState((prev) => ({
           ...prev,
           stage: progress.stage,
@@ -264,6 +275,14 @@ export function useCodeGeneration() {
         productPackage.assembledAt,
       );
 
+      /*
+       * Sprint 39.5 — the Repair Engineer's own AI call (repairEngine.ts's requestRepair)
+       * is routed through the project's selected Generation Profile the same way every
+       * other role is — falls back to the user's own dropdown selection when unresolved.
+       */
+      const repairGenerate: GenerateFn = (system, prompt, opts) =>
+        generate(system, prompt, { ...opts, ...getRoleGenerateOptions(project, 'repair-engineer') });
+
       try {
         /*
          * Sprint 39 — the Code Reviewer runs (and, if needed, the Repair Engineer patches)
@@ -277,7 +296,7 @@ export function useCodeGeneration() {
           projectId: project.id,
           projectName: project.name,
           productPackageSummary,
-          generate,
+          generate: repairGenerate,
           onEvent: handleRepairEvent,
         });
 
@@ -350,7 +369,7 @@ export function useCodeGeneration() {
           projectId: project.id,
           projectName: project.name,
           productPackageSummary,
-          generate,
+          generate: repairGenerate,
           onEvent: handleRepairEvent,
           installAndStartDevServer,
           writeProjectToWebContainer: writeGeneratedProjectToWebContainer,

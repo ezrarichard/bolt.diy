@@ -4,7 +4,10 @@ import { toast } from 'react-toastify';
 import { classNames } from '~/utils/classNames';
 import { addProject, PROJECT_COLOR_OPTIONS, PROJECT_ICON_OPTIONS } from '~/lib/stores/projects';
 import { blueprintEngine, type ProjectBlueprint } from '~/lib/blueprints';
+import { DEFAULT_GENERATION_PROFILE_ID } from '~/lib/generation-profiles/defaultProfiles';
+import { saveSelectedProfileForProject } from '~/lib/generation-profiles/generationProfileRepository';
 import { PROJECT_COLOR_CLASSES } from './ProjectListItem';
+import { GenerationProfileSelector } from './GenerationProfileSelector';
 
 interface NewProjectDialogProps {
   open: boolean;
@@ -61,6 +64,7 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
   const [blueprintId, setBlueprintId] = useState<string>(blueprintEngine.getDefaultBlueprint().id);
   const [icon, setIcon] = useState<string>(PROJECT_ICON_OPTIONS[0]);
   const [color, setColor] = useState<string>(PROJECT_COLOR_OPTIONS[0]);
+  const [generationProfileId, setGenerationProfileId] = useState<string>(DEFAULT_GENERATION_PROFILE_ID);
 
   const resetForm = () => {
     setName('');
@@ -68,6 +72,7 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
     setBlueprintId(blueprintEngine.getDefaultBlueprint().id);
     setIcon(PROJECT_ICON_OPTIONS[0]);
     setColor(PROJECT_COLOR_OPTIONS[0]);
+    setGenerationProfileId(DEFAULT_GENERATION_PROFILE_ID);
   };
 
   const handleClose = () => {
@@ -81,13 +86,16 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
       return;
     }
 
-    addProject({
+    const project = addProject({
       name: name.trim(),
       description: description.trim() || undefined,
       icon,
       color,
       blueprintId,
+      projectType: 'guided_engineering',
+      createdFrom: 'guided_engineering',
     });
+    saveSelectedProfileForProject(project.id, generationProfileId);
     toast.success(`Project "${name.trim()}" created`);
     handleClose();
   };
@@ -160,6 +168,18 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
                       onChange={(event) => setDescription(event.target.value)}
                     />
                   </div>
+                </div>
+
+                {/* Generation Profile — Sprint 39.5 */}
+                <div>
+                  <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+                    Generation Profile
+                  </h2>
+                  <GenerationProfileSelector
+                    value={generationProfileId}
+                    onChange={setGenerationProfileId}
+                    className="max-w-xs"
+                  />
                 </div>
 
                 {/* Blueprint selection */}
