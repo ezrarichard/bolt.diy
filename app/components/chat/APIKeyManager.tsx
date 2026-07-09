@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { IconButton } from '~/components/ui/IconButton';
 import type { ProviderInfo } from '~/types/model';
 import Cookies from 'js-cookie';
@@ -12,8 +12,35 @@ interface APIKeyManagerProps {
   labelForGetApiKey?: string;
 }
 
-// cache which stores whether the provider's API key is set via environment variable
-const providerEnvKeyStatusCache: Record<string, boolean> = {};
+/*
+ * Sprint 38.4 — batched, cookie-independent shared-key status (all providers fetched once,
+ * not per-provider like the older /api/check-env-key). `undefined` = not fetched yet,
+ * `null` = fetch in flight, `Record<...>` = resolved. Module-level so every
+ * APIKeyManager instance shares one fetch instead of one per rendered provider.
+ */
+let sharedKeyStatusCache: Record<string, { configured: boolean }> | undefined;
+let sharedKeyStatusPromise: Promise<Record<string, { configured: boolean }>> | null = null;
+
+async function fetchSharedKeyStatus(): Promise<Record<string, { configured: boolean }>> {
+  if (sharedKeyStatusCache) {
+    return sharedKeyStatusCache;
+  }
+
+  if (!sharedKeyStatusPromise) {
+    sharedKeyStatusPromise = fetch('/api/shared-key-status')
+      .then((response) => response.json())
+      .then((data) => {
+        sharedKeyStatusCache = (data as { providers: Record<string, { configured: boolean }> }).providers;
+        return sharedKeyStatusCache;
+      })
+      .catch((error) => {
+        console.error('Failed to check shared key status:', error);
+        return {};
+      });
+  }
+
+  return sharedKeyStatusPromise;
+}
 
 const apiKeyMemoizeCache: { [k: string]: Record<string, string> } = {};
 
@@ -36,7 +63,7 @@ export function getApiKeysFromCookies() {
 export const APIKeyManager: React.FC<APIKeyManagerProps> = ({ provider, apiKey, setApiKey }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [tempKey, setTempKey] = useState(apiKey);
-  const [isEnvKeySet, setIsEnvKeySet] = useState(false);
+  const [isSharedKeySet, setIsSharedKeySet] = useState(false);
 
   // Reset states and load saved key when provider changes
   useEffect(() => {
@@ -49,30 +76,19 @@ export const APIKeyManager: React.FC<APIKeyManagerProps> = ({ provider, apiKey, 
     setIsEditing(false);
   }, [provider.name]);
 
-  const checkEnvApiKey = useCallback(async () => {
-    // Check cache first
-    if (providerEnvKeyStatusCache[provider.name] !== undefined) {
-      setIsEnvKeySet(providerEnvKeyStatusCache[provider.name]);
-      return;
-    }
-
-    try {
-      const response = await fetch(`/api/check-env-key?provider=${encodeURIComponent(provider.name)}`);
-      const data = await response.json();
-      const isSet = (data as { isSet: boolean }).isSet;
-
-      // Cache the result
-      providerEnvKeyStatusCache[provider.name] = isSet;
-      setIsEnvKeySet(isSet);
-    } catch (error) {
-      console.error('Failed to check environment API key:', error);
-      setIsEnvKeySet(false);
-    }
-  }, [provider.name]);
-
   useEffect(() => {
-    checkEnvApiKey();
-  }, [checkEnvApiKey]);
+    let cancelled = false;
+
+    fetchSharedKeyStatus().then((status) => {
+      if (!cancelled) {
+        setIsSharedKeySet(Boolean(status[provider.name]?.configured));
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [provider.name]);
 
   const handleSave = () => {
     // Save to parent state
@@ -86,7 +102,15 @@ export const APIKeyManager: React.FC<APIKeyManagerProps> = ({ provider, apiKey, 
     setIsEditing(false);
   };
 
-  const hasKey = Boolean(apiKey) || isEnvKeySet;
+  const hasPersonalKey = Boolean(apiKey);
+  const hasKey = hasPersonalKey || isSharedKeySet;
+
+  // Sprint 38.4 — a personal key is always an optional override, never required when the team already has a shared key configured for this provider.
+  const editButtonTitle = hasPersonalKey
+    ? 'Edit your API key'
+    : isSharedKeySet
+      ? 'Add your own key to override the shared team key'
+      : 'Set API key';
 
   return (
     <div className="flex items-center gap-2 mt-1">
@@ -113,7 +137,7 @@ export const APIKeyManager: React.FC<APIKeyManagerProps> = ({ provider, apiKey, 
         <button
           type="button"
           onClick={() => setIsEditing(true)}
-          title={hasKey ? 'Edit API key' : 'Set API key'}
+          title={editButtonTitle}
           className={classNames(
             'flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] border transition-colors',
             hasKey
@@ -122,10 +146,19 @@ export const APIKeyManager: React.FC<APIKeyManagerProps> = ({ provider, apiKey, 
           )}
         >
           <div className={hasKey ? 'i-ph:check-circle-fill w-3 h-3' : 'i-ph:circle-dashed w-3 h-3'} />
-          {apiKey ? 'API key set' : isEnvKeySet ? 'API key via env' : 'No API key'}
+          {hasPersonalKey ? 'API key set' : isSharedKeySet ? 'Shared team key configured' : 'No API key'}
         </button>
       )}
-      {!isEditing && !apiKey && provider?.getApiKeyLink && (
+      {!isEditing && !hasPersonalKey && isSharedKeySet && (
+        <button
+          type="button"
+          onClick={() => setIsEditing(true)}
+          className="text-[11px] text-bolt-elements-textTertiary hover:text-bolt-elements-textPrimary underline-offset-2 hover:underline"
+        >
+          Use my own key
+        </button>
+      )}
+      {!isEditing && !hasPersonalKey && !isSharedKeySet && provider?.getApiKeyLink && (
         <button
           type="button"
           onClick={() => window.open(provider?.getApiKeyLink)}

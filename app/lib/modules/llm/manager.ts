@@ -209,4 +209,29 @@ export class LLMManager {
 
     return firstProvider;
   }
+
+  /**
+   * Sprint 38.4 — whether each provider has a SHARED (server-configured) key, independent
+   * of any individual user's own cookie key. Deliberately mirrors only the non-cookie legs
+   * of getProviderBaseUrlAndKey()'s precedence chain (base-provider.ts) — `serverEnv` (a
+   * Cloudflare Pages/Workers secret), `process.env` (local dev's .env.local), and this
+   * manager's own cached `_env` — so a user who has entered their own personal key is never
+   * mistaken for "the team has a shared key configured". Returns only booleans; the actual
+   * key value is never read into the return object, so this is safe to expose to the
+   * frontend as-is (see app/routes/api.shared-key-status.ts, the only caller).
+   */
+  getSharedKeyStatus(serverEnv?: Record<string, string>): Record<string, { configured: boolean }> {
+    const status: Record<string, { configured: boolean }> = {};
+
+    for (const provider of this._providers.values()) {
+      const apiTokenKey = provider.config.apiTokenKey;
+      const configured = Boolean(
+        apiTokenKey && (serverEnv?.[apiTokenKey] || process?.env?.[apiTokenKey] || this._env?.[apiTokenKey]),
+      );
+
+      status[provider.name] = { configured };
+    }
+
+    return status;
+  }
 }
