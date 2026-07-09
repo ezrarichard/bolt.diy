@@ -176,14 +176,23 @@ function mirrorToBuildersDb(work: () => Promise<unknown>): void {
 }
 
 /**
- * Sprint 34 — best-effort initial hydration from BuildersDB, called once by
- * ProjectList.tsx on mount. Local-first, safe-fallback: `projectsStore`
- * already holds whatever localStorage had (see the atom initializer above)
- * before this ever resolves, so the UI never blocks on network. If
- * BuildersDB is unavailable, or returns zero projects (e.g. a fresh/empty
- * BuildersDB project), the local list is left untouched — this only ever
- * REPLACES local state with remote state when BuildersDB actually returned
- * at least one project, never the other way around.
+ * Sprint 34, strengthened Sprint 38.3 — startup hydration from BuildersDB. Fired once at
+ * module load (see the bottom of this section) rather than waiting on any particular
+ * component to mount, so it runs as close to "application startup" as this module's own
+ * import does. Local-first, safe-fallback: `projectsStore` already holds whatever
+ * localStorage had (see the atom initializer above) before this ever resolves, so the UI
+ * never blocks on network, and any thrown/rejected error here leaves local state exactly
+ * as it was — BuildersDB being unreachable never loses local work.
+ *
+ * Two cases once BuildersDB is confirmed reachable:
+ *  - Remote already has projects: it becomes authoritative for the rest of the session —
+ *    `projectsStore` is replaced with the remote list, and that same list is written back
+ *    into the local cache (so the next offline load still has it).
+ *  - Remote is reachable but empty (a freshly-provisioned BuildersDB project): whatever
+ *    projects already exist locally are pushed up once via `buildersDbRepository.createProject`
+ *    (a one-time migration, not an ongoing merge — see docs/buildersdb.md) so a team
+ *    sharing this BuildersDB project immediately sees them too. `projectsStore` doesn't
+ *    need to change in this branch — it already holds exactly this data.
  */
 export async function hydrateProjectsFromBuildersDb(): Promise<void> {
   if (!isBuildersDbAvailable()) {
@@ -196,11 +205,28 @@ export async function hydrateProjectsFromBuildersDb(): Promise<void> {
     if (remoteProjects.length > 0) {
       projectsStore.set(remoteProjects);
       projectRepository.saveProjects(remoteProjects);
+
+      return;
+    }
+
+    const localProjects = projectRepository.loadProjects();
+
+    if (localProjects.length > 0) {
+      await Promise.all(localProjects.map((project) => buildersDbRepository.createProject(project)));
     }
   } catch (error) {
     console.error('[BuildersDB] hydrateProjectsFromBuildersDb() failed, keeping local projects:', error);
   }
 }
+
+/*
+ * Fire hydration the moment this module loads (fire-and-forget — never awaited at module
+ * scope, matching mirrorToBuildersDb()'s existing "never block a local read/write on
+ * network" contract). A no-op when BuildersDB isn't configured. Previously only triggered
+ * by ProjectList.tsx's mount effect; moved here so it runs regardless of which component
+ * (if any) happens to mount first.
+ */
+hydrateProjectsFromBuildersDb();
 
 /**
  * The "Current Project" — Sprint 2 concept. Set when a project is opened

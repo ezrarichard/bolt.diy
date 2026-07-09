@@ -1,13 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '@nanostores/react';
 import { classNames } from '~/utils/classNames';
-import {
-  deleteProject,
-  hydrateProjectsFromBuildersDb,
-  projectsStore,
-  requestNewProjectDialogStore,
-  type Project,
-} from '~/lib/stores/projects';
+import { deleteProject, projectsStore, requestNewProjectDialogStore, type Project } from '~/lib/stores/projects';
 import { ProjectListItem } from './ProjectListItem';
 import { NewProjectDialog } from './NewProjectDialog';
 
@@ -32,16 +26,6 @@ export function ProjectList({ onSelectProject }: ProjectListProps) {
       setIsNewProjectOpen(true);
     }
   }, [newProjectDialogRequest]);
-
-  /**
-   * Sprint 34 — one-time, best-effort refresh from BuildersDB on mount. A no-op
-   * (see hydrateProjectsFromBuildersDb in ~/lib/stores/projects) whenever BuildersDB
-   * isn't configured, so this has no effect until a real BuildersDB Supabase project
-   * is set up.
-   */
-  useEffect(() => {
-    hydrateProjectsFromBuildersDb();
-  }, []);
 
   const filteredProjects = useMemo(() => {
     if (!query.trim()) {

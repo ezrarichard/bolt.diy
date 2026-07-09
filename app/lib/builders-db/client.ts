@@ -84,3 +84,26 @@ export function getBuildersDbClient(): SupabaseClient | null {
 
   return cachedClient;
 }
+
+/**
+ * Live reachability check — `getBuildersDbClient()` only proves the env vars are set and
+ * `createClient()` didn't throw (a local object construction, no network call). The
+ * Workspace "BuildersDB: Connected / Local Only" status needs to know the configured
+ * project is actually reachable, so this issues one cheap `select id limit 1` against
+ * `builders_projects` and reports whether it succeeded. Never throws; a missing/renamed
+ * table or an RLS-denied query counts as "not connected" same as a network failure.
+ */
+export async function checkBuildersDbConnection(): Promise<boolean> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    return false;
+  }
+
+  try {
+    const { error } = await client.from('builders_projects').select('id').limit(1);
+    return !error;
+  } catch {
+    return false;
+  }
+}

@@ -5,6 +5,7 @@ import { assembleProductPackage } from '~/lib/product-assembly/productAssembler'
 import { saveProductPackage } from '~/lib/product-assembly/assemblyRepository';
 import type { ProductPackage, ProductPackageFile } from '~/lib/product-assembly/assemblyTypes';
 import { formatArtifactTimestamp } from '~/lib/projects/artifacts';
+import { useCodeGeneration } from '~/lib/hooks/useCodeGeneration';
 
 interface ProductPackagePanelProps {
   project: Project;
@@ -32,6 +33,7 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
   const [pkg, setPkg] = useState<ProductPackage | null>(null);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [isAssembling, setIsAssembling] = useState(false);
+  const codeGeneration = useCodeGeneration();
 
   const handleAssemble = async () => {
     setIsAssembling(true);
@@ -45,6 +47,12 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
       await saveProductPackage(assembled);
     } finally {
       setIsAssembling(false);
+    }
+  };
+
+  const handleGenerate = () => {
+    if (pkg) {
+      codeGeneration.runGeneration(project, pkg);
     }
   };
 
@@ -68,7 +76,33 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
             Assembled {formatArtifactTimestamp(pkg.assembledAt)}
           </span>
         )}
+
+        {pkg && (
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={codeGeneration.isRunning}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700 transition-colors disabled:opacity-50"
+          >
+            <span className="i-ph:rocket-launch w-4 h-4" />
+            {codeGeneration.isRunning
+              ? `${codeGeneration.stageLabel}${codeGeneration.detail ? ` — ${codeGeneration.detail}` : '…'}`
+              : codeGeneration.stage === 'complete'
+                ? 'Regenerate Application'
+                : 'Generate Application'}
+          </button>
+        )}
       </div>
+
+      {codeGeneration.stage === 'failed' && codeGeneration.error && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-600 dark:text-red-400">
+          <div className="font-semibold mb-1">Generation failed</div>
+          <div className="whitespace-pre-wrap break-words">{codeGeneration.error}</div>
+          <div className="mt-1 text-bolt-elements-textTertiary">
+            The previous application (if any) was left untouched — click "Generate Application" to retry.
+          </div>
+        </div>
+      )}
 
       {!pkg && (
         <div className="text-xs text-bolt-elements-textTertiary px-1">

@@ -372,8 +372,17 @@ export const Workbench = memo(
       }
     }, []);
 
+    /*
+     * Sprint 38 — widened from `chatStarted` alone so a code-generation run
+     * triggered from the Product Package panel (no chat message ever sent in this
+     * session, so `chatStarted` is false) can still reveal the workbench once it sets
+     * `workbenchStore.showWorkbench` true. Zero behavior change for the existing chat
+     * flow: `chatStarted` becoming true still renders this exactly as before, since
+     * `showWorkbench` starts false and is untouched by anything but explicit calls to
+     * `.set(true)`.
+     */
     return (
-      chatStarted && (
+      (chatStarted || showWorkbench) && (
         <motion.div
           initial="closed"
           animate={showWorkbench ? 'open' : 'closed'}

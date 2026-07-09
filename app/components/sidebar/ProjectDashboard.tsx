@@ -13,7 +13,7 @@ import { projectKnowledgeEngine, type ReadinessStageStatus } from '~/lib/project
 import { projectTaskEngine } from '~/lib/projects/taskEngine';
 import { executionEngine } from '~/lib/projects/executionEngine';
 import { reviewEngine } from '~/lib/projects/reviewEngine';
-import { getStorageProviderKind } from '~/lib/builders-db/repositories/projectsRepository';
+import { checkBuildersDbConnection } from '~/lib/builders-db/client';
 import {
   ARTIFACT_TYPES,
   getLatestArtifact,
@@ -556,6 +556,37 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
     return () => observer.disconnect();
   }, [open, project?.id, scrollContainerEl]);
 
+  /*
+   * Sprint 25 — Dashboard Reorganization; verified live as of Sprint 38.3. Whether
+   * BuildersDB (Builders' own control-plane persistence for Projects/Knowledge/
+   * Artifacts/Tasks/Reviews — never the product being built's own database) is actually
+   * reachable right now, not just "configured" — a set-but-wrong URL/key, an unreachable
+   * network, or a misconfigured table would previously still have shown "Connected".
+   * Re-checked every time the dashboard opens (a Supabase project can go from
+   * unreachable to reachable, or back, between visits). Declared above the `!project`
+   * guard below, alongside every other hook in this component — hooks can never follow a
+   * conditional return.
+   */
+  const [isBuildersDbConnected, setIsBuildersDbConnected] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    checkBuildersDbConnection().then((connected) => {
+      if (!cancelled) {
+        setIsBuildersDbConnected(connected);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
   if (!project) {
     return null;
   }
@@ -646,17 +677,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
    * sprint wires real signals into them.
    */
   const readiness = projectKnowledgeEngine.getReadiness(project);
-
-  /*
-   * Sprint 25 — Dashboard Reorganization. Which storage provider currently
-   * backs BuildersDB (Builders' own control-plane persistence for Projects/
-   * Knowledge/Artifacts/Tasks/Reviews — never the product being built's own
-   * database). Read-only: getStorageProviderKind() already existed
-   * (app/lib/builders-db/repositories/projectsRepository.ts, "exposed for a
-   * future debug/admin view"), it just wasn't surfaced in the dashboard
-   * yet. No repository code changes here.
-   */
-  const buildersDbProvider = getStorageProviderKind();
 
   /*
    * Sprint 30.5 — Engineering Journey collapse state. Each stage's latest
@@ -1043,7 +1063,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                     >
                       <GroupHeading
                         title="Product Package"
-                        subtitle="Assembles every approved (or latest draft) AI role output into a structured set of Markdown files — no code generation yet."
+                        subtitle="Assembles every approved (or latest draft) AI role output into a structured set of Markdown files, then can generate a real React app from it into the Preview tab."
                       />
                       <ProductPackagePanel project={project} />
                     </section>
@@ -1100,11 +1120,11 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                           rows={[
                             {
                               label: 'Status',
-                              value: buildersDbProvider === 'supabase' ? 'Connected' : 'Local Only',
+                              value: isBuildersDbConnected ? 'Connected' : 'Local Only',
                             },
                             {
                               label: 'Provider',
-                              value: buildersDbProvider === 'supabase' ? 'Supabase' : 'Browser Storage',
+                              value: isBuildersDbConnected ? 'Supabase' : 'Browser Storage',
                             },
                           ]}
                         />
