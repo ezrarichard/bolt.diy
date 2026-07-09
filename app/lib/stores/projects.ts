@@ -10,8 +10,10 @@ import type {
   TaskReviewRecord,
 } from '~/lib/projects/reviewEngine';
 import type { GenerationSession } from '~/lib/projects/generationSessionEngine';
+import { DEFAULT_WORKSPACE_STATE, type ProjectWorkspaceState } from '~/lib/projects/workspaceState';
 import { createProjectRepository } from '~/lib/builders-db/repositories/projectsRepository';
 import { buildersDbRepository, isBuildersDbAvailable } from '~/lib/builders-db/repositories/buildersDbRepository';
+import { workspaceStateRepository } from '~/lib/builders-db/repositories/workspaceStateRepository';
 import type { RoleOutputGenerationType } from '~/lib/builders-db/buildersDbTypes';
 
 /**
@@ -125,6 +127,20 @@ export interface Project {
    */
   generationSession?: GenerationSession;
 
+  /**
+   * Sprint 38.5 — persisted workspace/resume state (see
+   * app/lib/projects/workspaceState.ts): whether an application has been generated for
+   * this project, whether its preview/files are available, and the last dashboard
+   * tab/stage the user was on. Hydrated from BuildersDB's
+   * builders_project_workspace_state table when a project opens (see
+   * hydrateWorkspaceState below) — undefined until that hydration runs or BuildersDB is
+   * unavailable, in which case every reader falls back to today's "nothing generated
+   * yet" behavior. Kept as a plain field on `Project` (like `projectKnowledge`/
+   * `taskStatus`) rather than a separate store, so projectManagerEngine.ts's
+   * `analyzeProject(project)` can stay a pure synchronous function.
+   */
+  workspaceState?: ProjectWorkspaceState;
+
   // Future fields — intentionally unset in Sprint 1.
   githubRepo?: string;
   supabaseProjectId?: string;
@@ -227,6 +243,64 @@ export async function hydrateProjectsFromBuildersDb(): Promise<void> {
  * (if any) happens to mount first.
  */
 hydrateProjectsFromBuildersDb();
+
+/**
+ * Sprint 38.5 — loads one project's persisted `builders_project_workspace_state` row (see
+ * app/lib/projects/workspaceState.ts) and merges it onto that project's in-memory
+ * `workspaceState` field. Called by ProjectDashboard.tsx when a project opens (see that
+ * file's `useEffect` keyed on `project?.id`/`open`) — deliberately per-project rather than
+ * bulk-loaded for every project at module init like `hydrateProjectsFromBuildersDb`, since
+ * workspace state is only ever needed for whichever project is actually being viewed.
+ * A no-op (leaves `workspaceState` unset) when BuildersDB is unavailable or no row exists
+ * yet — every reader of `project.workspaceState` already treats `undefined` as "nothing
+ * generated yet", so this never blocks or breaks opening a project.
+ */
+export async function hydrateWorkspaceState(projectId: string): Promise<void> {
+  if (!isBuildersDbAvailable()) {
+    return;
+  }
+
+  try {
+    const state = await workspaceStateRepository.getWorkspaceState(projectId);
+
+    if (!state) {
+      return;
+    }
+
+    projectsStore.set(
+      projectsStore
+        .get()
+        .map((project) => (project.id === projectId ? { ...project, workspaceState: state } : project)),
+    );
+  } catch (error) {
+    console.error('[BuildersDB] hydrateWorkspaceState() failed:', error);
+  }
+}
+
+/**
+ * Sprint 38.5 — updates one project's workspace state, both in-memory (instant, so the UI
+ * reacts immediately — e.g. flipping "Generate Application" to "Continue Development" the
+ * moment a generation completes) and mirrored to BuildersDB (fire-and-forget, same
+ * `mirrorToBuildersDb` pattern every other mutator in this file already uses). `patch` is
+ * merged onto the project's current `workspaceState` (or `DEFAULT_WORKSPACE_STATE` if
+ * unset) — callers only need to pass the fields that actually changed.
+ */
+export function updateProjectWorkspaceState(projectId: string, patch: Partial<ProjectWorkspaceState>): void {
+  const projects = projectsStore.get();
+  const target = projects.find((project) => project.id === projectId);
+
+  if (!target) {
+    return;
+  }
+
+  const next: ProjectWorkspaceState = { ...(target.workspaceState ?? DEFAULT_WORKSPACE_STATE), ...patch };
+
+  projectsStore.set(
+    projects.map((project) => (project.id === projectId ? { ...project, workspaceState: next } : project)),
+  );
+
+  mirrorToBuildersDb(() => workspaceStateRepository.upsertWorkspaceState(projectId, patch));
+}
 
 /**
  * The "Current Project" — Sprint 2 concept. Set when a project is opened
@@ -506,6 +580,11 @@ export function addProjectArtifact(
       description: `${artifact.generatedBy ?? artifact.type} output saved (${artifact.status})`,
     });
   });
+
+  updateProjectWorkspaceState(projectId, {
+    lastActiveEngineer: artifact.generatedBy ?? artifact.type,
+    lastActivity: `${artifact.generatedBy ?? artifact.type} output saved (${artifact.status})`,
+  });
 }
 
 /**
@@ -550,6 +629,11 @@ export function updateProjectArtifact(
         activityType: 'role_output_saved',
         description: `${updatedArtifact.generatedBy ?? updatedArtifact.type} output ${updatedArtifact.status}`,
       });
+    });
+
+    updateProjectWorkspaceState(projectId, {
+      lastActiveEngineer: updatedArtifact.generatedBy ?? updatedArtifact.type,
+      lastActivity: `${updatedArtifact.generatedBy ?? updatedArtifact.type} output ${updatedArtifact.status}`,
     });
   }
 }

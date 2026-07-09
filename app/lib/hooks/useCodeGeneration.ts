@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { isProjectDashboardOpenStore, type Project } from '~/lib/stores/projects';
+import { isProjectDashboardOpenStore, updateProjectWorkspaceState, type Project } from '~/lib/stores/projects';
 import type { ProductPackage } from '~/lib/product-assembly/assemblyTypes';
 import { generateProject } from '~/lib/code-generation/projectGenerator';
 import {
@@ -11,6 +11,7 @@ import { workbenchStore } from '~/lib/stores/workbench';
 import { chatStore } from '~/lib/stores/chat';
 import { resetEngineeringTimeline, upsertEngineeringTimelineEvent } from '~/lib/stores/engineeringTimeline';
 import { buildersDbRepository } from '~/lib/builders-db/repositories/buildersDbRepository';
+import { getWorkspaceSnapshotProvider } from '~/lib/workspace-snapshot';
 import { useGenerateText } from './useGenerateText';
 
 /**
@@ -93,6 +94,12 @@ export function useCodeGeneration() {
     async (project: Project, productPackage: ProductPackage) => {
       setState({ isRunning: true, stage: 'planning', stageLabel: STAGE_GROUP_LABELS.planning });
       logActivity(project.id, 'generation_started', `Code generation started for "${project.name}"`);
+      updateProjectWorkspaceState(project.id, {
+        lastGenerationStatus: 'generating',
+        currentStage: 'planning',
+        lastActivity: `Generation started for "${project.name}"`,
+        lastError: undefined,
+      });
 
       // Reveal the Engineering Timeline / conversation area in place of the landing hero (see Chat.client.tsx's sync of this flag onto local `chatStarted` state).
       resetEngineeringTimeline();
@@ -136,6 +143,11 @@ export function useCodeGeneration() {
           status: 'failed',
           detail: message,
         });
+        updateProjectWorkspaceState(project.id, {
+          lastGenerationStatus: 'failed',
+          currentStage: result.failedStage ?? 'planning',
+          lastError: message,
+        });
 
         return;
       }
@@ -160,6 +172,22 @@ export function useCodeGeneration() {
           `${generatedProject.files.length} file(s) written to the workspace`,
         );
 
+        /*
+         * Sprint 38.5 — durably persist the generated app's file CONTENT (not just paths,
+         * which webcontainerWriter.ts already caches locally for stale-file cleanup) as a
+         * single workspace snapshot (see app/lib/workspace-snapshot/) so a later "Continue
+         * Development" can re-materialize it into a freshly-booted WebContainer without
+         * calling the LLM again. Fire-and-forget, like every other BuildersDB mirror in
+         * this codebase — a failure here never fails the generation the user is actively
+         * watching. Goes through the pluggable provider selector, not a BuildersDB
+         * repository directly, so a future GitHub-backed snapshot provider is a
+         * zero-call-site-change swap.
+         */
+        getWorkspaceSnapshotProvider()
+          .saveSnapshot(project.id, generatedProject.files)
+          .catch((error) => console.error('[CodeGeneration] Failed to persist generated files for resume:', error));
+        updateProjectWorkspaceState(project.id, { workbenchFilesCreated: true, currentStage: 'writing-files' });
+
         setState((prev) => ({ ...prev, stage: 'installing', stageLabel: STAGE_GROUP_LABELS.installing }));
         upsertEngineeringTimelineEvent('installing', { label: 'Installing dependencies', status: 'active' });
 
@@ -172,6 +200,11 @@ export function useCodeGeneration() {
             label: 'Installing dependencies failed',
             status: 'failed',
             detail: installResult.error,
+          });
+          updateProjectWorkspaceState(project.id, {
+            lastGenerationStatus: 'failed',
+            currentStage: 'installing',
+            lastError: installResult.error,
           });
 
           return;
@@ -189,6 +222,17 @@ export function useCodeGeneration() {
         upsertEngineeringTimelineEvent('preview-ready', { label: 'Preview ready', status: 'done' });
 
         setState({ isRunning: false, stage: 'complete', stageLabel: STAGE_GROUP_LABELS.complete, result });
+        updateProjectWorkspaceState(project.id, {
+          lastGenerationStatus: 'generated',
+          generatedApplicationExists: true,
+          previewAvailable: true,
+          lastPreviewStatus: 'available',
+          workbenchFilesCreated: true,
+          currentStage: 'complete',
+          lastGenerationTime: new Date().toISOString(),
+          lastActivity: 'Application generated and preview launched',
+          lastError: undefined,
+        });
       } catch (error) {
         const message =
           error instanceof Error ? error.message : 'Unexpected error while writing files or launching the preview.';
@@ -203,12 +247,112 @@ export function useCodeGeneration() {
           status: 'failed',
           detail: message,
         });
+        updateProjectWorkspaceState(project.id, {
+          lastGenerationStatus: 'failed',
+          lastError: message,
+        });
       }
     },
     [generate],
   );
 
+  /**
+   * Sprint 38.5 — "Continue Development": re-materializes a PREVIOUSLY generated
+   * application into a freshly-booted WebContainer, without calling the LLM again. This
+   * is what "resume, don't regenerate" concretely means — a page reload always boots an
+   * empty WebContainer (see webcontainerWriter.ts's header comment), so there is no
+   * "resume a suspended container" operation to perform; the fastest equivalent is
+   * re-writing the exact same files the last successful generation produced, which are
+   * durably stored in `builders_generated_files` (see generatedFilesRepository.ts) for
+   * exactly this purpose. Reuses the same `state`/stage machinery as `runGeneration` so
+   * the Engineering Timeline shows consistent progress feedback, just skipping straight
+   * to `writing-files` — no `planning`/`generating-*` stages, since nothing is being
+   * generated.
+   */
+  const resumeApplication = useCallback(async (project: Project) => {
+    setState({ isRunning: true, stage: 'writing-files', stageLabel: STAGE_GROUP_LABELS['writing-files'] });
+    logActivity(project.id, 'generation_started', `Resuming development on "${project.name}"`);
+
+    resetEngineeringTimeline();
+    chatStore.setKey('started', true);
+    upsertEngineeringTimelineEvent('generation-started', {
+      label: 'Resuming development',
+      status: 'done',
+      detail: `Restoring "${project.name}" from the last build`,
+    });
+    updateProjectWorkspaceState(project.id, { currentStage: 'writing-files', lastError: undefined });
+
+    try {
+      const files = await getWorkspaceSnapshotProvider().getSnapshot(project.id);
+
+      if (files.length === 0) {
+        const message = 'No previously generated files were found for this project.';
+        setState({ isRunning: false, stage: 'failed', stageLabel: 'Failed', error: message });
+        upsertEngineeringTimelineEvent('writing-files', { label: 'Resume failed', status: 'failed', detail: message });
+        updateProjectWorkspaceState(project.id, { lastGenerationStatus: 'failed', lastError: message });
+
+        return;
+      }
+
+      isProjectDashboardOpenStore.set(false);
+      upsertEngineeringTimelineEvent('writing-files', { label: 'Restoring files', status: 'active' });
+
+      await writeGeneratedProjectToWebContainer({
+        projectId: project.id,
+        templateId: 'resumed',
+        files,
+        folders: [],
+        generatedAt: new Date().toISOString(),
+      });
+
+      setState((prev) => ({ ...prev, stage: 'installing', stageLabel: STAGE_GROUP_LABELS.installing }));
+      upsertEngineeringTimelineEvent('installing', { label: 'Installing dependencies', status: 'active' });
+
+      const installResult = await installAndStartDevServer();
+
+      if (!installResult.ok) {
+        setState({ isRunning: false, stage: 'failed', stageLabel: 'Failed', error: installResult.error });
+        upsertEngineeringTimelineEvent('installing', {
+          label: 'Installing dependencies failed',
+          status: 'failed',
+          detail: installResult.error,
+        });
+        updateProjectWorkspaceState(project.id, { lastGenerationStatus: 'failed', lastError: installResult.error });
+
+        return;
+      }
+
+      setState((prev) => ({
+        ...prev,
+        stage: 'launching-preview',
+        stageLabel: STAGE_GROUP_LABELS['launching-preview'],
+      }));
+      upsertEngineeringTimelineEvent('launching-preview', { label: 'Launching preview', status: 'active' });
+      workbenchStore.showWorkbench.set(true);
+      workbenchStore.currentView.set('preview');
+      logActivity(project.id, 'preview_started', 'Preview relaunched while resuming development');
+      upsertEngineeringTimelineEvent('preview-ready', { label: 'Preview ready', status: 'done' });
+
+      setState({ isRunning: false, stage: 'complete', stageLabel: STAGE_GROUP_LABELS.complete });
+      updateProjectWorkspaceState(project.id, {
+        previewAvailable: true,
+        lastPreviewStatus: 'available',
+        currentStage: 'complete',
+        lastActivity: 'Resumed development',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected error while resuming development.';
+      setState({ isRunning: false, stage: 'failed', stageLabel: 'Failed', error: message });
+      upsertEngineeringTimelineEvent('launching-preview', {
+        label: 'Resume failed',
+        status: 'failed',
+        detail: message,
+      });
+      updateProjectWorkspaceState(project.id, { lastGenerationStatus: 'failed', lastError: message });
+    }
+  }, []);
+
   const reset = useCallback(() => setState(IDLE_STATE), []);
 
-  return { ...state, runGeneration, reset };
+  return { ...state, runGeneration, resumeApplication, reset };
 }

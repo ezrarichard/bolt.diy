@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { classNames } from '~/utils/classNames';
-import type { Project } from '~/lib/stores/projects';
+import { updateProjectWorkspaceState, type Project } from '~/lib/stores/projects';
 import { assembleProductPackage } from '~/lib/product-assembly/productAssembler';
-import { saveProductPackage } from '~/lib/product-assembly/assemblyRepository';
+import { getProductPackage, saveProductPackage } from '~/lib/product-assembly/assemblyRepository';
 import type { ProductPackage, ProductPackageFile } from '~/lib/product-assembly/assemblyTypes';
 import { formatArtifactTimestamp } from '~/lib/projects/artifacts';
+import { getWorkspaceSnapshotProvider } from '~/lib/workspace-snapshot';
 import { useCodeGeneration } from '~/lib/hooks/useCodeGeneration';
 
 interface ProductPackagePanelProps {
@@ -18,22 +19,71 @@ const STATUS_META: Record<ProductPackageFile['sourceStatus'], { label: string; c
 };
 
 /**
- * Sprint 37 — minimal Product Package preview: a manual "Assemble Product Package"
- * button, a file list grouped by section (with source status badges), a missing-
- * sections callout, and a plain read-only content preview for whichever file is
- * selected. Deliberately no file tree, no editing, no code generation, no live preview
- * — see app/lib/product-assembly/productAssembler.ts for why that's Sprint 38's job.
+ * Sprint 37 — Product Package preview: a manual "Assemble Product Package" button, a file
+ * list grouped by section (with source status badges), a missing-sections callout, and a
+ * plain read-only content preview for whichever file is selected.
  *
- * Assembly itself (`assembleProductPackage`) is synchronous and reads only the
- * in-memory `project` prop, so it always works — persisting to BuildersDB
- * (`saveProductPackage`) is a best-effort extra step afterward that never blocks or
- * fails the preview if BuildersDB is unconfigured/unreachable.
+ * Sprint 38.5 — Workspace Resume. Two gaps this closes:
+ *  1. `pkg` now hydrates from BuildersDB on mount (`getProductPackage`, already fully
+ *     implemented since Sprint 37 but never called anywhere before this) — reopening an
+ *     already-assembled project no longer shows the empty "Nothing assembled yet" state.
+ *  2. Once `project.workspaceState?.generatedApplicationExists` is true (persisted by
+ *     useCodeGeneration.ts on a successful generation), the primary action becomes
+ *     "Continue Development" (calls `resumeApplication`, which re-materializes the
+ *     already-generated files into a fresh WebContainer with no LLM call — see that
+ *     function's own comment) instead of "Generate Application", with an Application
+ *     Status card showing what's actually there and a secondary "Regenerate" action for
+ *     the old flow.
  */
 export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
   const [pkg, setPkg] = useState<ProductPackage | null>(null);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [isAssembling, setIsAssembling] = useState(false);
+  const [isLoadingPackage, setIsLoadingPackage] = useState(true);
+  const [generatedFileCount, setGeneratedFileCount] = useState<number | null>(null);
   const codeGeneration = useCodeGeneration();
+
+  const workspaceState = project.workspaceState;
+  const applicationGenerated = Boolean(workspaceState?.generatedApplicationExists);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingPackage(true);
+
+    getProductPackage(project.id).then((persisted) => {
+      if (!cancelled && persisted) {
+        setPkg(persisted);
+        setSelectedFileId(persisted.sections[0]?.files[0]?.id ?? null);
+      }
+
+      if (!cancelled) {
+        setIsLoadingPackage(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
+
+  useEffect(() => {
+    if (!applicationGenerated) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    getWorkspaceSnapshotProvider()
+      .getSnapshotMeta(project.id)
+      .then((meta) => {
+        if (!cancelled) {
+          setGeneratedFileCount(meta?.fileCount ?? null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id, applicationGenerated]);
 
   const handleAssemble = async () => {
     setIsAssembling(true);
@@ -45,6 +95,10 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
 
       // Best-effort — a failed/unconfigured save never affects the preview above.
       await saveProductPackage(assembled);
+      updateProjectWorkspaceState(project.id, {
+        productPackageAssembled: true,
+        lastActivity: 'Product Package assembled',
+      });
     } finally {
       setIsAssembling(false);
     }
@@ -56,11 +110,70 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
     }
   };
 
+  const handleContinueDevelopment = () => {
+    codeGeneration.resumeApplication(project);
+  };
+
   const allFiles = pkg?.sections.flatMap((section) => section.files) ?? [];
   const selectedFile = allFiles.find((file) => file.id === selectedFileId) ?? null;
 
   return (
     <div className="space-y-4">
+      {applicationGenerated && (
+        <div className="rounded-xl border border-green-500/20 bg-green-500/5 p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="i-ph:check-circle-fill w-4 h-4 text-green-500" />
+            <span className="text-sm font-semibold text-bolt-elements-textPrimary">Application Status</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-bolt-elements-textTertiary">Status</div>
+              <div className="text-xs font-medium text-green-600 dark:text-green-400">Generated</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-bolt-elements-textTertiary">Last Build</div>
+              <div className="text-xs font-medium text-bolt-elements-textPrimary">
+                {workspaceState?.lastGenerationTime ? formatArtifactTimestamp(workspaceState.lastGenerationTime) : '—'}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-bolt-elements-textTertiary">Preview</div>
+              <div className="text-xs font-medium text-bolt-elements-textPrimary">
+                {workspaceState?.previewAvailable ? 'Available' : 'Not Available'}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-bolt-elements-textTertiary">Files</div>
+              <div className="text-xs font-medium text-bolt-elements-textPrimary">{generatedFileCount ?? '—'}</div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={handleContinueDevelopment}
+              disabled={codeGeneration.isRunning}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700 transition-colors disabled:opacity-50"
+            >
+              <span className="i-ph:play-fill w-4 h-4" />
+              {codeGeneration.isRunning
+                ? `${codeGeneration.stageLabel}${codeGeneration.detail ? ` — ${codeGeneration.detail}` : '…'}`
+                : 'Continue Development'}
+            </button>
+            {pkg && (
+              <button
+                type="button"
+                onClick={handleGenerate}
+                disabled={codeGeneration.isRunning}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium border border-bolt-elements-borderColor/50 text-bolt-elements-textSecondary hover:bg-bolt-elements-background-depth-2 transition-colors disabled:opacity-50"
+              >
+                <span className="i-ph:arrow-clockwise w-3.5 h-3.5" />
+                Regenerate
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
@@ -77,7 +190,7 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
           </span>
         )}
 
-        {pkg && (
+        {!applicationGenerated && pkg && (
           <button
             type="button"
             onClick={handleGenerate}
@@ -87,9 +200,7 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
             <span className="i-ph:rocket-launch w-4 h-4" />
             {codeGeneration.isRunning
               ? `${codeGeneration.stageLabel}${codeGeneration.detail ? ` — ${codeGeneration.detail}` : '…'}`
-              : codeGeneration.stage === 'complete'
-                ? 'Regenerate Application'
-                : 'Generate Application'}
+              : 'Generate Application'}
           </button>
         )}
       </div>
@@ -99,12 +210,13 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
           <div className="font-semibold mb-1">Generation failed</div>
           <div className="whitespace-pre-wrap break-words">{codeGeneration.error}</div>
           <div className="mt-1 text-bolt-elements-textTertiary">
-            The previous application (if any) was left untouched — click "Generate Application" to retry.
+            The previous application (if any) was left untouched — click{' '}
+            {applicationGenerated ? '"Continue Development"' : '"Generate Application"'} to retry.
           </div>
         </div>
       )}
 
-      {!pkg && (
+      {!pkg && !isLoadingPackage && (
         <div className="text-xs text-bolt-elements-textTertiary px-1">
           Nothing assembled yet — click "Assemble Product Package" to collect every approved (or latest draft) AI role
           output into a structured package.

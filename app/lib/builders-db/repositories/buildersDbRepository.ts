@@ -602,7 +602,16 @@ export async function addProjectActivity(input: BuildersDbActivityInput): Promis
   }
 }
 
-export async function getProjectActivity(projectId: string): Promise<BuildersDbActivityInput[]> {
+/**
+ * Sprint 38.5 — first real caller (ProjectHistoryPanel.tsx). Returns `createdAt` on each
+ * entry, unlike `BuildersDbActivityInput` alone (that type only describes the write
+ * shape) — a "newest first" history list is unusable without a timestamp to display, even
+ * though the query itself already orders by it. Same `& { createdAt: string }` pattern
+ * `getContextTrace` below already uses for the same reason.
+ */
+export async function getProjectActivity(
+  projectId: string,
+): Promise<(BuildersDbActivityInput & { createdAt: string })[]> {
   const client = getBuildersDbClient();
 
   if (!client) {
@@ -626,6 +635,7 @@ export async function getProjectActivity(projectId: string): Promise<BuildersDbA
       activityType: row.activity_type,
       description: row.description,
       metadata: row.metadata ?? {},
+      createdAt: row.created_at,
     }));
   } catch (error) {
     logError('getProjectActivity', error);

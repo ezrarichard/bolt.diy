@@ -346,8 +346,15 @@ function isReadyForGeneration(project: Project): ReadinessResult {
  * The single next thing the project needs — walks the pipeline in order and
  * stops at the first stage that isn't approved yet (mirrors how each
  * engine's own `canGenerateX` gate reads the pipeline), then falls back to
- * the review queue, then blocked tasks, then remaining task work. Only once
- * none of those apply does it report the project ready.
+ * the review queue, then blocked tasks, then remaining task work.
+ *
+ * Sprint 38.5 — extended past the original "ready for code generation" stopping point to
+ * cover the rest of the lifecycle (Product Package, code generation, resume), reading
+ * `project.workspaceState` (see app/lib/projects/workspaceState.ts) for the signals no
+ * earlier sprint tracked. `generatedApplicationExists` deliberately short-circuits ahead
+ * of the task/review/roadmap checks below it: once an application exists, "keep building
+ * on what you have" is always the more useful next step than "go finish unrelated
+ * planning tasks" — matches the Task 3 UI spec's "Continue Development" primary action.
  */
 function getNextRecommendedAction(project: Project): NextRecommendedAction {
   if (!isRequirementsCaptured(getProjectKnowledge(project))) {
@@ -363,6 +370,10 @@ function getNextRecommendedAction(project: Project): NextRecommendedAction {
         : `Generate the ${firstUnapproved.label} Draft.`;
 
     return { message, stageId: firstUnapproved.id };
+  }
+
+  if (project.workspaceState?.generatedApplicationExists) {
+    return { message: 'Continue Development — your generated application is ready to keep building on.' };
   }
 
   const reviewSummary = reviewEngine.getReviewSummary(project);
@@ -383,7 +394,11 @@ function getNextRecommendedAction(project: Project): NextRecommendedAction {
     return { message: 'Continue working through the remaining tasks in the Task Execution Plan.' };
   }
 
-  return { message: 'All engineering artifacts are approved and no blockers remain — ready for code generation.' };
+  if (!project.workspaceState?.productPackageAssembled) {
+    return { message: 'Assemble the Product Package to prepare for code generation.' };
+  }
+
+  return { message: 'Generate the application from your assembled Product Package.' };
 }
 
 /** The single entry point the Dashboard (and any future consumer) should call — everything else above is exported for reuse/testing. */
