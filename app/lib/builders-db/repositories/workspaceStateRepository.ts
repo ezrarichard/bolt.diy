@@ -40,6 +40,8 @@ interface WorkspaceStateRow {
   current_stage: string | null;
   last_error: string | null;
   product_package_assembled: boolean;
+  repair_attempts: number;
+  last_repair_status: string | null;
 }
 
 function fromRow(row: WorkspaceStateRow): ProjectWorkspaceState {
@@ -57,6 +59,8 @@ function fromRow(row: WorkspaceStateRow): ProjectWorkspaceState {
     currentStage: row.current_stage ?? undefined,
     lastError: row.last_error ?? undefined,
     productPackageAssembled: row.product_package_assembled,
+    repairAttempts: row.repair_attempts,
+    lastRepairStatus: (row.last_repair_status ?? undefined) as ProjectWorkspaceState['lastRepairStatus'],
   };
 }
 
@@ -121,6 +125,8 @@ export async function upsertWorkspaceState(projectId: string, patch: Partial<Pro
         current_stage: next.currentStage ?? null,
         last_error: next.lastError ?? null,
         product_package_assembled: next.productPackageAssembled ?? false,
+        repair_attempts: next.repairAttempts ?? 0,
+        last_repair_status: next.lastRepairStatus ?? null,
       },
       { onConflict: 'project_id' },
     );

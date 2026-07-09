@@ -36,6 +36,12 @@ export interface ProjectWorkspaceState {
   /** Free-text label of the furthest lifecycle stage reached (e.g. "launching-preview", "complete") — same vocabulary as GenerationStage/STAGE_GROUP_LABELS in useCodeGeneration.ts. */
   currentStage?: string;
   lastError?: string;
+
+  /** Sprint 39 — how many AI repair attempts the self-healing loop made during the most recent generation (0 if none were needed). */
+  repairAttempts?: number;
+
+  /** Sprint 39 — outcome of the self-healing loop's most recent run, for the Workspace tab's repair status line. */
+  lastRepairStatus?: 'not-attempted' | 'repairing' | 'succeeded' | 'failed';
 }
 
 export const DEFAULT_WORKSPACE_STATE: ProjectWorkspaceState = {

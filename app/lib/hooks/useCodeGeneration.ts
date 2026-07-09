@@ -1,12 +1,15 @@
 import { useCallback, useState } from 'react';
 import { isProjectDashboardOpenStore, updateProjectWorkspaceState, type Project } from '~/lib/stores/projects';
 import type { ProductPackage } from '~/lib/product-assembly/assemblyTypes';
+import { buildProductSummaryMarkdown } from '~/lib/product-assembly/assemblyMarkdown';
 import { generateProject } from '~/lib/code-generation/projectGenerator';
 import {
   installAndStartDevServer,
   writeGeneratedProjectToWebContainer,
 } from '~/lib/code-generation/webcontainerWriter';
 import type { GenerationResult, GenerationStage } from '~/lib/code-generation/codeGenerationTypes';
+import { runBuildRepairLoop, runStaticReviewLoop } from '~/lib/code-review/repairEngine';
+import type { OnRepairLoopEvent } from '~/lib/code-review/codeReviewTypes';
 import { workbenchStore } from '~/lib/stores/workbench';
 import { chatStore } from '~/lib/stores/chat';
 import { resetEngineeringTimeline, upsertEngineeringTimelineEvent } from '~/lib/stores/engineeringTimeline';
@@ -86,6 +89,103 @@ function logActivity(projectId: string, activityType: string, description: strin
     .catch((error) => console.error(`[CodeGeneration] ${activityType} activity log failed:`, error));
 }
 
+/**
+ * Sprint 39 — translates the Code Reviewer/Repair Engineer/Build Validator loops'
+ * `RepairLoopEvent`s into Engineering Timeline entries (labeled with the role name, so
+ * repair activity reads as engineering-team work, not background plumbing) plus the same
+ * activity-log/workspace-state side effects every other stage already gets. Mirrors exactly
+ * how `runGenerationPipeline`'s `onProgress` is consumed above — the loop functions
+ * themselves (repairEngine.ts) stay pure/testable, this hook owns every store write.
+ */
+function createRepairEventHandler(projectId: string, onAttempt: (attemptNumber: number) => void): OnRepairLoopEvent {
+  return (event) => {
+    switch (event.type) {
+      case 'code-review-started':
+        upsertEngineeringTimelineEvent('code-review', {
+          label: 'Code Reviewer: reviewing generated code',
+          status: 'active',
+        });
+        logActivity(projectId, 'code_review_started', 'Code Reviewer started reviewing generated code');
+        break;
+      case 'static-validation-passed':
+        upsertEngineeringTimelineEvent('code-review', { label: 'Code Reviewer: validation passed', status: 'done' });
+        break;
+      case 'static-validation-failed':
+        upsertEngineeringTimelineEvent('code-review', {
+          label: 'Code Reviewer: issues found',
+          status: 'failed',
+          detail: `${event.issues.length} issue(s) found`,
+        });
+        break;
+      case 'repair-attempt-started':
+        onAttempt(event.attemptNumber);
+        upsertEngineeringTimelineEvent('repair-attempt', {
+          label: `Repair Engineer: attempting fix (${event.attemptNumber}/${event.maxAttempts})`,
+          status: 'active',
+          detail: event.stage === 'static' ? 'Fixing code review issues' : 'Fixing build/runtime error',
+        });
+        updateProjectWorkspaceState(projectId, { lastRepairStatus: 'repairing', repairAttempts: event.attemptNumber });
+        logActivity(
+          projectId,
+          'repair_attempt_started',
+          `Repair Engineer attempt ${event.attemptNumber}/${event.maxAttempts} (${event.stage})`,
+        );
+        break;
+      case 'repair-patch-applied':
+        upsertEngineeringTimelineEvent('repair-attempt', {
+          label: 'Repair Engineer: patch applied',
+          status: 'done',
+          detail: event.summary,
+        });
+        logActivity(projectId, 'repair_patch_applied', `Repair Engineer applied a patch: ${event.summary}`);
+        break;
+      case 'repair-failed':
+        upsertEngineeringTimelineEvent('repair-attempt', {
+          label: 'Repair Engineer: repair failed',
+          status: 'failed',
+          detail: event.reason,
+        });
+        logActivity(
+          projectId,
+          'repair_failed',
+          `Repair Engineer's attempt ${event.attemptNumber} failed: ${event.reason}`,
+        );
+        break;
+      case 'build-validation-started':
+        upsertEngineeringTimelineEvent('build-validation', {
+          label: 'Build Validator: installing & starting dev server',
+          status: 'active',
+        });
+        break;
+      case 'preview-validation-passed':
+        upsertEngineeringTimelineEvent('build-validation', {
+          label: 'Build Validator: preview stable',
+          status: 'done',
+        });
+        break;
+      case 'preview-validation-failed':
+        upsertEngineeringTimelineEvent('build-validation', {
+          label: 'Build Validator: build/runtime error detected',
+          status: 'failed',
+          detail: event.error.message,
+        });
+        break;
+      case 'manual-attention-required':
+        upsertEngineeringTimelineEvent('manual-attention', {
+          label: 'Manual attention required',
+          status: 'failed',
+          detail: event.detail,
+        });
+        logActivity(
+          projectId,
+          'manual_attention_required',
+          `Manual attention required (${event.stage}): ${event.detail}`,
+        );
+        break;
+    }
+  };
+}
+
 export function useCodeGeneration() {
   const { generate } = useGenerateText();
   const [state, setState] = useState<CodeGenerationState>(IDLE_STATE);
@@ -152,9 +252,53 @@ export function useCodeGeneration() {
         return;
       }
 
-      const generatedProject = result.project;
+      let generatedProject = result.project;
+      let totalRepairAttempts = 0;
+      const handleRepairEvent = createRepairEventHandler(project.id, (attemptNumber) => {
+        totalRepairAttempts = Math.max(totalRepairAttempts, attemptNumber);
+      });
+      const productPackageSummary = buildProductSummaryMarkdown(
+        project,
+        productPackage.sections,
+        productPackage.missingSections,
+        productPackage.assembledAt,
+      );
 
       try {
+        /*
+         * Sprint 39 — the Code Reviewer runs (and, if needed, the Repair Engineer patches)
+         * entirely in memory BEFORE anything is written to the WebContainer — a failure
+         * here never touches whatever project was already running, same guarantee
+         * generationPipeline.ts's own validation stage already gives (see
+         * runStaticReviewLoop's header comment in repairEngine.ts).
+         */
+        const reviewResult = await runStaticReviewLoop({
+          project: generatedProject,
+          projectId: project.id,
+          projectName: project.name,
+          productPackageSummary,
+          generate,
+          onEvent: handleRepairEvent,
+        });
+
+        if (!reviewResult.ok) {
+          const message =
+            reviewResult.issues.find((issue) => issue.severity === 'error')?.message ??
+            'Code review found issues that could not be automatically repaired.';
+          setState({ isRunning: false, stage: 'failed', stageLabel: 'Failed', result, error: message });
+          logActivity(project.id, 'generation_failed', `Code review failed after repair attempts: ${message}`);
+          updateProjectWorkspaceState(project.id, {
+            lastGenerationStatus: 'failed',
+            lastError: message,
+            lastRepairStatus: 'failed',
+            repairAttempts: totalRepairAttempts,
+          });
+
+          return;
+        }
+
+        generatedProject = reviewResult.project;
+
         setState((prev) => ({ ...prev, stage: 'writing-files', stageLabel: STAGE_GROUP_LABELS['writing-files'] }));
 
         /*
@@ -183,28 +327,47 @@ export function useCodeGeneration() {
          * repository directly, so a future GitHub-backed snapshot provider is a
          * zero-call-site-change swap.
          */
-        getWorkspaceSnapshotProvider()
-          .saveSnapshot(project.id, generatedProject.files)
-          .catch((error) => console.error('[CodeGeneration] Failed to persist generated files for resume:', error));
+        const saveSnapshot = (files: typeof generatedProject.files) => {
+          getWorkspaceSnapshotProvider()
+            .saveSnapshot(project.id, files)
+            .catch((error) => console.error('[CodeGeneration] Failed to persist generated files for resume:', error));
+        };
+
+        saveSnapshot(generatedProject.files);
         updateProjectWorkspaceState(project.id, { workbenchFilesCreated: true, currentStage: 'writing-files' });
 
         setState((prev) => ({ ...prev, stage: 'installing', stageLabel: STAGE_GROUP_LABELS.installing }));
         upsertEngineeringTimelineEvent('installing', { label: 'Installing dependencies', status: 'active' });
 
-        const installResult = await installAndStartDevServer();
+        /*
+         * Sprint 39 — the Build Validator installs dependencies, starts the dev server, and
+         * watches a short bounded window for a Vite/runtime failure (see errorCollector.ts).
+         * On failure the Repair Engineer patches the ALREADY-WRITTEN files, re-writes them,
+         * and retries — up to a fixed attempt limit — before this is reported as failed.
+         */
+        const buildResult = await runBuildRepairLoop({
+          project: generatedProject,
+          projectId: project.id,
+          projectName: project.name,
+          productPackageSummary,
+          generate,
+          onEvent: handleRepairEvent,
+          installAndStartDevServer,
+          writeProjectToWebContainer: writeGeneratedProjectToWebContainer,
+          saveSnapshot,
+        });
 
-        if (!installResult.ok) {
-          setState({ isRunning: false, stage: 'failed', stageLabel: 'Failed', result, error: installResult.error });
-          logActivity(project.id, 'generation_failed', `Generation failed while installing: ${installResult.error}`);
-          upsertEngineeringTimelineEvent('installing', {
-            label: 'Installing dependencies failed',
-            status: 'failed',
-            detail: installResult.error,
-          });
+        generatedProject = buildResult.project;
+
+        if (!buildResult.ok) {
+          setState({ isRunning: false, stage: 'failed', stageLabel: 'Failed', result, error: buildResult.error });
+          logActivity(project.id, 'generation_failed', `Generation failed while installing: ${buildResult.error}`);
           updateProjectWorkspaceState(project.id, {
             lastGenerationStatus: 'failed',
             currentStage: 'installing',
-            lastError: installResult.error,
+            lastError: buildResult.error,
+            lastRepairStatus: 'failed',
+            repairAttempts: totalRepairAttempts,
           });
 
           return;
@@ -232,6 +395,8 @@ export function useCodeGeneration() {
           lastGenerationTime: new Date().toISOString(),
           lastActivity: 'Application generated and preview launched',
           lastError: undefined,
+          repairAttempts: totalRepairAttempts,
+          lastRepairStatus: totalRepairAttempts > 0 ? 'succeeded' : 'not-attempted',
         });
       } catch (error) {
         const message =

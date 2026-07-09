@@ -1217,6 +1217,25 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                 },
                               ]}
                             />
+                            {/* Sprint 39 — Code Reviewer/Repair Engineer/Build Validator status, read from the same workspaceState the other Workspace cards already use. */}
+                            <InfoCard
+                              icon="i-ph:wrench-duotone"
+                              label="Self-Healing"
+                              rows={[
+                                {
+                                  label: 'Status',
+                                  value:
+                                    workspaceState?.lastRepairStatus === 'succeeded'
+                                      ? 'Repaired'
+                                      : workspaceState?.lastRepairStatus === 'failed'
+                                        ? 'Needs Attention'
+                                        : workspaceState?.lastRepairStatus === 'repairing'
+                                          ? 'Repairing…'
+                                          : 'Not Needed',
+                                },
+                                { label: 'Attempts', value: String(workspaceState?.repairAttempts ?? 0) },
+                              ]}
+                            />
                           </div>
 
                           {/* Sprint 38.5 — Shared AI Provider status, reads /api/shared-key-status (see SharedProviderStatusCard.tsx) — booleans only, never a key value. */}
