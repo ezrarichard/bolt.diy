@@ -20,17 +20,35 @@ function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
 }
 
+/**
+ * Sprint 41.6 — shared by the profile-driven greeting (`profiles.display_name`, e.g. "Mary
+ * Ann Thomas" -> "Mary") and the metadata fallback below (same "first whitespace-separated
+ * token" rule either way).
+ */
+export function firstNameFromFullName(fullName: string | null | undefined): string | null {
+  const trimmed = fullName?.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  return capitalize(trimmed.split(/\s+/)[0]);
+}
+
 export function deriveFirstName(user: Pick<User, 'email' | 'user_metadata'> | null | undefined): string | null {
   const metadata = user?.user_metadata as Record<string, unknown> | undefined;
 
   const metadataName =
     (metadata?.first_name as string | undefined) ||
     (metadata?.given_name as string | undefined) ||
+    (metadata?.display_name as string | undefined) ||
     (metadata?.full_name as string | undefined) ||
     (metadata?.name as string | undefined);
 
-  if (typeof metadataName === 'string' && metadataName.trim()) {
-    return capitalize(metadataName.trim().split(/\s+/)[0]);
+  const fromMetadata = firstNameFromFullName(metadataName);
+
+  if (fromMetadata) {
+    return fromMetadata;
   }
 
   const email = user?.email;

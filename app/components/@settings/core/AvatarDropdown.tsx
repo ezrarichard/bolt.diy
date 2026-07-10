@@ -1,19 +1,24 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { motion } from 'framer-motion';
-import { useStore } from '@nanostores/react';
 import { classNames } from '~/utils/classNames';
-import { profileStore } from '~/lib/stores/profile';
 import { useAuth } from '~/lib/auth/AuthProvider';
-import type { TabType, Profile } from './types';
+import type { TabType } from './types';
 
 interface AvatarDropdownProps {
   onSelectTab: (tab: TabType) => void;
 }
 
+/**
+ * Sprint 41.6 — reads the centralized `profile`/`user` from AuthProvider only; no separate
+ * `profiles` query here and no more localStorage `profileStore` (that store is unrelated —
+ * it backs the per-message chat avatar in app/components/chat/UserMessage.tsx, not this
+ * account menu). `displayName` prefers `profile.displayName`, then falls back to the email —
+ * never "Guest User", since every render of this menu is already behind AuthGate.
+ */
 export const AvatarDropdown = ({ onSelectTab }: AvatarDropdownProps) => {
-  const profile = useStore(profileStore) as Profile;
-  const { user, signOut } = useAuth();
-  const displayName = profile?.username || user?.email || 'Guest User';
+  const { user, profile, signOut } = useAuth();
+  const displayName = profile?.displayName || user?.email || 'Account';
+  const avatarUrl = profile?.avatarUrl;
 
   return (
     <DropdownMenu.Root>
@@ -23,10 +28,10 @@ export const AvatarDropdown = ({ onSelectTab }: AvatarDropdownProps) => {
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
         >
-          {profile?.avatar ? (
+          {avatarUrl ? (
             <img
-              src={profile.avatar}
-              alt={profile?.username || 'Profile'}
+              src={avatarUrl}
+              alt={displayName}
               className="w-full h-full rounded-full object-cover"
               loading="eager"
               decoding="sync"
@@ -59,10 +64,10 @@ export const AvatarDropdown = ({ onSelectTab }: AvatarDropdownProps) => {
             )}
           >
             <div className="w-10 h-10 rounded-full overflow-hidden flex-shrink-0 bg-white dark:bg-gray-800 shadow-sm">
-              {profile?.avatar ? (
+              {avatarUrl ? (
                 <img
-                  src={profile.avatar}
-                  alt={profile?.username || 'Profile'}
+                  src={avatarUrl}
+                  alt={displayName}
                   className={classNames('w-full h-full', 'object-cover', 'transform-gpu', 'image-rendering-crisp')}
                   loading="eager"
                   decoding="sync"
@@ -75,10 +80,8 @@ export const AvatarDropdown = ({ onSelectTab }: AvatarDropdownProps) => {
             </div>
             <div className="flex-1 min-w-0">
               <div className="font-medium text-sm text-gray-900 dark:text-white truncate">{displayName}</div>
-              {profile?.bio ? (
-                <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{profile.bio}</div>
-              ) : (
-                user?.email && <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{user.email}</div>
+              {profile?.displayName && user?.email && (
+                <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{user.email}</div>
               )}
             </div>
           </div>

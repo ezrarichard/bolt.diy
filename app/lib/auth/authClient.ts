@@ -1,4 +1,4 @@
-import type { Session } from '@supabase/supabase-js';
+import type { Session, User } from '@supabase/supabase-js';
 import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/client';
 import { deriveFirstName } from './deriveName';
 import type { AuthUser } from './authTypes';
@@ -41,8 +41,12 @@ export async function getCurrentSession(): Promise<Session | null> {
   return data.session;
 }
 
-/** Returns an unsubscribe function. */
-export function onAuthStateChange(callback: (user: AuthUser | null) => void): () => void {
+/**
+ * Returns an unsubscribe function. The second callback argument is the raw Supabase user
+ * (carries `user_metadata`, which `AuthUser` deliberately doesn't) — AuthProvider.tsx needs
+ * it to seed/refresh the `public.profiles` row via profileClient.ts.
+ */
+export function onAuthStateChange(callback: (user: AuthUser | null, rawUser: User | null) => void): () => void {
   const client = getBuildersDbClient();
 
   if (!client) {
@@ -50,7 +54,7 @@ export function onAuthStateChange(callback: (user: AuthUser | null) => void): ()
   }
 
   const { data } = client.auth.onAuthStateChange((_event, session) => {
-    callback(toAuthUser(session));
+    callback(toAuthUser(session), session?.user ?? null);
   });
 
   return () => data.subscription.unsubscribe();
@@ -81,6 +85,32 @@ export async function signOut(): Promise<void> {
 export async function getAccessToken(): Promise<string | null> {
   const session = await getCurrentSession();
   return session?.access_token ?? null;
+}
+
+/**
+ * Sprint 41.6 — optional, best-effort mirror of the display name into Supabase Auth's own
+ * `user_metadata`. `public.profiles` is the application's source of truth regardless of
+ * whether this succeeds — nothing in this app ever depends on `user_metadata` being present
+ * (see deriveName.ts's metadata branch, which is only ever a fallback). Never throws.
+ */
+export async function syncDisplayNameToAuthMetadata(displayName: string): Promise<void> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    return;
+  }
+
+  try {
+    const { error } = await client.auth.updateUser({
+      data: { display_name: displayName, full_name: displayName, first_name: displayName.split(/\s+/)[0] },
+    });
+
+    if (error) {
+      console.error('[auth] syncDisplayNameToAuthMetadata failed:', error);
+    }
+  } catch (error) {
+    console.error('[auth] syncDisplayNameToAuthMetadata failed:', error);
+  }
 }
 
 let fetchPatched = false;

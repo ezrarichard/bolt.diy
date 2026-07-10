@@ -11,6 +11,7 @@ import { useStore } from '@nanostores/react';
 import { projectsStore, currentProjectIdStore, isProjectDashboardOpenStore } from '~/lib/stores/projects';
 import { sidebarCollapsedStore, setSidebarCollapsed, toggleSidebarCollapsed } from '~/lib/stores/sidebar';
 import { useAuth } from '~/lib/auth/AuthProvider';
+import { firstNameFromFullName } from '~/lib/auth/deriveName';
 import { BuildersLogoMark } from '~/components/branding/BuildersLogo';
 import { ProjectList } from './ProjectList';
 import { ProjectDashboard } from './ProjectDashboard';
@@ -76,19 +77,22 @@ function CurrentDateTime() {
 }
 
 /**
- * Sprint 41.2 — sidebar greeting. `status`/`user` come straight from AuthProvider (no new
- * auth logic here, just presentation of the existing `AuthUser.firstName` — see
- * app/lib/auth/deriveName.ts for how that field is derived). The subtitle is intentionally
- * constant across every state per the sprint spec.
+ * Sprint 41.2 — sidebar greeting; Sprint 41.6 — prefers the centralized `public.profiles`
+ * row over the auth-derived fallback. Resolution order: `profile.displayName` (e.g. "Mary
+ * Ann Thomas" -> "Mary") -> `user.firstName` (metadata/email-derived, see deriveName.ts) ->
+ * a name-less greeting. `profile` is `null` until AuthProvider's upsert/fetch resolves (or if
+ * BuildersDB is unconfigured), so this always has a sane fallback rather than flashing empty.
+ * The subtitle is intentionally constant across every state per the sprint spec.
  */
 function useGreeting() {
-  const { status, user } = useAuth();
+  const { status, user, profile } = useAuth();
+  const firstName = firstNameFromFullName(profile?.displayName) ?? user?.firstName ?? null;
 
   const title =
     status === 'loading'
       ? 'Loading...'
-      : user?.firstName
-        ? `Hi, ${user.firstName} 👋`
+      : firstName
+        ? `Hi, ${firstName} 👋`
         : status === 'authenticated'
           ? 'Hi there 👋'
           : 'Welcome';

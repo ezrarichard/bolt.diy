@@ -1,9 +1,151 @@
-import { useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useStore } from '@nanostores/react';
 import { classNames } from '~/utils/classNames';
 import { profileStore, updateProfile } from '~/lib/stores/profile';
 import { toast } from 'react-toastify';
 import { debounce } from '~/utils/debounce';
+import { useAuth } from '~/lib/auth/AuthProvider';
+
+/**
+ * Sprint 41.6 — "Account" section wired to the centralized `public.profiles` row via
+ * AuthProvider's `updateCurrentUserProfile()` (no separate query here). Deliberately a
+ * standalone component so its own save/error/success state doesn't get tangled up with the
+ * unrelated local chat-display fields below.
+ */
+function AccountSection() {
+  const { user, profile, updateCurrentUserProfile } = useAuth();
+  const [displayName, setDisplayName] = useState(profile?.displayName ?? '');
+  const [avatarUrl, setAvatarUrl] = useState(profile?.avatarUrl ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  /*
+   * Only resync from the loaded profile when it actually changes underneath us (e.g. after
+   * ensureUserProfile() resolves on login) — never while the user still has unsaved edits.
+   */
+  useEffect(() => {
+    setDisplayName(profile?.displayName ?? '');
+    setAvatarUrl(profile?.avatarUrl ?? '');
+  }, [profile?.displayName, profile?.avatarUrl]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    setSuccess(false);
+
+    const { error: saveError } = await updateCurrentUserProfile({
+      displayName: displayName.trim(),
+      avatarUrl: avatarUrl.trim(),
+    });
+
+    setSaving(false);
+
+    if (saveError) {
+      setError(saveError);
+      return;
+    }
+
+    setSuccess(true);
+  };
+
+  return (
+    <div className="mb-8 pb-8 border-b border-gray-200 dark:border-gray-700/50">
+      <label className="block text-base font-medium text-gray-900 dark:text-gray-100 mb-1">Account</label>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+        Your display name is shown in the sidebar greeting and the profile menu.
+      </p>
+
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Display Name</label>
+        <input
+          type="text"
+          value={displayName}
+          onChange={(event) => {
+            setDisplayName(event.target.value);
+            setSuccess(false);
+          }}
+          placeholder="Your name"
+          className={classNames(
+            'w-full px-4 py-2.5 rounded-xl',
+            'bg-white dark:bg-gray-800/50',
+            'border border-gray-200 dark:border-gray-700/50',
+            'text-gray-900 dark:text-white',
+            'placeholder-gray-400 dark:placeholder-gray-500',
+            'focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-purple-500/50',
+            'transition-all duration-300 ease-out',
+          )}
+        />
+      </div>
+
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Email</label>
+        <input
+          type="text"
+          value={user?.email ?? ''}
+          readOnly
+          disabled
+          className={classNames(
+            'w-full px-4 py-2.5 rounded-xl cursor-not-allowed',
+            'bg-gray-100 dark:bg-gray-900/50',
+            'border border-gray-200 dark:border-gray-700/50',
+            'text-gray-500 dark:text-gray-400',
+          )}
+        />
+      </div>
+
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+          Avatar URL <span className="text-gray-400 dark:text-gray-500 font-normal">(optional)</span>
+        </label>
+        <input
+          type="text"
+          value={avatarUrl}
+          onChange={(event) => {
+            setAvatarUrl(event.target.value);
+            setSuccess(false);
+          }}
+          placeholder="https://example.com/avatar.png"
+          className={classNames(
+            'w-full px-4 py-2.5 rounded-xl',
+            'bg-white dark:bg-gray-800/50',
+            'border border-gray-200 dark:border-gray-700/50',
+            'text-gray-900 dark:text-white',
+            'placeholder-gray-400 dark:placeholder-gray-500',
+            'focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-purple-500/50',
+            'transition-all duration-300 ease-out',
+          )}
+        />
+      </div>
+
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm text-red-500 dark:text-red-400">
+          {error}
+        </div>
+      )}
+
+      {success && !error && (
+        <div className="mb-4 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-2.5 text-sm text-green-600 dark:text-green-400">
+          Profile updated
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={handleSave}
+        disabled={saving}
+        className={classNames(
+          'px-5 py-2.5 rounded-xl text-sm font-medium',
+          'bg-purple-600 text-white hover:bg-purple-700',
+          'disabled:opacity-50 disabled:cursor-not-allowed',
+          'transition-colors duration-200',
+        )}
+      >
+        {saving ? 'Saving…' : 'Save'}
+      </button>
+    </div>
+  );
+}
 
 export default function ProfileTab() {
   const profile = useStore(profileStore);
@@ -62,8 +204,17 @@ export default function ProfileTab() {
   return (
     <div className="max-w-2xl mx-auto">
       <div className="space-y-6">
-        {/* Personal Information Section */}
+        <AccountSection />
+
+        {/* Chat display (local only) — this is the avatar/name shown next to YOUR messages
+            in the chat transcript (see app/components/chat/UserMessage.tsx). Unrelated to
+            the Account section above; stored in localStorage, not public.profiles. */}
         <div>
+          <label className="block text-base font-medium text-gray-900 dark:text-gray-100 mb-1">Chat Display</label>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+            Shown next to your own messages in the chat transcript only.
+          </p>
+
           {/* Avatar Upload */}
           <div className="flex items-start gap-6 mb-8">
             <div
