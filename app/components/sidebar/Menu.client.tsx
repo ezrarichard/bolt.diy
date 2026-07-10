@@ -4,26 +4,39 @@ import { useNavigate } from '@remix-run/react';
 import { ThemeSwitch } from '~/components/ui/ThemeSwitch';
 import { ControlPanel } from '~/components/@settings/core/ControlPanel';
 import { SettingsButton, HelpButton } from '~/components/ui/SettingsButton';
+import { IconButton } from '~/components/ui/IconButton';
 import { cubicEasingFn } from '~/utils/easings';
 import { classNames } from '~/utils/classNames';
 import { useStore } from '@nanostores/react';
-import { profileStore } from '~/lib/stores/profile';
 import { projectsStore, currentProjectIdStore, isProjectDashboardOpenStore } from '~/lib/stores/projects';
+import { sidebarCollapsedStore, setSidebarCollapsed, toggleSidebarCollapsed } from '~/lib/stores/sidebar';
+import { useAuth } from '~/lib/auth/AuthProvider';
+import { BuildersLogoMark } from '~/components/branding/BuildersLogo';
 import { ProjectList } from './ProjectList';
 import { ProjectDashboard } from './ProjectDashboard';
+import useViewport from '~/lib/hooks';
 
 /**
- * Sprint 32 UI polish — fixed desktop-panel width (VS Code / Cursor / Claude Desktop
- * style), kept within the requested 340–380px range. Referenced by both the closed
- * variant's offset and the inline `width` style below so the two can never drift apart.
+ * Sprint 41.1 — Sidebar Layout Refresh.
+ *
+ * Below `MOBILE_BREAKPOINT_PX` the sidebar keeps its pre-existing overlay/drawer behavior
+ * (hover-to-open, click-outside/Escape-to-close, fixed positioning, Framer Motion slide) —
+ * explicitly left alone per this sprint's "do not redesign mobile" instruction. At or above
+ * that width it's a normal, non-overlay flex sibling (VS Code/Linear-style) whose width
+ * transitions between `EXPANDED_WIDTH_PX` and `COLLAPSED_WIDTH_PX` via a plain CSS
+ * transition — no Framer Motion — and pushes the rest of the layout instead of covering it.
  */
-const SIDEBAR_WIDTH_PX = 360;
+const MOBILE_BREAKPOINT_PX = 768;
+const MOBILE_DRAWER_WIDTH_PX = 360;
+const EXPANDED_WIDTH_PX = 320;
+const COLLAPSED_WIDTH_PX = 72;
+const WIDTH_TRANSITION = 'width 280ms cubic-bezier(0.4, 0, 0.2, 1)';
 
-const menuVariants = {
+const mobileMenuVariants = {
   closed: {
     opacity: 0,
     visibility: 'hidden',
-    left: `-${SIDEBAR_WIDTH_PX}px`,
+    left: `-${MOBILE_DRAWER_WIDTH_PX}px`,
     transition: {
       duration: 0.25,
       ease: cubicEasingFn,
@@ -62,15 +75,38 @@ function CurrentDateTime() {
   );
 }
 
+/**
+ * Sprint 41.2 — sidebar greeting. `status`/`user` come straight from AuthProvider (no new
+ * auth logic here, just presentation of the existing `AuthUser.firstName` — see
+ * app/lib/auth/deriveName.ts for how that field is derived). The subtitle is intentionally
+ * constant across every state per the sprint spec.
+ */
+function useGreeting() {
+  const { status, user } = useAuth();
+
+  const title =
+    status === 'loading'
+      ? 'Loading...'
+      : user?.firstName
+        ? `Hi, ${user.firstName} 👋`
+        : status === 'authenticated'
+          ? 'Hi there 👋'
+          : 'Welcome';
+
+  return { title, subtitle: 'AI Product Engineer' };
+}
+
 export const Menu = () => {
   const navigate = useNavigate();
   const menuRef = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
+  const isMobile = useViewport(MOBILE_BREAKPOINT_PX);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const collapsed = useStore(sidebarCollapsedStore);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const profile = useStore(profileStore);
   const projects = useStore(projectsStore);
   const currentProjectId = useStore(currentProjectIdStore);
   const currentProject = currentProjectId ? projects.find((project) => project.id === currentProjectId) : null;
+  const greeting = useGreeting();
 
   /*
    * Sprint 6: lifted to a store (isProjectDashboardOpenStore) so other
@@ -97,7 +133,16 @@ export const Menu = () => {
     isProjectDashboardOpenStore.set(true);
   };
 
+  /*
+   * Sprint 32 UI polish, preserved as-is for mobile only (Sprint 41.1 leaves mobile's drawer
+   * interaction untouched) — hover-to-open near the left edge, hover-to-close past the
+   * sidebar's right edge, click-outside-to-close, and Escape-to-close.
+   */
   useEffect(() => {
+    if (!isMobile) {
+      return undefined;
+    }
+
     const enterThreshold = 20;
     const exitThreshold = 20;
 
@@ -107,11 +152,11 @@ export const Menu = () => {
       }
 
       if (event.pageX < enterThreshold) {
-        setOpen(true);
+        setMobileOpen(true);
       }
 
       if (menuRef.current && event.clientX > menuRef.current.getBoundingClientRect().right + exitThreshold) {
-        setOpen(false);
+        setMobileOpen(false);
       }
     }
 
@@ -120,21 +165,16 @@ export const Menu = () => {
     return () => {
       window.removeEventListener('mousemove', onMouseMove);
     };
-  }, [isSettingsOpen]);
+  }, [isMobile, isSettingsOpen]);
 
-  /*
-   * Sprint 32 UI polish — clicking anywhere outside the sidebar closes it, so
-   * interacting with the workspace (e.g. the Project Dashboard) behind it no
-   * longer requires first dragging the mouse past the hover-exit threshold.
-   */
   useEffect(() => {
-    if (!open) {
+    if (!isMobile || !mobileOpen) {
       return undefined;
     }
 
     function onPointerDown(event: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setOpen(false);
+        setMobileOpen(false);
       }
     }
 
@@ -143,20 +183,16 @@ export const Menu = () => {
     return () => {
       document.removeEventListener('mousedown', onPointerDown);
     };
-  }, [open]);
+  }, [isMobile, mobileOpen]);
 
-  /*
-   * Sprint 32 UI polish — Escape closes the sidebar, matching the desktop
-   * panel behavior of VS Code / Cursor / Claude Desktop.
-   */
   useEffect(() => {
-    if (!open) {
+    if (!isMobile || !mobileOpen) {
       return undefined;
     }
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
-        setOpen(false);
+        setMobileOpen(false);
       }
     }
 
@@ -165,66 +201,131 @@ export const Menu = () => {
     return () => {
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [open]);
+  }, [isMobile, mobileOpen]);
 
   const handleSettingsClick = () => {
     setIsSettingsOpen(true);
-    setOpen(false);
+    setMobileOpen(false);
   };
 
   const handleSettingsClose = () => {
     setIsSettingsOpen(false);
   };
 
+  const handleExpandRequest = () => {
+    if (collapsed) {
+      setSidebarCollapsed(false);
+    }
+  };
+
+  /*
+   * Sprint 41.2 — header now shows the authenticated-user greeting instead of the generic
+   * "Builders" label (still available via BuildersLogoMark's tooltip/aria-label). Given a
+   * fixed dark background (not the theme-adaptive gray used elsewhere) so the greeting's
+   * `text-white`/`text-white/50` typography stays legible in light theme too — this is the
+   * only background change in this sprint, scoped to this header strip alone.
+   */
+  const collapsedDesktop = !isMobile && collapsed;
+
+  const header = (
+    <div
+      className={classNames(
+        'flex items-center border-b border-purple-500/10 bg-[#171128] shrink-0',
+        collapsedDesktop ? 'flex-col gap-2 py-3' : 'h-16 justify-between gap-2 px-4',
+      )}
+    >
+      {collapsedDesktop ? (
+        <BuildersLogoMark size={28} title="Builders" />
+      ) : (
+        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+          <BuildersLogoMark size={30} title="Builders" className="shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="text-lg font-semibold text-white truncate leading-tight">{greeting.title}</div>
+            <div className="text-xs text-white/50 uppercase tracking-wider truncate">{greeting.subtitle}</div>
+          </div>
+        </div>
+      )}
+      {isMobile ? (
+        <IconButton
+          icon="i-ph:x"
+          size="xl"
+          title="Close"
+          onClick={() => setMobileOpen(false)}
+          className="text-white/60 hover:text-white shrink-0"
+        />
+      ) : (
+        <IconButton
+          icon={collapsed ? 'i-ph:sidebar-simple' : 'i-ph:sidebar-simple-fill'}
+          size="xl"
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          onClick={toggleSidebarCollapsed}
+          className="text-white/60 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+        />
+      )}
+    </div>
+  );
+
+  // Theme/Settings/Help shortcut row — moved out of the header (Change 6) into the body footer.
+  const footer = (
+    <div
+      className={classNames(
+        'flex items-center border-t border-gray-200 dark:border-gray-800 px-4 py-3 shrink-0',
+        !isMobile && collapsed ? 'flex-col gap-2 px-0' : 'justify-end gap-1',
+      )}
+    >
+      <HelpButton onClick={() => window.open('https://stackblitz-labs.github.io/bolt.diy/', '_blank')} />
+      <SettingsButton onClick={handleSettingsClick} />
+      <ThemeSwitch />
+    </div>
+  );
+
+  const body = (
+    <div className="flex-1 flex flex-col h-full w-full overflow-hidden">
+      {!isMobile && collapsed ? null : <CurrentDateTime />}
+      <div className="flex-1 min-h-0 flex flex-col">
+        <ProjectList
+          onSelectProject={handleSelectProject}
+          collapsed={!isMobile && collapsed}
+          onRequestExpand={handleExpandRequest}
+        />
+      </div>
+      {footer}
+    </div>
+  );
+
   return (
     <>
-      <motion.div
-        ref={menuRef}
-        initial="closed"
-        animate={open ? 'open' : 'closed'}
-        variants={menuVariants}
-        style={{ width: `${SIDEBAR_WIDTH_PX}px` }}
-        className={classNames(
-          'flex selection-accent flex-col side-menu fixed top-0 h-full rounded-r-2xl',
-          'bg-white dark:bg-gray-950 border-r border-bolt-elements-borderColor',
-          'shadow-sm text-sm',
-          isSettingsOpen ? 'z-40' : 'z-sidebar',
-        )}
-      >
-        <div className="h-12 flex items-center justify-between px-4 border-b border-gray-100 dark:border-gray-800/50 bg-gray-50/50 dark:bg-gray-900/50 rounded-tr-2xl">
-          <div className="text-gray-900 dark:text-white font-medium">Builders</div>
-          <div className="flex items-center gap-2">
-            <HelpButton onClick={() => window.open('https://stackblitz-labs.github.io/bolt.diy/', '_blank')} />
-            <span className="font-medium text-sm text-gray-900 dark:text-white truncate">
-              {profile?.username || 'Guest User'}
-            </span>
-            {/* Sprint 32 UI polish — Settings moved here from the sidebar footer for one-click access. */}
-            <SettingsButton onClick={handleSettingsClick} />
-            <div className="flex items-center justify-center w-[32px] h-[32px] overflow-hidden bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-500 rounded-full shrink-0">
-              {profile?.avatar ? (
-                <img
-                  src={profile.avatar}
-                  alt={profile?.username || 'User'}
-                  className="w-full h-full object-cover"
-                  loading="eager"
-                  decoding="sync"
-                />
-              ) : (
-                <div className="i-ph:user-fill text-lg" />
-              )}
-            </div>
-          </div>
+      {isMobile ? (
+        <motion.div
+          ref={menuRef}
+          initial="closed"
+          animate={mobileOpen ? 'open' : 'closed'}
+          variants={mobileMenuVariants}
+          style={{ width: `${MOBILE_DRAWER_WIDTH_PX}px` }}
+          className={classNames(
+            'flex selection-accent flex-col side-menu fixed top-0 h-full rounded-r-2xl',
+            'bg-white dark:bg-gray-950 border-r border-bolt-elements-borderColor',
+            'shadow-sm text-sm',
+            isSettingsOpen ? 'z-40' : 'z-sidebar',
+          )}
+        >
+          {header}
+          {body}
+        </motion.div>
+      ) : (
+        <div
+          ref={menuRef}
+          style={{ width: `${collapsed ? COLLAPSED_WIDTH_PX : EXPANDED_WIDTH_PX}px`, transition: WIDTH_TRANSITION }}
+          className={classNames(
+            'flex selection-accent flex-col side-menu h-full shrink-0 overflow-hidden',
+            'bg-white dark:bg-gray-950 border-r border-bolt-elements-borderColor',
+            'text-sm',
+          )}
+        >
+          {header}
+          {body}
         </div>
-        <CurrentDateTime />
-        <div className="flex-1 flex flex-col h-full w-full overflow-hidden">
-          <div className="flex-1 min-h-0 flex flex-col">
-            <ProjectList onSelectProject={handleSelectProject} />
-          </div>
-          <div className="flex items-center justify-end border-t border-gray-200 dark:border-gray-800 px-4 py-3">
-            <ThemeSwitch />
-          </div>
-        </div>
-      </motion.div>
+      )}
 
       <ProjectDashboard
         project={currentProject || null}

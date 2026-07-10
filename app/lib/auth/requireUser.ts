@@ -1,6 +1,7 @@
 import type { AppLoadContext } from '@remix-run/cloudflare';
 import { getServerAuthClient } from './authServer';
 import { AUTH_TOKEN_HEADER } from './authClient';
+import { deriveFirstName } from './deriveName';
 import type { AuthUser } from './authTypes';
 
 function unauthorized(message: string): Response {
@@ -48,5 +49,5 @@ export async function requireAuthenticatedUser(request: Request, context: AppLoa
     throw unauthorized('Invalid or expired session');
   }
 
-  return { id: data.user.id, email: data.user.email ?? null };
+  return { id: data.user.id, email: data.user.email ?? null, firstName: deriveFirstName(data.user) };
 }

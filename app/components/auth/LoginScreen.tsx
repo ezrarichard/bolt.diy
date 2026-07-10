@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useAuth } from '~/lib/auth/AuthProvider';
 import { isAuthConfigured } from '~/lib/auth/authClient';
+import { BuildersWordmark } from '~/components/branding/BuildersLogo';
 
 /**
  * Sprint 40 — Authentication Foundation.
@@ -35,8 +36,8 @@ export function LoginScreen() {
   return (
     <div className="flex items-center justify-center w-full min-h-screen bg-bolt-elements-background-depth-1 px-4">
       <div className="w-full max-w-sm rounded-xl border border-bolt-elements-borderColor bg-bolt-elements-background-depth-2 p-8 shadow-xl">
-        <div className="mb-6 text-center">
-          <div className="mb-1 text-2xl font-semibold tracking-tight text-bolt-elements-textPrimary">Builders</div>
+        <div className="mb-6 flex flex-col items-center text-center">
+          <BuildersWordmark iconSize={40} textClassName="text-2xl text-bolt-elements-textPrimary" className="mb-1" />
           <div className="text-sm text-bolt-elements-textSecondary">AI Product Engineering Workspace</div>
         </div>
 

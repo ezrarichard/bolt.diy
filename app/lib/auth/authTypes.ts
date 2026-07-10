@@ -5,11 +5,16 @@
  * only) — this sprint has no profile/role data wired up yet (see supabase/migrations for the
  * `profiles` table), and every consumer today only ever needs "who is this" for gating, not
  * for display beyond the email fallback in the header.
+ *
+ * Sprint 41.2 adds `firstName` — derived once in authClient.ts's `toAuthUser()` (see
+ * app/lib/auth/deriveName.ts) so every consumer (sidebar greeting today, others later) reads
+ * a single resolved value instead of re-deriving it from the raw Supabase user.
  */
 
 export interface AuthUser {
   id: string;
   email: string | null;
+  firstName: string | null;
 }
 
 export type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';

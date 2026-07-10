@@ -5,6 +5,7 @@ import {
   onAuthStateChange,
   signInWithPassword,
   signOut as signOutClient,
+  toAuthUser,
 } from './authClient';
 import type { AuthState } from './authTypes';
 
@@ -46,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const user = session?.user ? { id: session.user.id, email: session.user.email ?? null } : null;
+      const user = toAuthUser(session);
       setState({ status: user ? 'authenticated' : 'unauthenticated', user });
 
       unsubscribe = onAuthStateChange((nextUser) => {

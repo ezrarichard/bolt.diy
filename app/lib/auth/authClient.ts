@@ -1,5 +1,6 @@
 import type { Session } from '@supabase/supabase-js';
 import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/client';
+import { deriveFirstName } from './deriveName';
 import type { AuthUser } from './authTypes';
 
 /**
@@ -12,12 +13,16 @@ import type { AuthUser } from './authTypes';
  * live in the same Supabase project, and supabase-js supports using one client for both.
  */
 
-function toAuthUser(session: Session | null): AuthUser | null {
+export function toAuthUser(session: Session | null): AuthUser | null {
   if (!session?.user) {
     return null;
   }
 
-  return { id: session.user.id, email: session.user.email ?? null };
+  return {
+    id: session.user.id,
+    email: session.user.email ?? null,
+    firstName: deriveFirstName(session.user),
+  };
 }
 
 export function isAuthConfigured(): boolean {
