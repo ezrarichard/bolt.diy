@@ -485,7 +485,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
         data-chat-visible={showChat}
       >
         <ClientOnly>{() => <Menu />}</ClientOnly>
-        <div className="flex flex-col lg:flex-row overflow-y-auto w-full h-full">
+        <div className="flex flex-col lg:flex-row overflow-y-auto flex-1 min-w-0 h-full">
           <div className={classNames(styles.Chat, 'flex flex-col flex-grow lg:min-w-[var(--chat-min-width)] h-full')}>
             {/* Sprint 39.6/39.7 — video hero (heading/subtitle/action cards/prompt box) replaces the old plain #intro block; HomeWorkflows.tsx owns the chrome, `promptBox` above is unchanged. */}
             {!chatStarted && (

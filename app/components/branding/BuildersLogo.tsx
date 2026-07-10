@@ -14,6 +14,28 @@ import { classNames } from '~/utils/classNames';
  * icon in this app (Phosphor via UnoCSS) and letting `currentColor`/CSS apply where used.
  */
 
+/**
+ * Sprint 41.4 — one consistent palette, no light/dark variants (removed the Sprint 41.3
+ * `variant` prop/theme-store inference entirely — that approach brightened the B's gradient
+ * per theme, but the brace and code symbol still shared that SAME bright gradient at full
+ * strength, so brightening it made the brace's C-shaped curve read as strongly as the B's
+ * actual shape — at a glance the two competing bright strokes fused into a single rounded
+ * "C"-like silhouette instead of a "B". Fixed by making the B the only element using the
+ * bright gradient; the brace/code symbol now use a flat, dimmer, lower-opacity color so they
+ * visually support the B instead of competing with it — same treatment in both themes, since
+ * the icon's own card (`fill="#211733"`) never changes anyway.
+ *
+ * Sprint 41.5 — measured actual rendered pixels (canvas sampling) against the dark card: the
+ * brace, blended at 0.75 opacity, landed at ~rgb(155,141,202) — not far enough below the B
+ * gradient's own dimmest stop (`#c084fc` = rgb(192,132,252)) to read as clearly secondary once
+ * the whole icon sits on a dark page. Two changes, still one palette in both themes: the
+ * gradient's bright stop now covers more of the shape (offset pushed from 50%→65%, colors
+ * unchanged) so more of the B reads bright, and the detail opacity drops from 0.75→0.55 so
+ * the brace/code sit further back from the B regardless of surrounding theme.
+ */
+const DETAIL_COLOR = '#c4b5fd';
+const DETAIL_OPACITY = 0.55;
+
 interface BuildersLogoMarkProps {
   className?: string;
   size?: number;
@@ -37,38 +59,43 @@ export function BuildersLogoMark({ className, size = 32, title = 'Builders' }: B
       <title>{title}</title>
       <defs>
         <linearGradient id={gradientId} x1="8" y1="5" x2="57" y2="59">
-          <stop offset="0%" stopColor="#f3e8ff" />
-          <stop offset="50%" stopColor="#d8b4fe" />
-          <stop offset="100%" stopColor="#9333ea" />
+          <stop offset="0%" stopColor="#ffffff" />
+          <stop offset="65%" stopColor="#e9d5ff" />
+          <stop offset="100%" stopColor="#c084fc" />
         </linearGradient>
       </defs>
 
-      <rect x="1" y="1" width="62" height="62" rx="16" fill="#211733" stroke="#8b5cf6" strokeOpacity="0.35" />
+      <rect x="1" y="1" width="62" height="62" rx="16" fill="#211733" stroke="#a78bfa" strokeOpacity="0.45" />
 
+      {/* Main B mark — the only element using the bright gradient, so it stays the dominant shape. */}
       <path
         d="M25 12H39C47 12 52 16 52 23C52 27 50 30 46 32C51 34 54 38 54 43C54 50 48 54 39 54H27V46H39C43 46 46 44 46 41C46 38 43 36 39 36H31L27 30H39C43 30 45 28 45 25C45 22 43 20 39 20H27V14H25Z"
         fill={`url(#${gradientId})`}
       />
 
+      {/* Left brace — flat, dimmer color (not the B's gradient) so it supports the B instead of forming a second, equally-bright focal shape. */}
       <path
         d="M24 24C20 24 19 27 19 30C19 33 18 34 16 35C18 36 19 38 19 41C19 44 20 47 24 47"
         fill="none"
-        stroke={`url(#${gradientId})`}
+        stroke={DETAIL_COLOR}
+        strokeOpacity={DETAIL_OPACITY}
         strokeWidth="4"
         strokeLinecap="round"
       />
 
+      {/* Code symbol — same dimmer color, plus a touch thinner than before so it reads as a supporting detail, not a competing shape. */}
       <path
         d="M30 31L27 34L30 37M38 31L41 34L38 37M36 29L33 39"
         fill="none"
-        stroke={`url(#${gradientId})`}
-        strokeWidth="2.5"
+        stroke={DETAIL_COLOR}
+        strokeOpacity={DETAIL_OPACITY}
+        strokeWidth="2"
         strokeLinecap="square"
         strokeLinejoin="miter"
       />
 
-      <rect x="19" y="9" width="4" height="4" rx="1" fill="#e9d5ff" />
-      <rect x="24" y="12" width="3" height="3" rx="0.7" fill="#c084fc" />
+      <rect x="19" y="9" width="4" height="4" rx="1" fill="#f3e8ff" />
+      <rect x="24" y="12" width="3" height="3" rx="0.7" fill="#d8b4fe" />
       <rect x="20" y="16" width="3" height="3" rx="0.7" fill="#a855f7" />
     </svg>
   );

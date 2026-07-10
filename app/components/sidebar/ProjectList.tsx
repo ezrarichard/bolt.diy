@@ -2,14 +2,20 @@ import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '@nanostores/react';
 import { classNames } from '~/utils/classNames';
 import { deleteProject, projectsStore, requestNewProjectDialogStore, type Project } from '~/lib/stores/projects';
-import { ProjectListItem } from './ProjectListItem';
+import { ProjectListItem, PROJECT_COLOR_CLASSES } from './ProjectListItem';
 import { NewProjectDialog } from './NewProjectDialog';
 
 interface ProjectListProps {
   onSelectProject: (projectId: string) => void;
+
+  /** Sprint 41.1 — icon-only rendering for the collapsed (72px) desktop/tablet sidebar. */
+  collapsed?: boolean;
+
+  /** Called when a collapsed-mode action (New Project, Search) needs the sidebar expanded first. */
+  onRequestExpand?: () => void;
 }
 
-export function ProjectList({ onSelectProject }: ProjectListProps) {
+export function ProjectList({ onSelectProject, collapsed = false, onRequestExpand }: ProjectListProps) {
   const projects = useStore(projectsStore);
   const [query, setQuery] = useState('');
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
@@ -36,6 +42,55 @@ export function ProjectList({ onSelectProject }: ProjectListProps) {
 
     return projects.filter((project: Project) => project.name.toLowerCase().includes(q));
   }, [projects, query]);
+
+  if (collapsed) {
+    return (
+      <div className="h-full flex flex-col items-center min-h-0 gap-1.5 py-3">
+        <button
+          type="button"
+          title="New Project"
+          onClick={() => {
+            onRequestExpand?.();
+            setIsNewProjectOpen(true);
+          }}
+          className="w-10 h-10 shrink-0 flex items-center justify-center rounded-lg bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-500/20 transition-colors"
+        >
+          <span className="i-ph:plus-circle h-5 w-5" />
+        </button>
+        <button
+          type="button"
+          title="Search projects"
+          onClick={() => onRequestExpand?.()}
+          className="w-10 h-10 shrink-0 flex items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+        >
+          <span className="i-ph:magnifying-glass h-5 w-5" />
+        </button>
+        <div className="flex-1 min-h-0 w-full overflow-y-auto modern-scrollbar flex flex-col items-center gap-1.5 pt-1">
+          {projects.map((project: Project) => {
+            const colorClasses = PROJECT_COLOR_CLASSES[project.color] || PROJECT_COLOR_CLASSES.purple;
+
+            return (
+              <button
+                key={project.id}
+                type="button"
+                title={project.name}
+                onClick={() => onSelectProject(project.id)}
+                className={classNames(
+                  'flex items-center justify-center w-9 h-9 rounded-full shrink-0 ring-1 transition-colors',
+                  colorClasses.bg,
+                  colorClasses.ring,
+                  'hover:ring-2',
+                )}
+              >
+                <span className="text-sm leading-none">{project.icon}</span>
+              </button>
+            );
+          })}
+        </div>
+        <NewProjectDialog open={isNewProjectOpen} onClose={() => setIsNewProjectOpen(false)} />
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex flex-col min-h-0">
