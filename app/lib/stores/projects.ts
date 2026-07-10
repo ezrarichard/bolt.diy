@@ -1,5 +1,11 @@
 import { atom } from 'nanostores';
-import type { ProjectTypeId, CreatedFrom } from '~/lib/project-types/projectTypeRegistry';
+import {
+  PROJECT_TYPE_REGISTRY,
+  looksLikeRawModelPrefixName,
+  stripModelProviderPrefix,
+  type ProjectTypeId,
+  type CreatedFrom,
+} from '~/lib/project-types/projectTypeRegistry';
 import type { RoadmapItemStatus } from '~/lib/blueprints';
 import type { ProjectKnowledge } from '~/lib/projects/knowledge';
 import type { ProjectTaskStatus } from '~/lib/projects/executionEngine';
@@ -191,19 +197,48 @@ export interface Project {
 const projectRepository = createProjectRepository();
 
 /**
+ * Sprint 39.8 bugfix — a bug in Sprint 39.7's very first version of the Quick Build name
+ * derivation (useChatHistory.ts) let the raw "[Model: ...]\n\n[Provider: ...]\n\n" prefix
+ * Chat.client.tsx prepends to a chat's first message through as the project's name. Fixed
+ * there (stripModelProviderPrefix is now applied before naming), but any project already
+ * saved with the buggy raw name needs a one-time cleanup here. `looksLikeRawModelPrefixName`
+ * only matches names that couldn't possibly be something a user actually typed, so this
+ * never touches a genuine user-edited title.
+ */
+function sanitizeLegacyQuickBuildName(project: Project): Project {
+  if (project.projectType !== 'quick_build' || !looksLikeRawModelPrefixName(project.name)) {
+    return project;
+  }
+
+  const cleaned = stripModelProviderPrefix(project.name).slice(0, 60);
+
+  return { ...project, name: cleaned || PROJECT_TYPE_REGISTRY.quick_build.displayName };
+}
+
+/**
  * Sprint 39.7 — every project persisted before this sprint predates `projectType`/
  * `createdFrom`; both are backfilled to 'guided_engineering' here since Quick Build never
  * persisted a project before now. New projects always pass both explicitly via addProject().
  */
 function normalizeProjectType(projects: Project[]): Project[] {
-  return projects.map((project) =>
-    project.projectType
-      ? project
-      : { ...project, projectType: 'guided_engineering', createdFrom: project.createdFrom ?? 'guided_engineering' },
-  );
+  return projects
+    .map((project) =>
+      project.projectType
+        ? project
+        : {
+            ...project,
+            projectType: 'guided_engineering' as const,
+            createdFrom: project.createdFrom ?? 'guided_engineering',
+          },
+    )
+    .map(sanitizeLegacyQuickBuildName);
 }
 
-export const projectsStore = atom<Project[]>(normalizeProjectType(projectRepository.loadProjects()));
+const normalizedInitialProjects = normalizeProjectType(projectRepository.loadProjects());
+export const projectsStore = atom<Project[]>(normalizedInitialProjects);
+
+// Persist the one-time cleanup above so it doesn't need to re-run against localStorage on every load.
+projectRepository.saveProjects(normalizedInitialProjects);
 
 /**
  * Sprint 34 — BuildersDB write-through.
@@ -263,7 +298,15 @@ export async function hydrateProjectsFromBuildersDb(): Promise<void> {
     if (remoteProjects.length > 0) {
       const remoteIds = new Set(remoteProjects.map((project) => project.id));
       const localOnly = localProjects.filter((project) => !remoteIds.has(project.id));
-      const merged = [...remoteProjects, ...localOnly];
+
+      /*
+       * Sprint 39.8 bugfix — remote rows can still carry a legacy raw "[Model: ...]" name
+       * from before sanitizeLegacyQuickBuildName existed (e.g. a project whose mirror write
+       * only succeeded after a later, unrelated update, capturing the bad name at that
+       * point). Re-sanitizing here means remote being "authoritative" never reintroduces a
+       * name local storage already fixed.
+       */
+      const merged = [...remoteProjects, ...localOnly].map(sanitizeLegacyQuickBuildName);
 
       projectsStore.set(merged);
       projectRepository.saveProjects(merged);

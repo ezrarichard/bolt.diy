@@ -23,7 +23,7 @@ import { webcontainer } from '~/lib/webcontainer';
 import { detectProjectCommands, createCommandActionsString } from '~/utils/projectCommands';
 import type { ContextAnnotation } from '~/types/context';
 import { addProject, currentProjectIdStore, linkProjectChat } from '~/lib/stores/projects';
-import { PROJECT_TYPE_REGISTRY } from '~/lib/project-types/projectTypeRegistry';
+import { PROJECT_TYPE_REGISTRY, stripModelProviderPrefix } from '~/lib/project-types/projectTypeRegistry';
 
 export interface ChatHistoryItem {
   id: string;
@@ -297,13 +297,7 @@ ${value.content}
       if (isNewChat && !activeProjectId) {
         const firstUserMessage = messages.find((m) => m.role === 'user');
         const rawContent = typeof firstUserMessage?.content === 'string' ? firstUserMessage.content : '';
-
-        /*
-         * Strip the "[Model: ...]\n\n[Provider: ...]\n\n" prefix Chat.client.tsx prepends to
-         * the first message's content (see its sendMessage) — irrelevant noise for a project name.
-         */
-        const rawName = rawContent.replace(/^(\[Model:[^\]]*\]\s*)?(\[Provider:[^\]]*\]\s*)?/, '');
-        const name = rawName.trim().slice(0, 60) || PROJECT_TYPE_REGISTRY.quick_build.displayName;
+        const name = stripModelProviderPrefix(rawContent).slice(0, 60) || PROJECT_TYPE_REGISTRY.quick_build.displayName;
 
         const project = addProject({
           name,

@@ -37,6 +37,28 @@ export function getProjectTypeDefinition(id: string | undefined): ProjectTypeDef
   return PROJECT_TYPE_REGISTRY[id as ProjectTypeId] ?? PROJECT_TYPE_REGISTRY.guided_engineering;
 }
 
+const MODEL_PROVIDER_PREFIX = /^(\[Model:[^\]]*\]\s*)?(\[Provider:[^\]]*\]\s*)?/;
+
+/**
+ * Strips the "[Model: ...]\n\n[Provider: ...]\n\n" prefix Chat.client.tsx's sendMessage
+ * prepends to every first message's content — irrelevant noise for a project name. Shared
+ * by useChatHistory.ts (deriving a new quick_build project's name) and projects.ts
+ * (sanitizing legacy project names created before this stripping existed).
+ */
+export function stripModelProviderPrefix(text: string): string {
+  return text.replace(MODEL_PROVIDER_PREFIX, '').trim();
+}
+
+/**
+ * True if a name still looks like the raw, un-stripped prefix — i.e. it's a leftover bug
+ * artifact, not something a user actually typed (a real user-edited title would never
+ * start with literal "[Model:"). Used to safely re-derive only buggy legacy names without
+ * ever touching a genuine user-edited title.
+ */
+export function looksLikeRawModelPrefixName(name: string): boolean {
+  return /^\[Model:/i.test(name.trim());
+}
+
 /**
  * How a project originated — analytics/reporting metadata only, deliberately a superset of
  * ProjectTypeId. Not the same axis: a project can be `createdFrom: 'template'` while its

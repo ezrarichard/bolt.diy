@@ -90,7 +90,7 @@ interface HomeWorkflowsProps {
 export function HomeWorkflows({ onFocusPrompt, children }: HomeWorkflowsProps) {
   return (
     <div
-      className="relative min-h-screen bg-gray-950 overflow-hidden -mx-4 lg:mx-0"
+      className="relative min-h-screen shrink-0 bg-gray-950 overflow-hidden -mx-4 lg:mx-0"
       style={{ fontFamily: "'Inter', sans-serif" }}
     >
       <video
@@ -112,7 +112,7 @@ export function HomeWorkflows({ onFocusPrompt, children }: HomeWorkflowsProps) {
         </div>
 
         {/* Main content */}
-        <div className="flex-1 flex items-center justify-center text-center py-8">
+        <div className="flex-1 flex items-center justify-center text-center py-8 pb-16">
           <div className="max-w-3xl mx-auto px-8 w-full">
             <div className="text-sm uppercase tracking-wider text-purple-200/80 mb-4">
               AI Product Engineering Workspace

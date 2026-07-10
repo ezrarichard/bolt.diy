@@ -150,6 +150,17 @@ function getGenerationProfileName(project: Project): string {
   return DEFAULT_GENERATION_PROFILES.find((profile) => profile.id === id)?.name ?? 'Balanced';
 }
 
+/**
+ * A quick_build project only has somewhere useful to go once its chat is linked (see
+ * useChatHistory.ts's linkProjectChat call). Until then, opening the (guided-engineering-
+ * oriented) Project Dashboard for it is confusing/empty rather than helpful — cards for
+ * such a project render as a disabled, clearly-labeled state instead (see
+ * ContinueWorkingCard/RecentProjectCard below) rather than silently doing nothing useful.
+ */
+function canOpenProject(project: Project): boolean {
+  return project.projectType !== 'quick_build' || Boolean(project.linkedChatId);
+}
+
 /** Sprint 39.7's existing quick_build-vs-guided_engineering branch (Menu.client.tsx / HomeWorkflows.tsx) — reused verbatim, not reimplemented. */
 function openProject(project: Project, navigate: ReturnType<typeof useNavigate>) {
   currentProjectIdStore.set(project.id);
@@ -169,13 +180,23 @@ function ContinueWorkingCard({ project }: { project: Project }) {
   const colorClasses = PROJECT_COLOR_CLASSES[project.color] || PROJECT_COLOR_CLASSES.purple;
   const projectType = getProjectTypeDefinition(project.projectType);
   const status = getApplicationStatusMeta(project);
-  const ctaLabel = project.projectType === 'quick_build' ? 'Continue Quick Build' : 'Continue Engineering';
-  const handleActivate = () => openProject(project, navigate);
+  const openable = canOpenProject(project);
+  const ctaLabel = !openable
+    ? 'Chat Unavailable'
+    : project.projectType === 'quick_build'
+      ? 'Continue Quick Build'
+      : 'Continue Engineering';
+  const handleActivate = () => {
+    if (openable) {
+      openProject(project, navigate);
+    }
+  };
 
   return (
     <div
       role="button"
-      tabIndex={0}
+      tabIndex={openable ? 0 : -1}
+      aria-disabled={!openable}
       onClick={handleActivate}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -184,9 +205,11 @@ function ContinueWorkingCard({ project }: { project: Project }) {
         }
       }}
       className={classNames(
-        'group flex flex-col gap-3 rounded-2xl border border-bolt-elements-borderColor/40 p-5 text-left cursor-pointer',
+        'group flex flex-col gap-3 rounded-2xl border border-bolt-elements-borderColor/40 p-5 text-left',
         'bg-bolt-elements-background-depth-2/60 backdrop-blur-md shadow-sm',
-        'hover:border-purple-500/30 hover:bg-bolt-elements-background-depth-3/60 hover:shadow-md',
+        openable
+          ? 'cursor-pointer hover:border-purple-500/30 hover:bg-bolt-elements-background-depth-3/60 hover:shadow-md'
+          : 'cursor-not-allowed opacity-60',
         'transition-all duration-200',
       )}
     >
@@ -226,9 +249,14 @@ function ContinueWorkingCard({ project }: { project: Project }) {
       </div>
 
       <div className="mt-auto pt-1">
-        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-purple-600 dark:text-purple-300 group-hover:gap-2 transition-all">
+        <span
+          className={classNames(
+            'inline-flex items-center gap-1.5 text-xs font-medium transition-all',
+            openable ? 'text-purple-600 dark:text-purple-300 group-hover:gap-2' : 'text-bolt-elements-textTertiary',
+          )}
+        >
           {ctaLabel}
-          <span className="i-ph:arrow-right w-3.5 h-3.5" />
+          <span className={classNames(openable ? 'i-ph:arrow-right' : 'i-ph:warning-duotone', 'w-3.5 h-3.5')} />
         </span>
       </div>
     </div>
@@ -310,15 +338,20 @@ function RecentProjectCard({ project }: { project: Project }) {
   const colorClasses = PROJECT_COLOR_CLASSES[project.color] || PROJECT_COLOR_CLASSES.purple;
   const projectType = getProjectTypeDefinition(project.projectType);
   const status = getApplicationStatusMeta(project);
+  const openable = canOpenProject(project);
 
   return (
     <button
       type="button"
-      onClick={() => openProject(project, navigate)}
+      disabled={!openable}
+      title={openable ? undefined : 'This Quick Build project has no linked chat yet.'}
+      onClick={() => openable && openProject(project, navigate)}
       className={classNames(
         'flex items-center gap-3 rounded-xl border border-bolt-elements-borderColor/40 px-4 py-3 text-left',
         'bg-bolt-elements-background-depth-2/60 backdrop-blur-md shadow-sm',
-        'hover:border-purple-500/30 hover:bg-bolt-elements-background-depth-3/60 hover:shadow-md',
+        openable
+          ? 'hover:border-purple-500/30 hover:bg-bolt-elements-background-depth-3/60 hover:shadow-md'
+          : 'opacity-60 cursor-not-allowed',
         'transition-all duration-200',
       )}
     >
