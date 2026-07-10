@@ -1,503 +1,540 @@
 # Builders
 
-[![Builders — AI Workspace for Product Engineering](./public/social_preview_index.jpg)](https://bolt.diy)
-
-Builders is our internal AI workspace for product engineering. It supports multiple LLM providers per prompt — OpenAI, Anthropic, Ollama, OpenRouter, Gemini, LMStudio, Mistral, xAI, HuggingFace, DeepSeek, Groq, Cohere, Together, Perplexity, Moonshot, Hyperbolic, GitHub Models, Amazon Bedrock, and OpenAI-like endpoints — and can be extended to any model supported by the Vercel AI SDK. See the instructions below for running it locally.
-
------
-Setup and configuration reference: [Docs](https://stackblitz-labs.github.io/bolt.diy/)
-
-## Table of Contents
-
-- [Recent Major Additions](#recent-major-additions)
-- [Features](#features)
-- [Setup](#setup)
-- [Quick Installation](#quick-installation)
-- [Manual Installation](#manual-installation)
-- [Configuring API Keys and Providers](#configuring-api-keys-and-providers)
-- [Setup Using Git (For Developers only)](#setup-using-git-for-developers-only)
-- [Available Scripts](#available-scripts)
-- [Contributing](#contributing)
-- [Roadmap](#roadmap)
-- [FAQ](#faq)
-
-## Project management
-
-The core team organizes the project so it's easy to see where current areas of focus are.
-
-If you want to know what's being worked on, what's planned, or how to contribute, see the
-[project management guide](./PROJECT.md).
-
-## Recent Major Additions
-
-### ✅ Completed Features
-- **19+ AI Provider Integrations** - OpenAI, Anthropic, Google, Groq, xAI, DeepSeek, Mistral, Cohere, Together, Perplexity, HuggingFace, Ollama, LM Studio, OpenRouter, Moonshot, Hyperbolic, GitHub Models, Amazon Bedrock, OpenAI-like
-- **Electron Desktop App** - Native desktop experience with full functionality
-- **Advanced Deployment Options** - Netlify, Vercel, and GitHub Pages deployment
-- **Supabase Integration** - Database management and query capabilities
-- **Data Visualization & Analysis** - Charts, graphs, and data analysis tools
-- **MCP (Model Context Protocol)** - Enhanced AI tool integration
-- **Search Functionality** - Codebase search and navigation
-- **File Locking System** - Prevents conflicts during AI code generation
-- **Diff View** - Visual representation of AI-made changes
-- **Git Integration** - Clone, import, and deployment capabilities
-- **Expo App Creation** - React Native development support
-- **Voice Prompting** - Audio input for prompts
-- **Bulk Chat Operations** - Delete multiple chats at once
-- **Project Snapshot Restoration** - Restore projects from snapshots on reload
-
-### 🔄 In Progress / Planned
-- **File Locking & Diff Improvements** - Enhanced conflict prevention
-- **Backend Agent Architecture** - Move from single model calls to agent-based system
-- **LLM Prompt Optimization** - Better performance for smaller models
-- **Project Planning Documentation** - LLM-generated project plans in markdown
-- **VSCode Integration** - Git-like confirmations and workflows
-- **Document Upload for Knowledge** - Reference materials and coding style guides
-- **Additional Provider Integrations** - Azure OpenAI, Vertex AI, Granite
-
-## Features
-
-- **AI-powered full-stack web development** for **NodeJS based applications** directly in your browser.
-- **Support for 19+ LLMs** with an extensible architecture to integrate additional models.
-- **Attach images to prompts** for better contextual understanding.
-- **Integrated terminal** to view output of LLM-run commands.
-- **Revert code to earlier versions** for easier debugging and quicker changes.
-- **Download projects as ZIP** for easy portability and sync to a folder on the host.
-- **Integration-ready Docker support** for a hassle-free setup.
-- **Deploy directly** to **Netlify**, **Vercel**, or **GitHub Pages**.
-- **Electron desktop app** for native desktop experience.
-- **Data visualization and analysis** with integrated charts and graphs.
-- **Git integration** with clone, import, and deployment capabilities.
-- **MCP (Model Context Protocol)** support for enhanced AI tool integration.
-- **Search functionality** to search through your codebase.
-- **File locking system** to prevent conflicts during AI code generation.
-- **Diff view** to see changes made by the AI.
-- **Supabase integration** for database management and queries.
-- **Expo app creation** for React Native development.
-
-## Setup
-
-If you're new to installing software from GitHub, don't worry! If you encounter any issues, feel free to submit an "issue" using the provided links or improve this documentation by forking the repository, editing the instructions, and submitting a pull request. The following instruction will help you get the stable branch up and running on your local machine in no time.
-
-Let's get you up and running with the stable version of Bolt.DIY!
-
-## Quick Installation
-
-[![Download Latest Release](https://img.shields.io/github/v/release/stackblitz-labs/bolt.diy?label=Download%20Bolt&sort=semver)](https://github.com/stackblitz-labs/bolt.diy/releases/latest) ← Click here to go to the latest release version!
-
-- Download the binary for your platform (available for Windows, macOS, and Linux)
-- **Note**: For macOS, if you get the error "This app is damaged", run:
-  ```bash
-  xattr -cr /path/to/Bolt.app
-  ```
-
-## Manual installation
-
-
-### Option 1: Node.js
-
-Node.js is required to run the application.
-
-1. Visit the [Node.js Download Page](https://nodejs.org/en/download/)
-2. Download the "LTS" (Long Term Support) version for your operating system
-3. Run the installer, accepting the default settings
-4. Verify Node.js is properly installed:
-   - **For Windows Users**:
-     1. Press `Windows + R`
-     2. Type "sysdm.cpl" and press Enter
-     3. Go to "Advanced" tab → "Environment Variables"
-     4. Check if `Node.js` appears in the "Path" variable
-   - **For Mac/Linux Users**:
-     1. Open Terminal
-     2. Type this command:
-        ```bash
-        echo $PATH
-        ```
-     3. Look for `/usr/local/bin` in the output
-
-## Running the Application
-
-You have two options for running Bolt.DIY: directly on your machine or using Docker.
-
-### Option 1: Direct Installation (Recommended for Beginners)
-
-1. **Install Package Manager (pnpm)**:
-
-   ```bash
-   npm install -g pnpm
-   ```
-
-2. **Install Project Dependencies**:
-
-   ```bash
-   pnpm install
-   ```
-
-3. **Start the Application**:
-
-   ```bash
-   pnpm run dev
-   ```
-   
-### Option 2: Using Docker
-
-This option requires Docker and is great when you want an isolated environment or to mirror the production image.
-
-#### Additional Prerequisite
-
-- Install Docker: [Download Docker](https://www.docker.com/)
-
-#### Steps
-
-1. **Prepare Environment Variables**
-
-   Copy the provided examples and add your provider keys:
-
-   ```bash
-   cp .env.example .env
-   cp .env.example .env.local
-   ```
-
-   The runtime scripts inside the container source `.env` and `.env.local`, so keep any API keys you need in one of those files.
-
-2. **Build an Image**
-
-   ```bash
-   # Development image (bind-mounts your local source when run)
-   pnpm run dockerbuild
-   # ≈ docker build -t bolt-ai:development -t bolt-ai:latest --target development .
-
-   # Production image (self-contained build artifacts)
-   pnpm run dockerbuild:prod
-   # ≈ docker build -t bolt-ai:production -t bolt-ai:latest --target bolt-ai-production .
-   ```
-
-3. **Run the Container**
-
-   ```bash
-   # Development workflow with hot reload
-   docker compose --profile development up
-
-   # Production-style container using composed services
-   docker compose --profile production up
-
-   # One-off production container (exposes the app on port 5173)
-   docker run --rm -p 5173:5173 --env-file .env.local bolt-ai:latest
-   ```
-
-   When the container starts it runs `pnpm run dockerstart`, which in turn executes `bindings.sh` to pass Cloudflare bindings through Wrangler. You can override this command in `docker-compose.yaml` if you need a different startup routine.
-
-### Option 3: Desktop Application (Electron)
-
-For users who prefer a native desktop experience, bolt.diy is also available as an Electron desktop application:
-
-1. **Download the Desktop App**:
-   - Visit the [latest release](https://github.com/stackblitz-labs/bolt.diy/releases/latest)
-   - Download the appropriate binary for your operating system
-   - For macOS: Extract and run the `.dmg` file
-   - For Windows: Run the `.exe` installer
-   - For Linux: Extract and run the AppImage or install the `.deb` package
-
-2. **Alternative**: Build from Source:
-   ```bash
-   # Install dependencies
-   pnpm install
-
-   # Build the Electron app
-   pnpm electron:build:dist  # For all platforms
-   # OR platform-specific:
-   pnpm electron:build:mac   # macOS
-   pnpm electron:build:win   # Windows
-   pnpm electron:build:linux # Linux
-   ```
-
-The desktop app provides the same full functionality as the web version with additional native features.
-
-## Configuring API Keys and Providers
-
-Bolt.diy features a modern, intuitive settings interface for managing AI providers and API keys. The settings are organized into dedicated panels for easy navigation and configuration.
-
-### Accessing Provider Settings
-
-1. **Open Settings**: Click the settings icon (⚙️) in the sidebar to access the settings panel
-2. **Navigate to Providers**: Select the "Providers" tab from the settings menu
-3. **Choose Provider Type**: Switch between "Cloud Providers" and "Local Providers" tabs
-
-### Cloud Providers Configuration
-
-The Cloud Providers tab displays all cloud-based AI services in an organized card layout:
-
-#### Adding API Keys
-1. **Select Provider**: Browse the grid of available cloud providers (OpenAI, Anthropic, Google, etc.)
-2. **Toggle Provider**: Use the switch to enable/disable each provider
-3. **Set API Key**:
-   - Click the provider card to expand its configuration
-   - Click on the "API Key" field to enter edit mode
-   - Paste your API key and press Enter to save
-   - The interface shows real-time validation with green checkmarks for valid keys
-
-#### Advanced Features
-- **Bulk Toggle**: Use "Enable All Cloud" to toggle all cloud providers at once
-- **Visual Status**: Green checkmarks indicate properly configured providers
-- **Provider Icons**: Each provider has a distinctive icon for easy identification
-- **Descriptions**: Helpful descriptions explain each provider's capabilities
-
-### Local Providers Configuration
-
-The Local Providers tab manages local AI installations and custom endpoints:
-
-#### Ollama Configuration
-1. **Enable Ollama**: Toggle the Ollama provider switch
-2. **Configure Endpoint**: Set the API endpoint (defaults to `http://127.0.0.1:11434`)
-3. **Model Management**:
-   - View all installed models with size and parameter information
-   - Update models to latest versions with one click
-   - Delete unused models
-   - Install new models by entering model names
-
-#### Other Local Providers
-- **LM Studio**: Configure custom base URLs for LM Studio endpoints
-- **OpenAI-like**: Connect to any OpenAI-compatible API endpoint
-- **Auto-detection**: The system automatically detects environment variables for base URLs
-
-### Environment Variables vs UI Configuration
-
-Bolt.diy supports both methods for maximum flexibility:
-
-#### Environment Variables (Recommended for Production)
-Set API keys and base URLs in your `.env.local` file:
-```bash
-# API Keys
-OPENAI_API_KEY=your_openai_key_here
-ANTHROPIC_API_KEY=your_anthropic_key_here
-
-# Custom Base URLs
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-LMSTUDIO_BASE_URL=http://127.0.0.1:1234
+<div align="center">
+
+**AI Product Engineering Platform**
+
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](#license)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](#technology-stack)
+[![React](https://img.shields.io/badge/React-18.3-61DAFB?logo=react&logoColor=white)](#technology-stack)
+[![Remix](https://img.shields.io/badge/Remix-2.15-000000?logo=remix&logoColor=white)](#technology-stack)
+[![Cloudflare Pages](https://img.shields.io/badge/Cloudflare%20Pages-Ready-F38020?logo=cloudflare&logoColor=white)](#technology-stack)
+[![Electron](https://img.shields.io/badge/Electron-Desktop-47848F?logo=electron&logoColor=white)](#technology-stack)
+
+> Logo placeholder: insert the Builders wordmark or icon here.
+
+</div>
+
+Builders is an AI product engineering platform that coordinates specialized AI engineers to turn an idea into a complete software product.
+
+> [!NOTE]
+> This README reflects the repository as implemented today. Items marked as future work are based on code comments and documentation in the repo, not on assumptions.
+
+## Vision
+
+**Mission:** Build the platform once. Build unlimited products.
+
+Builders is designed to work like a software engineering organization, not a single prompt box. It helps teams move from business intent to requirements, analysis, architecture, roadmapping, engineering, review, packaging, application generation, and deployment.
+
+## What Is Builders?
+
+Builders follows a complete product lifecycle:
+
+```text
+Business idea
+  ↓
+Requirements
+  ↓
+Analysis
+  ↓
+Architecture
+  ↓
+Roadmap
+  ↓
+Engineering
+  ↓
+Reviews
+  ↓
+Packaging
+  ↓
+Application generation
+  ↓
+Deployment
 ```
 
-#### UI-Based Configuration
-- **Real-time Updates**: Changes take effect immediately
-- **Secure Storage**: API keys are stored securely in browser cookies
-- **Visual Feedback**: Clear indicators show configuration status
-- **Easy Management**: Edit, view, and manage keys through the interface
+At a practical level, Builders combines:
 
-### Provider-Specific Features
+- A browser-based development workspace
+- An AI engineering team with role-specific outputs
+- A product package that assembles the approved work from those roles
+- A code generation pipeline that turns that package into runnable application files
+- Preview, testing, version control, and deployment workflows
 
-#### OpenRouter
-- **Free Models Filter**: Toggle to show only free models when browsing
-- **Pricing Information**: View input/output costs for each model
-- **Model Search**: Fuzzy search through all available models
+## Why Builders?
 
-#### Ollama
-- **Model Installer**: Built-in interface to install new models
-- **Progress Tracking**: Real-time download progress for model updates
-- **Model Details**: View model size, parameters, and quantization levels
-- **Auto-refresh**: Automatically detects newly installed models
+A single coding assistant can write code. Builders is structured to do more than that.
 
-#### Search & Navigation
-- **Fuzzy Search**: Type-ahead search across all providers and models
-- **Keyboard Navigation**: Use arrow keys and Enter to navigate quickly
-- **Clear Search**: Press `Cmd+K` (Mac) or `Ctrl+K` (Windows/Linux) to clear search
+| Single assistant | Builders |
+|---|---|
+| Works on the whole task in one pass | Splits work into specialized engineering roles |
+| Can drift across business, design, backend, and delivery concerns | Keeps each concern in its own artifact and review loop |
+| Often produces code before the product is fully understood | Starts with requirements, analysis, and architecture |
+| Makes review harder when everything is mixed together | Produces a product package that is easier to inspect, approve, and reuse |
+| Best for ad hoc code help | Better suited for end-to-end product engineering |
 
-### Troubleshooting
+The result is higher confidence, clearer handoffs, and better control over quality.
 
-#### Common Issues
-- **API Key Not Recognized**: Ensure you're using the correct API key format for each provider
-- **Base URL Issues**: Verify the endpoint URL is correct and accessible
-- **Model Not Loading**: Check that the provider is enabled and properly configured
-- **Environment Variables Not Working**: Restart the application after adding new environment variables
+## Key Features
 
-#### Status Indicators
-- 🟢 **Green Checkmark**: Provider properly configured and ready to use
-- 🔴 **Red X**: Configuration missing or invalid
-- 🟡 **Yellow Indicator**: Provider enabled but may need additional setup
-- 🔵 **Blue Pencil**: Click to edit configuration
+### AI Product Engineering
 
-### Supported Providers Overview
+- Multi-role AI engineering pipeline
+- Human-approved requirements at the front of the flow
+- Role-specific artifacts for architecture, database, UI/UX, backend, frontend, QA, and DevOps
+- Product package assembly from approved outputs
+- Code generation pipeline that builds on the assembled package
 
-#### Cloud Providers
-- **OpenAI** - GPT-4, GPT-3.5, and other OpenAI models
-- **Anthropic** - Claude 3.5 Sonnet, Claude 3 Opus, and other Claude models
-- **Google (Gemini)** - Gemini 1.5 Pro, Gemini 1.5 Flash, and other Gemini models
-- **Groq** - Fast inference with Llama, Mixtral, and other models
-- **xAI** - Grok models including Grok-2 and Grok-2 Vision
-- **DeepSeek** - DeepSeek Coder and other DeepSeek models
-- **Mistral** - Mixtral, Mistral 7B, and other Mistral models
-- **Cohere** - Command R, Command R+, and other Cohere models
-- **Together AI** - Various open-source models
-- **Perplexity** - Sonar models for search and reasoning
-- **HuggingFace** - Access to HuggingFace model hub
-- **OpenRouter** - Unified API for multiple model providers
-- **Moonshot (Kimi)** - Kimi AI models
-- **Hyperbolic** - High-performance model inference
-- **GitHub Models** - Models available through GitHub
-- **Amazon Bedrock** - AWS managed AI models
+### Development Workspace
 
-#### Local Providers
-- **Ollama** - Run open-source models locally with advanced model management
-- **LM Studio** - Local model inference with LM Studio
-- **OpenAI-like** - Connect to any OpenAI-compatible API endpoint
+- Browser-based workspace
+- Code editor
+- File tree
+- Search
+- Integrated terminal
+- Live preview
+- Diff view
+- File locking to reduce conflicting edits
 
-> **💡 Pro Tip**: Start with OpenAI or Anthropic for the best results, then explore other providers based on your specific needs and budget considerations.
+### Project Management
 
-## Setup Using Git (For Developers only)
+- Project and task tracking
+- Engineering timeline and roadmap views
+- Read-only readiness and health panels
+- Snapshot and history support
+- Draft approval and discard flows
 
-This method is recommended for developers who want to:
+### Code Generation
 
-- Contribute to the project
-- Stay updated with the latest changes
-- Switch between different versions
-- Create custom modifications
+- Deterministic planning before generation
+- Shared components and page generation
+- Structured prompts built from approved artifacts
+- Validation of generated files before assembly
 
-#### Prerequisites
+### Reviews
 
-1. Install Git: [Download Git](https://git-scm.com/downloads)
+- Draft review panels for each engineering role
+- Manual approve/discard control
+- AI decision history and context capture
+- Review-aware generation gating
 
-#### Initial Setup
+### Packaging
 
-1. **Clone the Repository**:
+- Product package assembly
+- Markdown summaries for approved work
+- Source traceability for assembled files
+- Missing-section handling when parts of the product are not ready yet
 
-   ```bash
-   git clone -b stable https://github.com/stackblitz-labs/bolt.diy.git
-   ```
+### Deployment
 
-2. **Navigate to Project Directory**:
+- Cloudflare Pages deployment
+- Vercel deployment
+- Netlify deployment
+- GitHub Pages deployment
+- Native desktop packaging with Electron
 
-   ```bash
-   cd bolt.diy
-   ```
+### GitHub and GitLab
 
-3. **Install Dependencies**:
+- Repository import and cloning
+- Git proxying
+- GitHub integration
+- GitLab integration
+- Branch and deployment helpers
 
-   ```bash
-   pnpm install
-   ```
+### Supabase
 
-4. **Start the Development Server**:
-   ```bash
-   pnpm run dev
-   ```
+- Generated-app Supabase integration
+- Query support
+- Project and auth-related connection helpers
+- Separate BuildersDB persistence seam documented for future cloud control-plane storage
 
-5. **(OPTIONAL)** Switch to the Main Branch if you want to use pre-release/testbranch:
-   ```bash
-   git checkout main
-   pnpm install
-   pnpm run dev
-   ```
-  Hint: Be aware that this can have beta-features and more likely got bugs than the stable release
+### Browser IDE
 
->**Open the WebUI to test (Default: http://localhost:5173)**
->   - Beginners: 
->     - Try to use a sophisticated Provider/Model like Anthropic with Claude Sonnet 3.x Models to get best results
->     - Explanation: The System Prompt currently implemented in bolt.diy cant cover the best performance for all providers and models out there. So it works better with some models, then other, even if the models itself are perfect for >programming
->     - Future: Planned is a Plugin/Extentions-Library so there can be different System Prompts for different Models, which will help to get better results
+- React-based interface
+- Remix routes and server actions
+- In-browser editing and preview
+- Drag and drop support
+- Toast notifications
+- Theme persistence
 
-#### Staying Updated
+### Templates
 
-To get the latest changes from the repository:
+Current blueprints include:
 
-1. **Save Your Local Changes** (if any):
+- Blank Project
+- Business Website
+- LocalShop India
+- Shopify App
+- AI Agent
+- SaaS Starter
+- Mobile App
+- Marketing Website
+- Next.js SaaS
 
-   ```bash
-   git stash
-   ```
+## AI Engineering Team
 
-2. **Pull Latest Updates**:
+Builders currently implements an eight-role engineering chain.
 
-   ```bash
-   git pull 
-   ```
+| Role | Artifact | Responsibility |
+|---|---|---|
+| Business Analyst | Requirements Draft | Captures the business problem, goals, users, and core requirements |
+| Solution Architect | Architecture Draft | Defines the system structure, modules, and technical direction |
+| Database Engineer | Database Draft | Designs entities, relationships, and data model decisions |
+| UX Engineer | UI/UX Draft | Defines the user experience, screens, and interaction patterns |
+| Backend Engineer | Backend Draft | Defines APIs, business logic, and server-side behavior |
+| Frontend Engineer | Frontend Draft | Defines pages, components, and client-side implementation |
+| QA Engineer | QA Draft | Defines test coverage, validation approach, and quality checks |
+| DevOps Engineer | DevOps Draft | Defines deployment, environment, and operational setup |
 
-3. **Update Dependencies**:
+> [!IMPORTANT]
+> The project manager view is implemented as a deterministic readiness layer, not as an AI role. It evaluates whether the project is ready for generation.
 
-   ```bash
-   pnpm install
-   ```
+## Product Workflow
 
-4. **Restore Your Local Changes** (if any):
-   ```bash
-   git stash pop
-   ```
+```text
+Business idea
+  ↓
+Requirements
+  ↓
+Analysis
+  ↓
+Architecture
+  ↓
+Roadmap
+  ↓
+Engineering roles
+  ↓
+Reviews
+  ↓
+Product package
+  ↓
+Application generation
+  ↓
+Live preview
+  ↓
+Deployment
+```
 
-#### Troubleshooting Git Setup
+The internal engineering chain runs through the implemented roles in this order:
 
-If you encounter issues:
+```text
+Requirements
+  ↓
+Solution Architect
+  ↓
+Database Engineer
+  ↓
+UX Engineer
+  ↓
+Backend Engineer
+  ↓
+Frontend Engineer
+  ↓
+QA Engineer
+  ↓
+DevOps Engineer
+```
 
-1. **Clean Installation**:
+## Architecture
 
-   ```bash
-   # Remove node modules and lock files
-   rm -rf node_modules pnpm-lock.yaml
+### Frontend
 
-   # Clear pnpm cache
-   pnpm store prune
+- React 18 UI built with Remix
+- Route-based application shell in `app/routes`
+- Component system in `app/components`
+- Shared state through nanostores and React hooks
+- Editor, sidebar, chat, preview, and deployment panels
 
-   # Reinstall dependencies
-   pnpm install
-   ```
+### Backend
 
-2. **Reset Local Changes**:
-   ```bash
-   # Discard all local changes
-   git reset --hard origin/main
-   ```
+- Remix loaders and actions
+- Cloudflare Pages / Workers runtime
+- API routes under `app/routes/api.*`
+- GitHub, GitLab, Vercel, Netlify, MCP, and Supabase service adapters
 
-Remember to always commit your local changes or stash them before pulling updates to avoid conflicts.
+### Database
 
----
+- Supabase integration for generated applications
+- Local persistence for the Builders workspace
+- BuildersDB seam for future platform-level persistence
+- Browser storage via localStorage and IndexedDB-backed helpers
 
-## Available Scripts
+### AI Layer
 
-- **`pnpm run dev`**: Starts the development server.
-- **`pnpm run build`**: Builds the project.
-- **`pnpm run start`**: Runs the built application locally using Wrangler Pages.
-- **`pnpm run preview`**: Builds and runs the production build locally.
-- **`pnpm test`**: Runs the test suite using Vitest.
-- **`pnpm run typecheck`**: Runs TypeScript type checking.
-- **`pnpm run typegen`**: Generates TypeScript types using Wrangler.
-- **`pnpm run deploy`**: Deploys the project to Cloudflare Pages.
-- **`pnpm run lint`**: Runs ESLint to check for code issues.
-- **`pnpm run lint:fix`**: Automatically fixes linting issues.
-- **`pnpm run clean`**: Cleans build artifacts and cache.
-- **`pnpm run prepare`**: Sets up husky for git hooks.
-- **Docker Scripts**:
-  - **`pnpm run dockerbuild`**: Builds the Docker image for development.
-  - **`pnpm run dockerbuild:prod`**: Builds the Docker image for production.
-  - **`pnpm run dockerrun`**: Runs the Docker container.
-  - **`pnpm run dockerstart`**: Starts the Docker container with proper bindings.
-- **Electron Scripts**:
-  - **`pnpm electron:build:deps`**: Builds Electron main and preload scripts.
-  - **`pnpm electron:build:main`**: Builds the Electron main process.
-  - **`pnpm electron:build:preload`**: Builds the Electron preload script.
-  - **`pnpm electron:build:renderer`**: Builds the Electron renderer.
-  - **`pnpm electron:build:unpack`**: Creates an unpacked Electron build.
-  - **`pnpm electron:build:mac`**: Builds for macOS.
-  - **`pnpm electron:build:win`**: Builds for Windows.
-  - **`pnpm electron:build:linux`**: Builds for Linux.
-  - **`pnpm electron:build:dist`**: Builds for all platforms.
+- AI SDK provider registry
+- Provider-specific model adapters
+- Prompt builders for chat, requirements, architecture, backend, frontend, QA, and DevOps
+- Context builders that pass approved upstream work into the next role
+- Engineering pipeline, planning, review, and assembly modules
 
----
+### Storage
+
+- Local project store
+- Persistence helpers for chats, locks, and settings
+- Import/export support
+- Git-backed project workflows
+
+### Execution
+
+- WebContainer for in-browser execution
+- Integrated terminal
+- File writes and previews
+- Generation pipeline and validation stages
+- Electron desktop build path for native packaging
+
+## Technology Stack
+
+| Layer | Technology | Purpose |
+|---|---|---|
+| Language | TypeScript 5.7 | Type-safe application and toolchain code |
+| UI | React 18 | Component-based user interface |
+| App framework | Remix 2.15 | Routed app shell, loaders, and actions |
+| Build tooling | Vite 5 | Fast dev server and production bundling |
+| Runtime | Node.js 20.18+ | Local development and tooling |
+| Package manager | pnpm 9.14.4 | Dependency and script management |
+| Styling | UnoCSS, SCSS, Tailwind reset | UI styling and theming |
+| Editor | CodeMirror | Source editing experience |
+| Terminal | xterm.js | In-browser terminal |
+| LLM SDK | Vercel AI SDK 4.x | Model access and generation plumbing |
+| AI providers | Anthropic, OpenAI, Google, and more | Multi-provider model support |
+| State | Nano Stores, Zustand | Client and workspace state |
+| Storage | localStorage, IndexedDB helpers, Supabase JS | Workspace persistence and generated-app data |
+| Git | isomorphic-git, Octokit | Repository and GitHub workflows |
+| Preview / sandbox | WebContainer API | In-browser execution and live preview |
+| Desktop | Electron | Native desktop packaging |
+| Deployment | Cloudflare Pages, Vercel, Netlify, GitHub Pages | Shipping generated applications |
+
+## Supported AI Providers
+
+The registry currently supports these providers:
+
+| Provider | Notes |
+|---|---|
+| Anthropic | Static and dynamic Claude model support |
+| OpenAI | Direct OpenAI API access |
+| Google | Gemini models |
+| Groq | Fast model inference |
+| Mistral | Mistral and Codestral models |
+| Cohere | Cohere models |
+| Deepseek | DeepSeek chat, coder, and reasoning models |
+| Together | OpenAI-compatible Together endpoint support |
+| Perplexity | Perplexity Sonar models |
+| Fireworks | Provider registered in the model registry |
+| Cerebras | Provider registered in the model registry |
+| HuggingFace | Provider registered in the model registry |
+| Hyperbolic | OpenAI-compatible Hyperbolic endpoint support |
+| Moonshot | Kimi and Moonshot models |
+| Ollama | Local models via `OLLAMA_API_BASE_URL` |
+| LM Studio | Local models via `LMSTUDIO_API_BASE_URL` |
+| OpenRouter | Aggregated model marketplace access |
+| OpenAI-compatible endpoints | Generic OpenAI-like providers |
+| xAI | Grok models |
+| GitHub Models | GitHub-hosted model access |
+| Amazon Bedrock | AWS Bedrock model access |
+| Z.ai | GLM models and dedicated coding endpoint |
+
+> [!TIP]
+> Many providers support dynamic model discovery when an API key is configured. Local providers use base URLs instead of hosted API keys.
+
+## Screenshots
+
+Replace these placeholders with real captures from the running app.
+
+| Placeholder | Suggested capture |
+|---|---|
+| Workspace overview | Main chat, editor, file tree, and preview in one view |
+| AI engineering team | Role pipeline with approvals and readiness state |
+| Product package | Requirements, architecture, backend, frontend, QA, and DevOps artifacts |
+| Deployment dialog | Vercel, Netlify, GitHub Pages, or Cloudflare deployment flow |
+
+## Installation
+
+### Requirements
+
+- Node.js `>=20.18.0 <25.0.0`
+- pnpm `9.14.4`
+- Git
+
+### Local Development
+
+```bash
+pnpm install
+pnpm run dev
+```
+
+### Useful Scripts
+
+```bash
+pnpm run build
+pnpm run preview
+pnpm run test
+pnpm run lint
+pnpm run typecheck
+```
+
+### Docker
+
+```bash
+pnpm run dockerbuild
+docker compose --profile development up
+```
+
+For a production-style container build, use:
+
+```bash
+pnpm run dockerbuild:prod
+```
+
+### Desktop App
+
+```bash
+pnpm electron:dev
+pnpm electron:build:dist
+```
+
+Platform-specific Electron builds are also available:
+
+```bash
+pnpm electron:build:mac
+pnpm electron:build:win
+pnpm electron:build:linux
+```
+
+## Configuration
+
+Configuration is driven primarily by environment variables in `.env.local`, `.env`, or the deployment environment.
+
+For local development, copy the example file first:
+
+```bash
+cp .env.example .env.local
+```
+
+### AI Provider Variables
+
+| Provider group | Variables |
+|---|---|
+| Hosted model APIs | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`, `COHERE_API_KEY`, `DEEPSEEK_API_KEY`, `TOGETHER_API_KEY`, `PERPLEXITY_API_KEY`, `CEREBRAS_API_KEY`, `FIREWORKS_API_KEY`, `HYPERBOLIC_API_KEY`, `MOONSHOT_API_KEY`, `ZAI_API_KEY`, `GITHUB_API_KEY` |
+| Local / custom endpoints | `OLLAMA_API_BASE_URL`, `LMSTUDIO_API_BASE_URL`, `OPENAI_LIKE_API_BASE_URL`, `OPENAI_LIKE_API_KEY`, `TOGETHER_API_BASE_URL`, `HYPERBOLIC_API_BASE_URL`, `ZAI_BASE_URL` |
+| Provider selection / runtime | `DEFAULT_NUM_CTX`, `VITE_LOG_LEVEL`, `NODE_ENV`, `PORT` |
+
+### Git And Deployment Variables
+
+| Integration | Variables |
+|---|---|
+| GitHub | `VITE_GITHUB_ACCESS_TOKEN`, `VITE_GITHUB_TOKEN_TYPE` |
+| GitLab | `VITE_GITLAB_ACCESS_TOKEN`, `VITE_GITLAB_URL`, `VITE_GITLAB_TOKEN_TYPE` |
+| Vercel | `VITE_VERCEL_ACCESS_TOKEN` |
+| Netlify | `VITE_NETLIFY_ACCESS_TOKEN` |
+
+### Supabase And BuildersDB Variables
+
+| Area | Variables |
+|---|---|
+| Generated-app Supabase | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_SUPABASE_ACCESS_TOKEN` |
+| Builders platform persistence | `BUILDERS_DB_SUPABASE_URL`, `BUILDERS_DB_SUPABASE_ANON_KEY` |
+
+> [!IMPORTANT]
+> `BUILDERS_DB_SUPABASE_URL` and `BUILDERS_DB_SUPABASE_ANON_KEY` are a separate control-plane seam for the Builders platform itself. They are different from the generated application's own Supabase connection.
+
+### Provider Behavior
+
+- Cloud providers are configured with API keys.
+- Local providers use local base URLs.
+- Some providers return static fallback models and can also discover dynamic models from their APIs.
+- Provider settings can be managed in the app UI as well as through environment variables.
+
+## Repository Structure
+
+```text
+.
+├── app/
+│   ├── components/        # Workspace UI, chat, sidebar, deploy, editor, and shared elements
+│   ├── lib/               # AI, code generation, product assembly, persistence, stores, services
+│   ├── routes/            # Remix pages and API routes
+│   ├── styles/            # Global styling and animations
+│   └── root.tsx           # App shell
+├── assets/                # Static assets used by the app
+├── docs/                  # Product and architecture documentation
+├── electron/              # Electron main, preload, and renderer build config
+├── functions/             # Serverless / edge function support files
+├── icons/                 # App icons and related artwork
+├── public/                # Public static files
+├── scripts/               # Utility and maintenance scripts
+├── supabase/              # Supabase-related local assets
+├── Dockerfile             # Container build
+├── docker-compose.yaml    # Local container workflows
+├── package.json           # Scripts and dependencies
+├── tsconfig.json          # TypeScript configuration
+├── vite.config.ts         # Vite configuration
+├── wrangler.toml          # Cloudflare deployment config
+└── electron-builder.yml   # Electron packaging config
+```
+
+## Current Roadmap
+
+> [!NOTE]
+> This section reflects the current implementation status in the repository. It separates what is already shipped from what is still being worked on or planned.
+
+### Completed
+
+- Multi-provider AI registry
+- Browser-based product engineering workspace
+- Eight-role AI engineering team
+- Project package assembly
+- Code generation and live preview pipeline
+- Integrated terminal and file editor
+- Diff view and file locking
+- GitHub and GitLab integration
+- Supabase integration
+- Deployment to Cloudflare Pages, Vercel, Netlify, and GitHub Pages
+- Electron desktop app
+- Project templates and blueprints
+- MCP tool integration
+- Data visualization and analysis tools
+
+### In Progress
+
+- Backend agent architecture
+- Prompt optimization for smaller models
+- Project planning documentation generation
+- VS Code integration
+- Document upload for knowledge and style guides
+- Additional provider integrations
+
+### Future
+
+- BuildersDB cloud control-plane expansion
+- Team workspaces and auth
+- Secret management for Builders-owned data
+- Generated Supabase project links and provisioning
+- Broader generated-product automation
+- More vertical templates and packaged product flows
 
 ## Contributing
 
-We welcome contributions! Check out our [Contributing Guide](CONTRIBUTING.md) to get started.
+We welcome focused improvements that make Builders more reliable, easier to use, and easier to extend.
 
----
+Before opening a pull request:
 
-## Roadmap
+1. Make your changes in a feature branch.
+2. Run the relevant checks.
+3. Include tests or validation when behavior changes.
+4. Keep changes scoped and documented.
 
-Explore upcoming features and priorities on our [Roadmap](https://roadmap.sh/r/ottodev-roadmap-2ovzo).
+Recommended checks:
 
----
+```bash
+pnpm run lint
+pnpm run typecheck
+pnpm run test
+```
 
-## FAQ
+If you are changing deployment, provider behavior, or generation workflows, include notes on what changed and how you verified it.
 
-For answers to common questions, issues, and to see a list of recommended models, visit our [FAQ Page](FAQ.md).
+## License
 
+MIT License
 
-# Licensing
-**Who needs a commercial WebContainer API license?**
+Copyright (c) 2024 StackBlitz, Inc. and bolt.diy contributors
 
-bolt.diy source code is distributed as MIT, but it uses WebContainers API that [requires licensing](https://webcontainers.io/enterprise) for production usage in a commercial, for-profit setting. (Prototypes or POCs do not require a commercial license.) If you're using the API to meet the needs of your customers, prospective customers, and/or employees, you need a license to ensure compliance with our Terms of Service. Usage of the API in violation of these terms may result in your access being revoked.
-# Test commit to trigger Security Analysis workflow
+The software is provided under the terms of the MIT License. See the `LICENSE` file for the full text.
