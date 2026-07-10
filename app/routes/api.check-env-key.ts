@@ -1,8 +1,11 @@
 import type { LoaderFunction } from '@remix-run/cloudflare';
 import { LLMManager } from '~/lib/modules/llm/manager';
 import { getApiKeysFromCookie } from '~/lib/api/cookies';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 export const loader: LoaderFunction = async ({ context, request }) => {
+  await requireAuthenticatedUser(request, context);
+
   const url = new URL(request.url);
   const provider = url.searchParams.get('provider');
 

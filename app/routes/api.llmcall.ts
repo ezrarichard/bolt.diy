@@ -13,8 +13,10 @@ import { LLMManager } from '~/lib/modules/llm/manager';
 import type { ModelInfo } from '~/lib/modules/llm/types';
 import { getApiKeysFromCookie, getProviderSettingsFromCookie } from '~/lib/api/cookies';
 import { createScopedLogger } from '~/utils/logger';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 export async function action(args: ActionFunctionArgs) {
+  await requireAuthenticatedUser(args.request, args.context);
   return llmCallAction(args);
 }
 

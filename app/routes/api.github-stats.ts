@@ -195,4 +195,5 @@ async function githubStatsLoader({ request, context }: { request: Request; conte
 export const loader = withSecurity(githubStatsLoader, {
   rateLimit: true,
   allowedMethods: ['GET'],
+  requireAuth: true,
 });

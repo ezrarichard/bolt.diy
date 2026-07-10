@@ -79,6 +79,7 @@ async function supabaseUserLoader({ request, context }: { request: Request; cont
 export const loader = withSecurity(supabaseUserLoader, {
   rateLimit: true,
   allowedMethods: ['GET'],
+  requireAuth: true,
 });
 
 async function supabaseUserAction({ request, context }: { request: Request; context: any }) {
@@ -196,4 +197,5 @@ async function supabaseUserAction({ request, context }: { request: Request; cont
 export const action = withSecurity(supabaseUserAction, {
   rateLimit: true,
   allowedMethods: ['POST'],
+  requireAuth: true,
 });

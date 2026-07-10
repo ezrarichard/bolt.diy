@@ -237,10 +237,23 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
 
         setIsModelLoading('all');
         fetch('/api/models')
-          .then((response) => response.json())
+          .then(async (response) => {
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            return response.json();
+          })
           .then((data) => {
-            const typedData = data as { modelList: ModelInfo[] };
-            setModelList(typedData.modelList);
+            const typedData = data as { modelList?: ModelInfo[] };
+
+            /*
+             * `/api/models` requires auth (Sprint 40) — an error response has no `modelList`
+             * field at all, so only ever replace state with an actual array, never `undefined`.
+             */
+            if (Array.isArray(typedData.modelList)) {
+              setModelList(typedData.modelList);
+            }
           })
           .catch((error) => {
             console.error('Error fetching model list:', error);
@@ -262,15 +275,24 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
 
       try {
         const response = await fetch(`/api/models/${encodeURIComponent(providerName)}`);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
         const data = await response.json();
-        providerModels = (data as { modelList: ModelInfo[] }).modelList;
+        const fetchedModelList = (data as { modelList?: ModelInfo[] }).modelList;
+
+        if (Array.isArray(fetchedModelList)) {
+          providerModels = fetchedModelList;
+        }
       } catch (error) {
         console.error('Error loading dynamic models for:', providerName, error);
       }
 
       // Only update models for the specific provider
       setModelList((prevModels) => {
-        const otherModels = prevModels.filter((model) => model.provider !== providerName);
+        const otherModels = (prevModels ?? []).filter((model) => model.provider !== providerName);
         return [...otherModels, ...providerModels];
       });
       setIsModelLoading(undefined);

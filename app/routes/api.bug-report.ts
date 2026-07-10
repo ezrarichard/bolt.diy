@@ -1,6 +1,7 @@
 import { json, type ActionFunctionArgs } from '@remix-run/cloudflare';
 import { Octokit } from '@octokit/rest';
 import { z } from 'zod';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 // Rate limiting store (in production, use Redis or similar)
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
@@ -142,6 +143,8 @@ function formatIssueBody(data: z.infer<typeof bugReportSchema>): string {
 }
 
 export async function action({ request, context }: ActionFunctionArgs) {
+  await requireAuthenticatedUser(request, context);
+
   // Only allow POST requests
   if (request.method !== 'POST') {
     return json({ error: 'Method not allowed' }, { status: 405 });

@@ -1,5 +1,6 @@
 import { json } from '@remix-run/cloudflare';
 import type { ActionFunctionArgs, LoaderFunctionArgs } from '@remix-run/cloudflare';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 // Allowed headers to forward to the target server
 const ALLOW_HEADERS = [
@@ -43,11 +44,13 @@ const EXPOSE_HEADERS = [
 ];
 
 // Handle all HTTP methods
-export async function action({ request, params }: ActionFunctionArgs) {
+export async function action({ request, params, context }: ActionFunctionArgs) {
+  await requireAuthenticatedUser(request, context);
   return handleProxyRequest(request, params['*']);
 }
 
-export async function loader({ request, params }: LoaderFunctionArgs) {
+export async function loader({ request, params, context }: LoaderFunctionArgs) {
+  await requireAuthenticatedUser(request, context);
   return handleProxyRequest(request, params['*']);
 }
 

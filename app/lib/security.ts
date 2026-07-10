@@ -1,4 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from '@remix-run/cloudflare';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 // Rate limiting store (in-memory for serverless environments)
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
@@ -179,7 +180,7 @@ export function withSecurity<T extends (args: ActionFunctionArgs | LoaderFunctio
   } = {},
 ) {
   return async (args: ActionFunctionArgs | LoaderFunctionArgs): Promise<Response> => {
-    const { request } = args;
+    const { request, context } = args;
     const url = new URL(request.url);
     const endpoint = url.pathname;
 
@@ -189,6 +190,23 @@ export function withSecurity<T extends (args: ActionFunctionArgs | LoaderFunctio
         status: 405,
         headers: createSecurityHeaders(),
       });
+    }
+
+    /*
+     * Sprint 40 — Authentication Foundation. Checked before rate limiting/the handler runs,
+     * and outside the try/catch below, so a 401 from requireAuthenticatedUser() is returned
+     * as-is instead of being caught and rewritten into a generic 500.
+     */
+    if (options.requireAuth) {
+      try {
+        await requireAuthenticatedUser(request, context);
+      } catch (authError) {
+        if (authError instanceof Response) {
+          return authError;
+        }
+
+        throw authError;
+      }
     }
 
     // Apply rate limiting

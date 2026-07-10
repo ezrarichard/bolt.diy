@@ -1,9 +1,13 @@
+import type { LoaderFunctionArgs } from '@remix-run/cloudflare';
 import { createScopedLogger } from '~/utils/logger';
 import { MCPService } from '~/lib/services/mcpService';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 const logger = createScopedLogger('api.mcp-check');
 
-export async function loader() {
+export async function loader({ request, context }: LoaderFunctionArgs) {
+  await requireAuthenticatedUser(request, context);
+
   try {
     const mcpService = MCPService.getInstance();
     const serverTools = await mcpService.checkServersAvailabilities();

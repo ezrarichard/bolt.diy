@@ -327,13 +327,11 @@ export async function hydrateProjectsFromBuildersDb(): Promise<void> {
 }
 
 /*
- * Fire hydration the moment this module loads (fire-and-forget — never awaited at module
- * scope, matching mirrorToBuildersDb()'s existing "never block a local read/write on
- * network" contract). A no-op when BuildersDB isn't configured. Previously only triggered
- * by ProjectList.tsx's mount effect; moved here so it runs regardless of which component
- * (if any) happens to mount first.
+ * Sprint 40 — no longer auto-fired at module load. An unauthenticated browser must never
+ * hydrate the shared BuildersDB project dataset, and this module can be imported well
+ * before auth resolves. `AuthProvider` (app/lib/auth/AuthProvider.tsx) now calls
+ * `hydrateProjectsFromBuildersDb()` itself, exactly once, only after a session is confirmed.
  */
-hydrateProjectsFromBuildersDb();
 
 /**
  * Sprint 38.5 — loads one project's persisted `builders_project_workspace_state` row (see

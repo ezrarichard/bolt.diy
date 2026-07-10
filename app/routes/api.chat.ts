@@ -14,8 +14,10 @@ import { extractPropertiesFromMessage } from '~/lib/.server/llm/utils';
 import type { DesignScheme } from '~/types/design-scheme';
 import { MCPService } from '~/lib/services/mcpService';
 import { StreamRecoveryManager } from '~/lib/.server/llm/stream-recovery';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 export async function action(args: ActionFunctionArgs) {
+  await requireAuthenticatedUser(args.request, args.context);
   return chatAction(args);
 }
 

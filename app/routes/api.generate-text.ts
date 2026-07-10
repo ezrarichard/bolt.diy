@@ -5,10 +5,12 @@ import { PROVIDER_LIST, DEFAULT_PROVIDER } from '~/utils/constants';
 import { getApiKeysFromCookie, getProviderSettingsFromCookie } from '~/lib/api/cookies';
 import { isClaudeReasoningModel } from '~/lib/.server/llm/constants';
 import { createScopedLogger } from '~/utils/logger';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 const logger = createScopedLogger('api.generate-text');
 
 export async function action(args: ActionFunctionArgs) {
+  await requireAuthenticatedUser(args.request, args.context);
   return generateTextAction(args);
 }
 

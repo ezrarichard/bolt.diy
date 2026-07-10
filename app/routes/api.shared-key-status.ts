@@ -1,6 +1,7 @@
 import type { LoaderFunction } from '@remix-run/cloudflare';
 import { LLMManager } from '~/lib/modules/llm/manager';
 import { upsertSharedProviderSettings } from '~/lib/builders-db/repositories/providerSettingsRepository';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 /**
  * Sprint 38.4 — shared (server-configured) LLM key status, for every provider at once.
@@ -13,10 +14,13 @@ import { upsertSharedProviderSettings } from '~/lib/builders-db/repositories/pro
  * comment in manager.ts).
  *
  * Response body is `{ providers: { [name]: { configured: boolean } } }` — booleans only,
- * never a key value, never even the env var's name. Safe to expose to any authenticated or
- * unauthenticated request.
+ * never a key value, never even the env var's name. Content is harmless to any caller, but
+ * Sprint 40 still requires a valid session — this is a server API route, not a public status
+ * page, and it's cheap to keep consistent with every other route here.
  */
-export const loader: LoaderFunction = async ({ context }) => {
+export const loader: LoaderFunction = async ({ context, request }) => {
+  await requireAuthenticatedUser(request, context);
+
   const serverEnv = context?.cloudflare?.env as Record<string, any> | undefined;
   const llmManager = LLMManager.getInstance((serverEnv ?? {}) as any);
   const status = llmManager.getSharedKeyStatus(serverEnv);

@@ -1,6 +1,7 @@
 import { type ActionFunctionArgs, json } from '@remix-run/cloudflare';
 import crypto from 'crypto';
 import type { NetlifySiteInfo } from '~/types/netlify';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 interface DeployRequestBody {
   siteId?: string;
@@ -25,7 +26,9 @@ async function readNetlifyError(response: Response) {
   }
 }
 
-export async function action({ request }: ActionFunctionArgs) {
+export async function action({ request, context }: ActionFunctionArgs) {
+  await requireAuthenticatedUser(request, context);
+
   try {
     const { siteId, files, token, chatId } = (await request.json()) as DeployRequestBody & { token: string };
 

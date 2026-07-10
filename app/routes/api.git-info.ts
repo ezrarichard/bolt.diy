@@ -1,8 +1,11 @@
-import { json } from '@remix-run/cloudflare';
+import { json, type LoaderFunctionArgs } from '@remix-run/cloudflare';
 import { execSync } from 'child_process';
 import { existsSync } from 'fs';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
-export async function loader() {
+export async function loader({ request, context }: LoaderFunctionArgs) {
+  await requireAuthenticatedUser(request, context);
+
   try {
     // Check if we're in a git repository
     if (!existsSync('.git')) {

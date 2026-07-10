@@ -66,6 +66,18 @@ interface ChatBoxProps {
 }
 
 export const ChatBox: React.FC<ChatBoxProps> = (props) => {
+  /*
+   * Normalized once here rather than scattered `?.`/`|| []` at each use below. These props
+   * flow from BaseChat.tsx, some of it sourced from network responses (e.g. `modelList` from
+   * `/api/models`) — a failed/error response there must never propagate `undefined` this far;
+   * see BaseChat.tsx's fetch handlers for the actual fix, this is the last line of defense.
+   */
+  const providerList = props.providerList ?? [];
+  const modelList = props.modelList ?? [];
+  const uploadedFiles = props.uploadedFiles ?? [];
+  const imageDataList = props.imageDataList ?? [];
+  const input = props.input ?? '';
+
   return (
     <div
       className={classNames(
@@ -109,37 +121,35 @@ export const ChatBox: React.FC<ChatBoxProps> = (props) => {
           {() => (
             <div className={classNames('mb-2', props.isModelSettingsCollapsed ? 'hidden' : '')}>
               <ModelSelector
-                key={props.provider?.name + ':' + props.modelList.length}
+                key={props.provider?.name + ':' + modelList.length}
                 model={props.model}
                 setModel={props.setModel}
-                modelList={props.modelList}
+                modelList={modelList}
                 provider={props.provider}
                 setProvider={props.setProvider}
-                providerList={props.providerList || (PROVIDER_LIST as ProviderInfo[])}
+                providerList={providerList.length > 0 ? providerList : (PROVIDER_LIST as ProviderInfo[])}
                 apiKeys={props.apiKeys}
                 modelLoading={props.isModelLoading}
               />
-              {(props.providerList || []).length > 0 &&
-                props.provider &&
-                !LOCAL_PROVIDERS.includes(props.provider.name) && (
-                  <APIKeyManager
-                    provider={props.provider}
-                    apiKey={props.apiKeys[props.provider.name] || ''}
-                    setApiKey={(key) => {
-                      props.onApiKeysChange(props.provider.name, key);
-                    }}
-                  />
-                )}
+              {providerList.length > 0 && props.provider && !LOCAL_PROVIDERS.includes(props.provider.name) && (
+                <APIKeyManager
+                  provider={props.provider}
+                  apiKey={props.apiKeys[props.provider.name] || ''}
+                  setApiKey={(key) => {
+                    props.onApiKeysChange(props.provider.name, key);
+                  }}
+                />
+              )}
             </div>
           )}
         </ClientOnly>
       </div>
       <FilePreview
-        files={props.uploadedFiles}
-        imageDataList={props.imageDataList}
+        files={uploadedFiles}
+        imageDataList={imageDataList}
         onRemove={(index) => {
-          props.setUploadedFiles?.(props.uploadedFiles.filter((_, i) => i !== index));
-          props.setImageDataList?.(props.imageDataList.filter((_, i) => i !== index));
+          props.setUploadedFiles?.(uploadedFiles.filter((_, i) => i !== index));
+          props.setImageDataList?.(imageDataList.filter((_, i) => i !== index));
         }}
       />
       <ClientOnly>
@@ -147,8 +157,8 @@ export const ChatBox: React.FC<ChatBoxProps> = (props) => {
           <ScreenshotStateManager
             setUploadedFiles={props.setUploadedFiles}
             setImageDataList={props.setImageDataList}
-            uploadedFiles={props.uploadedFiles}
-            imageDataList={props.imageDataList}
+            uploadedFiles={uploadedFiles}
+            imageDataList={imageDataList}
           />
         )}
       </ClientOnly>
@@ -198,8 +208,8 @@ export const ChatBox: React.FC<ChatBoxProps> = (props) => {
 
                 reader.onload = (e) => {
                   const base64Image = e.target?.result as string;
-                  props.setUploadedFiles?.([...props.uploadedFiles, file]);
-                  props.setImageDataList?.([...props.imageDataList, base64Image]);
+                  props.setUploadedFiles?.([...uploadedFiles, file]);
+                  props.setImageDataList?.([...imageDataList, base64Image]);
                 };
                 reader.readAsDataURL(file);
               }
@@ -226,7 +236,7 @@ export const ChatBox: React.FC<ChatBoxProps> = (props) => {
               props.handleSendMessage?.(event);
             }
           }}
-          value={props.input}
+          value={input}
           onChange={(event) => {
             props.handleInputChange?.(event);
           }}
@@ -241,16 +251,16 @@ export const ChatBox: React.FC<ChatBoxProps> = (props) => {
         <ClientOnly>
           {() => (
             <SendButton
-              show={props.input.length > 0 || props.isStreaming || props.uploadedFiles.length > 0}
+              show={input.length > 0 || props.isStreaming || uploadedFiles.length > 0}
               isStreaming={props.isStreaming}
-              disabled={!props.providerList || props.providerList.length === 0}
+              disabled={providerList.length === 0}
               onClick={(event) => {
                 if (props.isStreaming) {
                   props.handleStop?.();
                   return;
                 }
 
-                if (props.input.length > 0 || props.uploadedFiles.length > 0) {
+                if (input.length > 0 || uploadedFiles.length > 0) {
                   props.handleSendMessage?.(event);
                 }
               }}
@@ -267,7 +277,7 @@ export const ChatBox: React.FC<ChatBoxProps> = (props) => {
             <WebSearch onSearchResult={(result) => props.onWebSearchResult?.(result)} disabled={props.isStreaming} />
             <IconButton
               title="Enhance prompt"
-              disabled={props.input.length === 0 || props.enhancingPrompt}
+              disabled={input.length === 0 || props.enhancingPrompt}
               className={classNames('transition-all', props.enhancingPrompt ? 'opacity-100' : '')}
               onClick={() => {
                 props.enhancePrompt?.();
@@ -313,13 +323,13 @@ export const ChatBox: React.FC<ChatBoxProps> = (props) => {
                   !props.isModelSettingsCollapsed,
               })}
               onClick={() => props.setIsModelSettingsCollapsed(!props.isModelSettingsCollapsed)}
-              disabled={!props.providerList || props.providerList.length === 0}
+              disabled={providerList.length === 0}
             >
               <div className={`i-ph:caret-${props.isModelSettingsCollapsed ? 'right' : 'down'} text-lg`} />
               {props.isModelSettingsCollapsed ? <span className="text-xs">{props.model}</span> : <span />}
             </IconButton>
           </div>
-          {props.input.length > 3 ? (
+          {input.length > 3 ? (
             <div className="text-xs text-bolt-elements-textTertiary">
               Use <kbd className="kdb px-1.5 py-0.5 rounded bg-bolt-elements-background-depth-2">Shift</kbd> +{' '}
               <kbd className="kdb px-1.5 py-0.5 rounded bg-bolt-elements-background-depth-2">Return</kbd> a new line

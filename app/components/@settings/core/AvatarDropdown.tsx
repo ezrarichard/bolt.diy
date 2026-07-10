@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { useStore } from '@nanostores/react';
 import { classNames } from '~/utils/classNames';
 import { profileStore } from '~/lib/stores/profile';
+import { useAuth } from '~/lib/auth/AuthProvider';
 import type { TabType, Profile } from './types';
 
 interface AvatarDropdownProps {
@@ -11,6 +12,8 @@ interface AvatarDropdownProps {
 
 export const AvatarDropdown = ({ onSelectTab }: AvatarDropdownProps) => {
   const profile = useStore(profileStore) as Profile;
+  const { user, signOut } = useAuth();
+  const displayName = profile?.username || user?.email || 'Guest User';
 
   return (
     <DropdownMenu.Root>
@@ -71,10 +74,12 @@ export const AvatarDropdown = ({ onSelectTab }: AvatarDropdownProps) => {
               )}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="font-medium text-sm text-gray-900 dark:text-white truncate">
-                {profile?.username || 'Guest User'}
-              </div>
-              {profile?.bio && <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{profile.bio}</div>}
+              <div className="font-medium text-sm text-gray-900 dark:text-white truncate">{displayName}</div>
+              {profile?.bio ? (
+                <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{profile.bio}</div>
+              ) : (
+                user?.email && <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{user.email}</div>
+              )}
             </div>
           </div>
 
@@ -167,6 +172,24 @@ export const AvatarDropdown = ({ onSelectTab }: AvatarDropdownProps) => {
           >
             <div className="i-ph:question w-4 h-4 text-gray-400 group-hover:text-purple-500 dark:group-hover:text-purple-400 transition-colors" />
             Help & Documentation
+          </DropdownMenu.Item>
+
+          <div className="my-1 border-t border-gray-200/50 dark:border-gray-800/50" />
+
+          <DropdownMenu.Item
+            className={classNames(
+              'flex items-center gap-2 px-4 py-2.5',
+              'text-sm text-gray-700 dark:text-gray-200',
+              'hover:bg-red-50 dark:hover:bg-red-500/10',
+              'hover:text-red-500 dark:hover:text-red-400',
+              'cursor-pointer transition-all duration-200',
+              'outline-none',
+              'group',
+            )}
+            onClick={() => signOut()}
+          >
+            <div className="i-ph:sign-out w-4 h-4 text-gray-400 group-hover:text-red-500 dark:group-hover:text-red-400 transition-colors" />
+            Logout
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>

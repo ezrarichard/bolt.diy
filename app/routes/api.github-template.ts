@@ -1,5 +1,6 @@
 import { json } from '@remix-run/cloudflare';
 import JSZip from 'jszip';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 // Function to detect if we're running in Cloudflare
 function isCloudflareEnvironment(context: any): boolean {
@@ -202,6 +203,8 @@ async function fetchRepoContentsZip(repo: string, githubToken?: string) {
 }
 
 export async function loader({ request, context }: { request: Request; context: any }) {
+  await requireAuthenticatedUser(request, context);
+
   const url = new URL(request.url);
   const repo = url.searchParams.get('repo');
 

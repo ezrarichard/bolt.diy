@@ -113,6 +113,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 import { logStore } from './lib/stores/logs';
+import { AuthProvider } from './lib/auth/AuthProvider';
+import { AuthGate } from './components/auth/AuthGate';
 
 export default function App() {
   const theme = useStore(themeStore);
@@ -146,7 +148,11 @@ export default function App() {
 
   return (
     <Layout>
-      <Outlet />
+      <AuthProvider>
+        <AuthGate>
+          <Outlet />
+        </AuthGate>
+      </AuthProvider>
     </Layout>
   );
 }

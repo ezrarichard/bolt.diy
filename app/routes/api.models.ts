@@ -3,6 +3,7 @@ import { LLMManager } from '~/lib/modules/llm/manager';
 import type { ModelInfo } from '~/lib/modules/llm/types';
 import type { ProviderInfo } from '~/types/model';
 import { getApiKeysFromCookie, getProviderSettingsFromCookie } from '~/lib/api/cookies';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 interface ModelsResponse {
   modelList: ModelInfo[];
@@ -51,6 +52,8 @@ export async function loader({
     };
   };
 }): Promise<Response> {
+  await requireAuthenticatedUser(request, context as any);
+
   const llmManager = LLMManager.getInstance(context.cloudflare?.env);
 
   // Get client side maintained API keys and provider settings from cookies

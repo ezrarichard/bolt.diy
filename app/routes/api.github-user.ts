@@ -68,6 +68,7 @@ async function githubUserLoader({ request, context }: { request: Request; contex
 export const loader = withSecurity(githubUserLoader, {
   rateLimit: true,
   allowedMethods: ['GET'],
+  requireAuth: true,
 });
 
 async function githubUserAction({ request, context }: { request: Request; context: any }) {
@@ -284,4 +285,5 @@ async function githubUserAction({ request, context }: { request: Request; contex
 export const action = withSecurity(githubUserAction, {
   rateLimit: true,
   allowedMethods: ['POST'],
+  requireAuth: true,
 });

@@ -1,5 +1,6 @@
-import type { ActionFunctionArgs, LoaderFunction } from '@remix-run/cloudflare';
+import type { ActionFunctionArgs, LoaderFunction, LoaderFunctionArgs } from '@remix-run/cloudflare';
 import { json } from '@remix-run/cloudflare';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 // Only import child_process if we're not in a Cloudflare environment
 let execSync: any;
@@ -264,7 +265,9 @@ const getDiskInfo = (): DiskInfo[] => {
   }
 };
 
-export const loader: LoaderFunction = async ({ request: _request }) => {
+export const loader: LoaderFunction = async ({ request, context }: LoaderFunctionArgs) => {
+  await requireAuthenticatedUser(request, context);
+
   try {
     return json(getDiskInfo());
   } catch (error) {
@@ -287,7 +290,9 @@ export const loader: LoaderFunction = async ({ request: _request }) => {
   }
 };
 
-export const action = async ({ request: _request }: ActionFunctionArgs) => {
+export const action = async ({ request, context }: ActionFunctionArgs) => {
+  await requireAuthenticatedUser(request, context);
+
   try {
     return json(getDiskInfo());
   } catch (error) {

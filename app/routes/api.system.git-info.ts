@@ -1,4 +1,5 @@
 import { json, type LoaderFunction, type LoaderFunctionArgs } from '@remix-run/cloudflare';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 interface GitInfo {
   local: {
@@ -62,9 +63,7 @@ declare const __GIT_REPO_NAME: string;
  */
 
 export const loader: LoaderFunction = async ({ request, context }: LoaderFunctionArgs & { context: AppContext }) => {
-  console.log('Git info API called with URL:', request.url);
-
-  // Handle CORS preflight requests
+  // Handle CORS preflight before auth — no credentials are ever exchanged on OPTIONS.
   if (request.method === 'OPTIONS') {
     return new Response(null, {
       headers: {
@@ -74,6 +73,10 @@ export const loader: LoaderFunction = async ({ request, context }: LoaderFunctio
       },
     });
   }
+
+  await requireAuthenticatedUser(request, context as any);
+
+  console.log('Git info API called with URL:', request.url);
 
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action');

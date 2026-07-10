@@ -1,13 +1,21 @@
 import { type ActionFunctionArgs } from '@remix-run/cloudflare';
 import { createScopedLogger } from '~/utils/logger';
+import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
 
 const logger = createScopedLogger('api.supabase.query');
 
-export async function action({ request }: ActionFunctionArgs) {
+export async function action({ request, context }: ActionFunctionArgs) {
+  await requireAuthenticatedUser(request, context);
+
   if (request.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 });
   }
 
+  /*
+   * `Authorization` here is the caller's own Supabase MANAGEMENT token (forwarded verbatim to
+   * api.supabase.com below) — an unrelated, pre-existing use of that header. Never confused
+   * with the X-Builders-Auth session header requireAuthenticatedUser() just checked above.
+   */
   const authHeader = request.headers.get('Authorization');
 
   if (!authHeader) {
