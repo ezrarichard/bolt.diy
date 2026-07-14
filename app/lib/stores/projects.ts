@@ -256,12 +256,29 @@ projectRepository.saveProjects(normalizedInitialProjects);
  * cheap no-op that logs a warning and returns, so local-only usage is
  * unaffected.
  */
+/**
+ * Sprint 45 — serialized write-through queue.
+ *
+ * Every mirror runs in the exact order it was enqueued, one at a time. Before this, mirrors
+ * were fired concurrently and unordered, which raced: an artifact's draft INSERT and its own
+ * approve UPDATE (enqueued back-to-back by addProjectArtifact then updateProjectArtifact) both
+ * do a read-then-upsert on the same (artifact_id, version) row, so the draft write could land
+ * AFTER the approve write and silently persist `draft` instead of `approved` (observed live in
+ * Sprint 45 for later pipeline roles, breaking refresh/resume). Serializing preserves
+ * enqueue order — draft always completes before approve — so the final persisted status is
+ * correct. Still best-effort and never awaited by callers; a failed write is logged and the
+ * queue continues with the next one.
+ */
+let mirrorQueue: Promise<unknown> = Promise.resolve();
+
 function mirrorToBuildersDb(work: () => Promise<unknown>): void {
   if (!isBuildersDbAvailable()) {
     return;
   }
 
-  work().catch((error) => console.error('[BuildersDB] Write-through failed:', error));
+  mirrorQueue = mirrorQueue
+    .then(() => work())
+    .catch((error) => console.error('[BuildersDB] Write-through failed:', error));
 }
 
 /**
