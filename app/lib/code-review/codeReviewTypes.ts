@@ -21,12 +21,37 @@ export type CodeReviewStage = 'static' | 'build';
 /** The role catalog key each validator/the repair engine is attributed to — must match a row in builders_ai_roles. */
 export type CodeReviewRoleKey = 'code-reviewer' | 'repair-engineer' | 'build-validator';
 
+/**
+ * Structured detail for an imports-exports issue — added Sprint 43A so this specific,
+ * mechanically-provable error shape ("a known React runtime export imported from a local
+ * file instead of the 'react' package") can be classified without relying on message-text
+ * parsing, and so a deterministic repair (see reactImportRepair.ts) can be planned directly
+ * off `repairable`/`suggestedAction` instead of re-deriving them from `message`.
+ */
 export interface CodeReviewIssue {
   /** Which validator raised this — see ValidatorDefinition.id. */
   validatorId: string;
   severity: 'error' | 'warning';
   message: string;
   filePath?: string;
+
+  /** Fine-grained classification within the validator — e.g. 'react-runtime-import' for the StrictMode-from-App.tsx shape; absent for issues that don't have a more specific category than the validatorId itself. */
+  category?: string;
+
+  /** The named symbol the offending import statement pulled in (e.g. "StrictMode"). */
+  importedSymbol?: string;
+
+  /** The (wrong) module specifier it was imported from (e.g. "./App.tsx"). */
+  invalidSource?: string;
+
+  /** Where it should have been imported from instead (e.g. "react"). */
+  expectedSource?: string;
+
+  /** Whether a mechanical fix (no LLM call) can resolve this issue. */
+  repairable?: boolean;
+
+  /** Human-readable description of the mechanical fix, e.g. "Move StrictMode import to react". */
+  suggestedAction?: string;
 }
 
 /**
@@ -161,6 +186,18 @@ export interface StaticReviewLoopResult {
   ok: boolean;
   project: GeneratedProject;
   issues: CodeReviewIssue[];
+
+  /**
+   * Sprint 43B.1 — every file path the deterministic react-import repair (reactImportRepair.ts)
+   * actually rewrote during this run, regardless of whether the loop as a whole ended `ok`.
+   * Callers that write the result to a live WebContainer (quickBuildOrchestrator.ts) use this
+   * to know exactly which files are worth re-reading straight off disk and re-verifying right
+   * before build validation — the one place a repair that succeeded in-memory can still be lost
+   * to a slower, independent write already in flight for the same path (e.g. the chat-streaming
+   * action-runner's own original write for that file, queued during the LLM response and not
+   * yet settled). Empty when the deterministic pass never ran or found nothing to fix.
+   */
+  deterministicRepairedFiles: string[];
 }
 
 export type BuildRepairLoopResult =

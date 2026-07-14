@@ -22,6 +22,7 @@ import { createProjectRepository } from '~/lib/builders-db/repositories/projects
 import { buildersDbRepository, isBuildersDbAvailable } from '~/lib/builders-db/repositories/buildersDbRepository';
 import { workspaceStateRepository } from '~/lib/builders-db/repositories/workspaceStateRepository';
 import type { RoleOutputGenerationType } from '~/lib/builders-db/buildersDbTypes';
+import { getCurrentSession } from '~/lib/auth/authClient';
 
 /**
  * Project data model — Sprint 1 (UI-only).
@@ -264,6 +265,32 @@ function mirrorToBuildersDb(work: () => Promise<unknown>): void {
 }
 
 /**
+ * Sprint 42 — resolves the currently authenticated user for ownership/attribution writes
+ * (owner_id, created_by, actor_id, generated_by_user — PART 1/8/9). Reads directly from
+ * `authClient.ts`'s existing `getCurrentSession()` rather than requiring every caller in this
+ * module to accept a userId parameter threaded down from `useAuth()` — this module has no
+ * React context to read from, and Sprint 40's AuthProvider already establishes the same
+ * pattern (calling authClient functions directly, never `supabase.auth` itself). Returns null
+ * when unauthenticated or BuildersDB isn't configured, in which case every caller below simply
+ * omits the actor fields it would have set (mirrorToBuildersDb's usual no-op-when-unavailable
+ * behavior already covers the "not configured" case).
+ */
+async function getCurrentActor(): Promise<{ id: string; displayName: string } | null> {
+  try {
+    const session = await getCurrentSession();
+
+    if (!session?.user) {
+      return null;
+    }
+
+    return { id: session.user.id, displayName: session.user.email ?? session.user.id };
+  } catch (error) {
+    console.error('[BuildersDB] getCurrentActor() failed:', error);
+    return null;
+  }
+}
+
+/**
  * Sprint 34, strengthened Sprint 38.3 — startup hydration from BuildersDB. Fired once at
  * module load (see the bottom of this section) rather than waiting on any particular
  * component to mount, so it runs as close to "application startup" as this module's own
@@ -292,7 +319,13 @@ export async function hydrateProjectsFromBuildersDb(): Promise<void> {
   }
 
   try {
-    const remoteProjects = await buildersDbRepository.listProjects();
+    /*
+     * Sprint 42 — every createProject() call below now requires a non-null owner_id (RLS's
+     * builders_projects_insert_own policy rejects owner_id is null), so the actor must be
+     * resolved before pushing any local-only project up.
+     */
+    const actor = await getCurrentActor();
+    const remoteProjects = await buildersDbRepository.listProjectsForCurrentUser();
     const localProjects = projectRepository.loadProjects();
 
     if (remoteProjects.length > 0) {
@@ -311,15 +344,15 @@ export async function hydrateProjectsFromBuildersDb(): Promise<void> {
       projectsStore.set(merged);
       projectRepository.saveProjects(merged);
 
-      if (localOnly.length > 0) {
-        await Promise.all(localOnly.map((project) => buildersDbRepository.createProject(project)));
+      if (localOnly.length > 0 && actor) {
+        await Promise.all(localOnly.map((project) => buildersDbRepository.createProject(project, actor.id)));
       }
 
       return;
     }
 
-    if (localProjects.length > 0) {
-      await Promise.all(localProjects.map((project) => buildersDbRepository.createProject(project)));
+    if (localProjects.length > 0 && actor) {
+      await Promise.all(localProjects.map((project) => buildersDbRepository.createProject(project, actor.id)));
     }
   } catch (error) {
     console.error('[BuildersDB] hydrateProjectsFromBuildersDb() failed, keeping local projects:', error);
@@ -435,7 +468,7 @@ export function requestNewProjectDialog() {
   requestNewProjectDialogStore.set(requestNewProjectDialogStore.get() + 1);
 }
 
-export function addProject(input: {
+interface NewProjectInput {
   name: string;
   icon: string;
   color: string;
@@ -443,7 +476,16 @@ export function addProject(input: {
   createdFrom: CreatedFrom;
   description?: string;
   blueprintId?: string;
-}): Project {
+}
+
+/**
+ * Urgent fix — the synchronous, local-only half of what `addProject()` below always did in
+ * one step. Split out so Quick Build's first-message flow (Chat.client.tsx's `sendMessage`)
+ * can create the local project once, then separately (and repeatedly, on retry) await
+ * `persistQuickBuildProject()` against the SAME project rather than minting a new id/row
+ * every time the BuildersDB write is retried.
+ */
+function createLocalProject(input: NewProjectInput): Project {
   const project: Project = {
     id: `proj-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: input.name,
@@ -459,16 +501,86 @@ export function addProject(input: {
   projectsStore.set([...projectsStore.get(), project]);
   projectRepository.saveProject(project);
 
+  return project;
+}
+
+export function addProject(input: NewProjectInput): Project {
+  const project = createLocalProject(input);
+
   mirrorToBuildersDb(async () => {
-    await buildersDbRepository.createProject(project);
+    const actor = await getCurrentActor();
+    await buildersDbRepository.createProject(project, actor?.id ?? null);
     await buildersDbRepository.addProjectActivity({
       projectId: project.id,
       activityType: 'project_created',
       description: `Project "${project.name}" created`,
+      actorId: actor?.id ?? null,
+      actorDisplayName: actor?.displayName ?? null,
     });
   });
 
   return project;
+}
+
+export interface QuickBuildProjectResult {
+  project: Project;
+  ok: boolean;
+  error: string | null;
+}
+
+/**
+ * Urgent fix — Quick Build's first-message project creation. Unlike `addProject()`'s
+ * fire-and-forget `mirrorToBuildersDb()`, this AWAITS the BuildersDB insert and returns
+ * whether it actually succeeded, with the real (safe) reason if not — Chat.client.tsx's
+ * `sendMessage` uses this to block generation from starting until the project row exists (or
+ * BuildersDB isn't configured at all, in which case local-only is an accepted fallback, not a
+ * silently-swallowed failure).
+ *
+ * Takes an existing local `Project` (created once via `createLocalProject`, e.g. on the first
+ * attempt) rather than creating one itself, so a retry after a failed insert re-attempts the
+ * BuildersDB write for the SAME project — never a second local project, never a second id.
+ */
+export async function persistQuickBuildProject(project: Project): Promise<QuickBuildProjectResult> {
+  if (!isBuildersDbAvailable()) {
+    return { project, ok: true, error: null };
+  }
+
+  const actor = await getCurrentActor();
+
+  if (!actor) {
+    return { project, ok: false, error: 'You must be signed in to start a Quick Build.' };
+  }
+
+  const created = await buildersDbRepository.createProjectWithResult(project, actor.id);
+
+  if (!created.ok) {
+    return { project, ok: false, error: created.error ?? 'Could not save this project to BuildersDB.' };
+  }
+
+  buildersDbRepository
+    .addProjectActivity({
+      projectId: project.id,
+      activityType: 'project_created',
+      description: `Project "${project.name}" created`,
+      actorId: actor.id,
+      actorDisplayName: actor.displayName,
+    })
+    .catch((error) => console.warn('[BuildersDB] project_created activity log failed:', error));
+
+  return { project, ok: true, error: null };
+}
+
+/**
+ * Urgent fix — Quick Build's first-message local project creation (see
+ * `persistQuickBuildProject` above). A thin, typed wrapper over `createLocalProject` so
+ * Chat.client.tsx doesn't need its own copy of the id-generation/store-write logic.
+ */
+export function createQuickBuildLocalProject(input: { name: string; icon: string; color: string }): Project {
+  return createLocalProject({
+    ...input,
+    projectType: 'quick_build',
+    createdFrom: 'quick_build',
+  });
 }
 
 /**
@@ -489,6 +601,8 @@ export function deleteProject(projectId: string): void {
   projectRepository.deleteProject(projectId);
 
   mirrorToBuildersDb(async () => {
+    const actor = await getCurrentActor();
+
     /*
      * Logged before the delete below (not after): builders_project_activity's
      * project_id column requires a still-existing row unless it's null, and we want
@@ -499,8 +613,19 @@ export function deleteProject(projectId: string): void {
       projectId,
       activityType: 'project_deleted',
       description: `Project "${project?.name ?? projectId}" deleted`,
+      actorId: actor?.id ?? null,
+      actorDisplayName: actor?.displayName ?? null,
     });
-    await buildersDbRepository.deleteProject(projectId);
+
+    /*
+     * Sprint 42 (PART 10) — Owner-only. Passing the actor id lets deleteProject() refuse
+     * (and log a clear warning) instead of silently deleting 0 rows the way a bare RLS
+     * rejection would. Local removal above already happened regardless — this function's own
+     * doc comment has always described it as "remove a project from the local project store
+     * only" — so an Editor/Viewer's local sidebar still updates; only the shared BuildersDB
+     * row (and everyone else's view of it) survives.
+     */
+    await buildersDbRepository.deleteProject(projectId, actor?.id ?? null);
   });
 
   if (currentProjectIdStore.get() === projectId) {
@@ -666,11 +791,14 @@ export function addProjectArtifact(
   projectRepository.updateArtifacts(next);
 
   mirrorToBuildersDb(async () => {
-    await buildersDbRepository.createOrUpdateRoleOutput(projectId, artifact, generationType);
+    const actor = await getCurrentActor();
+    await buildersDbRepository.createOrUpdateRoleOutput(projectId, artifact, generationType, actor?.id ?? null);
     await buildersDbRepository.addProjectActivity({
       projectId,
       activityType: 'role_output_saved',
       description: `${artifact.generatedBy ?? artifact.type} output saved (${artifact.status})`,
+      actorId: actor?.id ?? null,
+      actorDisplayName: actor?.displayName ?? null,
     });
   });
 
@@ -716,11 +844,19 @@ export function updateProjectArtifact(
 
   if (updatedArtifact) {
     mirrorToBuildersDb(async () => {
-      await buildersDbRepository.createOrUpdateRoleOutput(projectId, updatedArtifact, generationType);
+      const actor = await getCurrentActor();
+      await buildersDbRepository.createOrUpdateRoleOutput(
+        projectId,
+        updatedArtifact,
+        generationType,
+        actor?.id ?? null,
+      );
       await buildersDbRepository.addProjectActivity({
         projectId,
         activityType: 'role_output_saved',
         description: `${updatedArtifact.generatedBy ?? updatedArtifact.type} output ${updatedArtifact.status}`,
+        actorId: actor?.id ?? null,
+        actorDisplayName: actor?.displayName ?? null,
       });
     });
 
@@ -784,6 +920,8 @@ export function applyReviewDecision(projectId: string, decision: ReviewDecision)
   projectRepository.updateReviews(next);
 
   mirrorToBuildersDb(async () => {
+    const actor = await getCurrentActor();
+
     await buildersDbRepository.updateProjectTask(projectId, { taskId: decision.taskId, status: decision.taskStatus });
     await buildersDbRepository.createTaskReview(projectId, {
       taskId: decision.review.taskId,
@@ -799,19 +937,21 @@ export function applyReviewDecision(projectId: string, decision: ReviewDecision)
     });
 
     if (decision.artifact) {
-      await buildersDbRepository.createOrUpdateRoleOutput(projectId, decision.artifact);
+      await buildersDbRepository.createOrUpdateRoleOutput(projectId, decision.artifact, 'manual', actor?.id ?? null);
     }
 
     const updatedProject = next.find((project) => project.id === projectId);
 
     if (updatedProject && decision.roadmapKey) {
-      await buildersDbRepository.updateProject(updatedProject);
+      await buildersDbRepository.updateProject(updatedProject, actor?.id ?? null);
     }
 
     await buildersDbRepository.addProjectActivity({
       projectId,
       activityType: decision.review.reviewStatus === 'approved' ? 'task_approved' : 'task_changes_requested',
       description: `Task ${decision.taskId} ${decision.review.reviewStatus}`,
+      actorId: actor?.id ?? null,
+      actorDisplayName: actor?.displayName ?? null,
     });
   });
 }
@@ -926,6 +1066,15 @@ export function linkProjectChat(projectId: string, chatMixedId: string): void {
   if (updated) {
     mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
   }
+}
+
+/**
+ * Sprint 42 (PART 1 — `last_opened_at`). Fire-and-forget, BuildersDB-only (no local field, no
+ * UI reads this yet) — called from HomeDashboardSections.tsx's openProject() when a project is
+ * opened from Home Dashboard's "Continue Working"/"Recent Projects" sections.
+ */
+export function touchProjectLastOpened(projectId: string): void {
+  mirrorToBuildersDb(() => buildersDbRepository.touchLastOpened(projectId));
 }
 
 export const PROJECT_COLOR_OPTIONS = ['purple', 'blue', 'green', 'orange', 'pink', 'teal', 'amber'] as const;

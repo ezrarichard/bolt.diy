@@ -71,6 +71,125 @@ export function isClaudeReasoningModel(modelName: string): boolean {
   return CLAUDE_REASONING_MODEL_PREFIXES.some((prefix) => modelName.startsWith(prefix));
 }
 
+/**
+ * Sprint 44 — the non-default sampling parameters that "reasoning" models reject. Both
+ * OpenAI's o1/o3/gpt-5 and the listed Claude models (Sonnet 5+, Opus 4.7/4.8, Fable 5)
+ * refuse these; only the remediation differs (OpenAI pins `temperature` to 1, Claude omits
+ * it entirely — the caller re-adds the pin after stripping). Kept as one list so no route
+ * re-types the key set.
+ */
+export const REASONING_UNSUPPORTED_SAMPLING_KEYS = [
+  'temperature',
+  'topP',
+  'topK',
+  'presencePenalty',
+  'frequencyPenalty',
+  'logprobs',
+  'topLogprobs',
+  'logitBias',
+] as const;
+
+/** True for any Anthropic Claude model id (every Anthropic model this app offers is named `claude-*`). */
+export function isAnthropicModel(modelName: string): boolean {
+  return /^claude/i.test(modelName);
+}
+
+/*
+ * Sprint 44 — the Claude models KNOWN to accept non-default sampling parameters (temperature
+ * etc.). Any Anthropic model NOT matched here (and not in the reject-list above) is treated as
+ * an unknown/future family and has its sampling parameters omitted conservatively — the safer
+ * default for a new model whose requirements aren't verified yet, backed by the one-time
+ * unsupported-parameter retry. Matched by prefix so dated suffixes (e.g.
+ * "claude-sonnet-4-5-20250929") and both `-`/`.` separators are covered. Extend this list when
+ * a new Claude model is confirmed to accept sampling parameters.
+ */
+const CLAUDE_SAMPLING_COMPATIBLE_PREFIXES = [
+  'claude-3', // Claude 3 / 3.5 / 3.7 families — standard sampling-compatible models
+  'claude-sonnet-4-5',
+  'claude-sonnet-4.5',
+  'claude-sonnet-4-6',
+  'claude-sonnet-4.6',
+  'claude-haiku-4-5',
+  'claude-haiku-4.5',
+  'claude-opus-4-1',
+  'claude-opus-4-5',
+  'claude-opus-4-6',
+];
+
+function isKnownSamplingCompatibleClaudeModel(modelName: string): boolean {
+  return CLAUDE_SAMPLING_COMPATIBLE_PREFIXES.some((prefix) => modelName.startsWith(prefix));
+}
+
+/**
+ * Sprint 44 — the single predicate every generation route shares to decide whether a model
+ * rejects non-default sampling parameters. Combines the centralized prefix guards so model
+ * names live in exactly one place:
+ *  - OpenAI reasoning (o1/o3/gpt-5) → rejects.
+ *  - Explicit Claude reject-list (Sonnet 5+, Opus 4.7/4.8, Fable 5) → rejects.
+ *  - Any OTHER Anthropic model that isn't a KNOWN sampling-compatible Claude (Sonnet 4.5/4.6,
+ *    Haiku 4.5, Claude 3.x, …) → rejects. This makes the default for an unknown/future
+ *    Anthropic family CONSERVATIVE (omit), not permissive.
+ *  - Every non-Anthropic, non-reasoning model → allowed (unchanged).
+ *
+ * A known-compatible model that is later found to reject params (or an unknown model that
+ * actually accepts them) is still handled at runtime by isUnsupportedSamplingParameterError +
+ * the one-time retry.
+ */
+export function modelRejectsSamplingParameters(modelName: string): boolean {
+  if (isReasoningModel(modelName) || isClaudeReasoningModel(modelName)) {
+    return true;
+  }
+
+  if (isAnthropicModel(modelName)) {
+    return !isKnownSamplingCompatibleClaudeModel(modelName);
+  }
+
+  return false;
+}
+
+/**
+ * Sprint 44 — the single centralized compatibility filter used by every generation route
+ * (Software Factory generation, Quick Build/chat, and the direct LLM-call route). Returns
+ * `options` with the unsupported sampling parameters removed for a model that rejects them,
+ * and unchanged otherwise. Pure — no model-prefix logic of its own beyond
+ * modelRejectsSamplingParameters.
+ */
+export function stripUnsupportedSamplingParameters(
+  modelName: string,
+  options: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!options || !modelRejectsSamplingParameters(modelName)) {
+    return options ?? {};
+  }
+
+  const unsupportedKeys = REASONING_UNSUPPORTED_SAMPLING_KEYS as readonly string[];
+
+  return Object.fromEntries(Object.entries(options).filter(([key]) => !unsupportedKeys.includes(key)));
+}
+
+/**
+ * Sprint 44 — true only when a provider error is specifically a rejection of a non-default
+ * sampling parameter (temperature / top_p / top_k), e.g. Anthropic's "temperature is
+ * deprecated for this model". Callers use this to strip those parameters and retry the same
+ * request exactly once — never for unrelated failures (rate limits, billing, truncation,
+ * auth), which must not trigger a sampling-param retry.
+ */
+export function isUnsupportedSamplingParameterError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error ?? '')).toLowerCase();
+
+  if (!message) {
+    return false;
+  }
+
+  const mentionsSamplingParam = /\btemperature\b|top[\s_-]?p|top[\s_-]?k|sampling parameter/.test(message);
+  const mentionsRejection =
+    /unsupported|not supported|not permitted|is not allowed|deprecated|unexpected|cannot be|must be removed|invalid/.test(
+      message,
+    );
+
+  return mentionsSamplingParam && mentionsRejection;
+}
+
 // limits the number of model responses that can be returned in a single request
 export const MAX_RESPONSE_SEGMENTS = 2;
 

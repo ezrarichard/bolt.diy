@@ -111,6 +111,7 @@ export function getModelForRole(profileId: string, roleKey: string): RoleModelRe
   return {
     provider: registryEntry.provider,
     model: registryEntry.apiModel,
+    modelKey: roleEntry.modelKey,
     temperature: roleEntry.temperature,
     maxTokens: roleEntry.maxTokens,
   };
@@ -131,11 +132,17 @@ export function saveSelectedProfileForProject(projectId: string, profileId: stri
 export function getRoleGenerateOptions(
   project: Project,
   roleKey: string,
-): { model?: string; provider?: string; temperature?: number } {
+): { model?: string; provider?: string; temperature?: number; modelKey?: string; generationProfileId?: string } {
   const profileId = project.workspaceState?.selectedGenerationProfileId ?? DEFAULT_GENERATION_PROFILE_ID;
   const resolution = getModelForRole(profileId, roleKey);
 
   return resolution
-    ? { model: resolution.model, provider: resolution.provider, temperature: resolution.temperature }
+    ? {
+        model: resolution.model,
+        provider: resolution.provider,
+        temperature: resolution.temperature,
+        modelKey: resolution.modelKey,
+        generationProfileId: profileId,
+      }
     : {};
 }

@@ -9,6 +9,15 @@ const logger = createScopedLogger('useGenerateText');
 export interface GenerateTextResult {
   ok: true;
   text: string;
+
+  /**
+   * Sprint 44 — the provider's completion reason (`'stop'`, `'length'`, …), passed straight
+   * through from app/routes/api.generate-text.ts. `'length'` means the response was cut off
+   * at the output-token ceiling; the autonomous pipeline uses this to retry a truncated role
+   * instead of trying to parse an incomplete JSON body. Optional — a provider that doesn't
+   * report one leaves it undefined, and every existing caller simply ignores it.
+   */
+  finishReason?: string;
 }
 
 export interface GenerateTextError {
@@ -34,6 +43,19 @@ export interface GenerateTextOptions {
   /** Provider NAME (e.g. "Anthropic"), resolved against PROVIDER_LIST the same way the `selectedProvider` cookie already is — not a full ProviderInfo object, so callers never need to import/construct one. */
   provider?: string;
   temperature?: number;
+
+  /**
+   * Sprint 42.1 — AI usage-ledger attribution (see app/lib/ai-usage/). All optional and
+   * purely additive: omitting them still generates text exactly as before, just with a
+   * usage event that has no project/role/profile attribution. `modelKey` is the LOGICAL
+   * registry key (app/lib/generation-profiles/modelRegistry.ts), not the raw `model` above.
+   */
+  projectId?: string;
+  roleKey?: string;
+  modelKey?: string;
+  generationProfileId?: string;
+  requestType?: string;
+  operationId?: string;
 }
 
 /**
@@ -79,6 +101,12 @@ export function useGenerateText() {
           provider,
           maxTokens: options?.maxTokens,
           temperature: options?.temperature,
+          projectId: options?.projectId,
+          roleKey: options?.roleKey,
+          modelKey: options?.modelKey,
+          generationProfileId: options?.generationProfileId,
+          requestType: options?.requestType,
+          operationId: options?.operationId,
         }),
       });
 
@@ -89,7 +117,7 @@ export function useGenerateText() {
 
       const data = await response.json<{ text: string; finishReason?: string }>();
 
-      return { ok: true, text: data.text };
+      return { ok: true, text: data.text, finishReason: data.finishReason };
     } catch (error) {
       logger.error('generate-text request failed:', error);
       return { ok: false, error: error instanceof Error ? error.message : 'Text generation failed' };

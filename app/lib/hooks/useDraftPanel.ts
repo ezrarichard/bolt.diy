@@ -123,6 +123,11 @@ export function useDraftPanel<TDraft extends object, TContext>(
     const result = await generate(system, fullPrompt, {
       ...(maxOutputTokens !== undefined ? { maxTokens: maxOutputTokens } : {}),
       ...getRoleGenerateOptions(project, artifactType),
+
+      // Sprint 42.1 — AI usage-ledger attribution (see app/lib/ai-usage/).
+      projectId: project.id,
+      roleKey: artifactType,
+      requestType: artifactType,
     });
 
     if (!result.ok) {

@@ -18,13 +18,23 @@ export interface ProjectTypeDefinition {
 export const PROJECT_TYPE_REGISTRY: Record<ProjectTypeId, ProjectTypeDefinition> = {
   quick_build: {
     id: 'quick_build',
-    displayName: 'Quick Build',
+
+    /**
+     * Phase 1 (Software Factory) — Quick Build is frozen and removed from the product
+     * surface; no new quick_build projects can be created from the Builders UI. Existing
+     * ones stay visible/openable (sidebar, recent, history) but are labelled "Legacy
+     * Quick Build" everywhere this displayName renders. The `id` and DB `project_type`
+     * value are unchanged for compatibility.
+     */
+    displayName: 'Legacy Quick Build',
     icon: '⚡',
     color: 'amber',
   },
   guided_engineering: {
     id: 'guided_engineering',
-    displayName: 'Guided Engineering',
+
+    /** Phase 1 — user-facing rename from "Guided Engineering". The `id`/DB value stays `guided_engineering` for compatibility; only the label becomes the product name. */
+    displayName: 'Builders Software Factory',
     icon: '🛠',
     color: 'purple',
   },

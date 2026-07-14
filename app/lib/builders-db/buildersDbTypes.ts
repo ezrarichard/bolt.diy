@@ -25,6 +25,20 @@ export interface BuildersDbProjectRow {
   status: string;
   owner_id: string | null;
 
+  /** Sprint 42 — set once at creation, never reassigned even if ownership is later transferred (owner_id can change; created_by never does). */
+  created_by: string | null;
+
+  /** Sprint 42 — last time this project was opened (Home Dashboard "Continue Working" / Project Dashboard). Null until first open after this column existed. */
+  last_opened_at: string | null;
+
+  /** Sprint 42 — user_id of whoever last mutated this project row. */
+  last_editor: string | null;
+
+  /** Sprint 42 — analytics counters, persisted only (PART 13); no UI reads these yet. */
+  generation_count: number;
+  repair_count: number;
+  deployment_count: number;
+
   /** Sprint 39.7 — see app/lib/project-types/projectTypeRegistry.ts. Real column: queryable/constrained. */
   project_type: string;
 
@@ -60,8 +74,20 @@ const METADATA_FIELDS = [
   'linkedChatId',
 ] as const;
 
-/** ownerId is a placeholder param for a future auth sprint — always null/undefined until then (see docs/buildersdb.md). */
-export function toProjectRow(project: Project, ownerId?: string | null): BuildersDbProjectRow {
+/**
+ * Sprint 42 — `ownerId` is the current authenticated user's id (see getCurrentActor() in
+ * app/lib/stores/projects.ts). Only meaningful on INSERT: `.upsert()` in createProject()
+ * always sends `owner_id`/`created_by`, but `updateProject()` builds its row via this same
+ * function then strips `owner_id`/`created_by` before its `.update()` call, so an update never
+ * reassigns ownership (see updateProject() in buildersDbRepository.ts). `editorId`, if given,
+ * is stamped onto `last_editor` — every mutation is "someone editing this project", not just
+ * creation.
+ */
+export function toProjectRow(
+  project: Project,
+  ownerId?: string | null,
+  editorId?: string | null,
+): BuildersDbProjectRow {
   const metadata: Record<string, unknown> = {};
 
   for (const field of METADATA_FIELDS) {
@@ -81,6 +107,12 @@ export function toProjectRow(project: Project, ownerId?: string | null): Builder
     blueprint_id: project.blueprintId ?? null,
     status: 'active',
     owner_id: ownerId ?? null,
+    created_by: ownerId ?? null,
+    last_opened_at: null,
+    last_editor: editorId ?? ownerId ?? null,
+    generation_count: 0,
+    repair_count: 0,
+    deployment_count: 0,
     project_type: project.projectType,
     created_from: project.createdFrom,
     metadata,
@@ -131,6 +163,9 @@ export interface BuildersDbRoleOutputRow {
   version: number | null;
   generation_type: RoleOutputGenerationType;
   parent_version_id: string | null;
+
+  /** Sprint 42 (PART 9) — the authenticated user whose action produced this version, or null for automatic-pipeline runs with no human in the loop. */
+  generated_by_user: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -148,6 +183,7 @@ export function toRoleOutputRow(
   artifact: ProjectArtifact,
   generationType: RoleOutputGenerationType = 'manual',
   parentVersionId?: string | null,
+  generatedByUserId?: string | null,
 ): Omit<BuildersDbRoleOutputRow, 'id'> {
   return {
     artifact_id: artifact.id,
@@ -161,6 +197,7 @@ export function toRoleOutputRow(
     version: artifact.version ?? null,
     generation_type: generationType,
     parent_version_id: parentVersionId ?? null,
+    generated_by_user: generatedByUserId ?? null,
     created_at: artifact.createdAt,
     updated_at: artifact.updatedAt,
   };
@@ -287,6 +324,10 @@ export interface BuildersDbActivityRow {
   activity_type: string;
   description: string;
   metadata: Record<string, unknown>;
+
+  /** Sprint 42 (PART 8) — who performed this action, and their display name at the time (a snapshot, not a live join — see the migration). Null for system-generated entries with no acting user (e.g. automatic pipeline runs). */
+  actor_id: string | null;
+  actor_display_name: string | null;
   created_at: string;
 }
 
@@ -295,6 +336,33 @@ export interface BuildersDbActivityInput {
   activityType: string;
   description: string;
   metadata?: Record<string, unknown>;
+  actorId?: string | null;
+  actorDisplayName?: string | null;
+}
+
+/** builders_project_members row (PART 3 / PART 11). */
+export type ProjectMemberRole = 'Owner' | 'Editor' | 'Viewer';
+
+export interface BuildersDbProjectMemberRow {
+  id: string;
+  project_id: string;
+  user_id: string;
+  role: ProjectMemberRole;
+  created_at: string;
+}
+
+export interface ProjectMember {
+  userId: string;
+  role: ProjectMemberRole;
+  createdAt: string;
+}
+
+export function fromProjectMemberRow(row: BuildersDbProjectMemberRow): ProjectMember {
+  return {
+    userId: row.user_id,
+    role: row.role,
+    createdAt: row.created_at,
+  };
 }
 
 /**

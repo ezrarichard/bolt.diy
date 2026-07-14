@@ -2,7 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '@nanostores/react';
 import { useNavigate } from '@remix-run/react';
 import { classNames } from '~/utils/classNames';
-import { currentProjectIdStore, isProjectDashboardOpenStore, projectsStore, type Project } from '~/lib/stores/projects';
+import {
+  currentProjectIdStore,
+  isProjectDashboardOpenStore,
+  projectsStore,
+  touchProjectLastOpened,
+  type Project,
+} from '~/lib/stores/projects';
 import { PROJECT_COLOR_CLASSES } from '~/components/sidebar/ProjectListItem';
 import { getProjectTypeDefinition } from '~/lib/project-types/projectTypeRegistry';
 import { DEFAULT_GENERATION_PROFILES, DEFAULT_GENERATION_PROFILE_ID } from '~/lib/generation-profiles/defaultProfiles';
@@ -164,6 +170,7 @@ function canOpenProject(project: Project): boolean {
 /** Sprint 39.7's existing quick_build-vs-guided_engineering branch (Menu.client.tsx / HomeWorkflows.tsx) — reused verbatim, not reimplemented. */
 function openProject(project: Project, navigate: ReturnType<typeof useNavigate>) {
   currentProjectIdStore.set(project.id);
+  touchProjectLastOpened(project.id);
 
   if (project.projectType === 'quick_build' && project.linkedChatId) {
     navigate(`/chat/${project.linkedChatId}`);
@@ -184,8 +191,8 @@ function ContinueWorkingCard({ project }: { project: Project }) {
   const ctaLabel = !openable
     ? 'Chat Unavailable'
     : project.projectType === 'quick_build'
-      ? 'Continue Quick Build'
-      : 'Continue Engineering';
+      ? 'Open Legacy Quick Build'
+      : 'Continue Project';
   const handleActivate = () => {
     if (openable) {
       openProject(project, navigate);
@@ -303,11 +310,15 @@ export function BuildersStatsSection() {
     return null;
   }
 
+  /*
+   * Phase 1 (Software Factory) — Quick Build is frozen and excluded from factory
+   * statistics: the standalone "Quick Builds" stat card was removed and the former
+   * "Guided Engineering" count is now the flagship "Software Factory Projects" metric.
+   */
   const stats = [
     { label: 'Projects', value: projects.length },
-    { label: 'Quick Builds', value: projects.filter((project) => project.projectType === 'quick_build').length },
     {
-      label: 'Guided Engineering',
+      label: 'Software Factory Projects',
       value: projects.filter((project) => project.projectType === 'guided_engineering').length,
     },
     {
@@ -322,7 +333,7 @@ export function BuildersStatsSection() {
 
   return (
     <div className="w-full max-w-5xl mx-auto px-4 lg:px-0 pb-8">
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {stats.map((stat) => (
           <StatCard key={stat.label} label={stat.label} value={stat.value} />
         ))}
@@ -489,7 +500,7 @@ export function BuildersActivitySection() {
   return (
     <div className="w-full max-w-5xl mx-auto px-4 lg:px-0 py-8">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-3 px-1">
-        Builders Activity
+        My Activity
       </div>
       {entries.length === 0 ? (
         <div className="rounded-xl border border-bolt-elements-borderColor/40 bg-bolt-elements-background-depth-2/60 backdrop-blur-md px-4 py-6 text-center text-xs text-bolt-elements-textTertiary">

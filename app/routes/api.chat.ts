@@ -15,6 +15,7 @@ import type { DesignScheme } from '~/types/design-scheme';
 import { MCPService } from '~/lib/services/mcpService';
 import { StreamRecoveryManager } from '~/lib/.server/llm/stream-recovery';
 import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
+import { recordAiUsage, getRequestAccessToken } from '~/lib/ai-usage/recordAiUsage';
 
 export async function action(args: ActionFunctionArgs) {
   await requireAuthenticatedUser(args.request, args.context);
@@ -50,7 +51,7 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
     },
   });
 
-  const { messages, files, promptId, contextOptimization, supabase, chatMode, designScheme, maxLLMSteps } =
+  const { messages, files, promptId, contextOptimization, supabase, chatMode, designScheme, maxLLMSteps, projectId } =
     await request.json<{
       messages: Messages;
       files: any;
@@ -67,6 +68,15 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
         };
       };
       maxLLMSteps: number;
+
+      /**
+       * Sprint 42.2 — AI usage-ledger attribution (see app/lib/ai-usage/). Sourced client-side
+       * from this chat's own `chatMetadata.projectId` (Chat.client.tsx), never trusted as
+       * proof of access — `builders_record_ai_usage()` (the migration) independently verifies
+       * the authenticated caller can access this project before ever attaching it to a usage
+       * row; an inaccessible/forged value is silently dropped to null there, not rejected.
+       */
+      projectId?: string | null;
     }>();
 
   const cookieHeader = request.headers.get('Cookie');
@@ -74,6 +84,10 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
   const providerSettings: Record<string, IProviderSetting> = JSON.parse(
     parseCookies(cookieHeader || '').providers || '{}',
   );
+
+  // Sprint 42.1 — AI usage-ledger attribution (see app/lib/ai-usage/).
+  const accessToken = getRequestAccessToken(request);
+  const chatStartedAt = Date.now();
 
   const stream = new SwitchableStream();
 
@@ -245,6 +259,38 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
                 order: progressCounter++,
                 message: 'Response Generated',
               } satisfies ProgressAnnotation);
+
+              /*
+               * Sprint 42.1 — record usage once the stream has truly finished (not a
+               * `length`-triggered continuation, which loops back through this same
+               * `onFinish` again and would otherwise double-count). Provider/model are
+               * recovered from the last user message's `[Model: ...]`/`[Provider: ...]`
+               * markers — the same mechanism the `length` branch just below already uses to
+               * resume generation, not a new extraction path.
+               */
+              const lastUserMessageForUsage = processedMessages.filter((x) => x.role === 'user').slice(-1)[0];
+              const usageSource = usage ? 'provider' : 'unavailable';
+
+              if (lastUserMessageForUsage) {
+                const { model: usageModel, provider: usageProvider } =
+                  extractPropertiesFromMessage(lastUserMessageForUsage);
+
+                recordAiUsage(accessToken, {
+                  projectId: projectId ?? null,
+                  requestType: 'quick_chat',
+                  provider: usageProvider,
+                  apiModel: usageModel,
+                  usage: {
+                    inputTokens: cumulativeUsage.promptTokens,
+                    outputTokens: cumulativeUsage.completionTokens,
+                    totalTokens: cumulativeUsage.totalTokens,
+                  },
+                  durationMs: Date.now() - chatStartedAt,
+                  status: 'success',
+                  metadata: { usage_source: usageSource, finish_reason: finishReason },
+                }).catch(() => undefined);
+              }
+
               await new Promise((resolve) => setTimeout(resolve, 0));
 
               // stream.close();
@@ -439,6 +485,29 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
       isRetryable: error.isRetryable !== false, // Default to retryable unless explicitly false
       provider: error.provider || 'unknown',
     };
+
+    /*
+     * Sprint 42.1 — best-effort failed usage event. `messages` may not have reached a point
+     * where a `[Model: ...]`/`[Provider: ...]` marker exists yet (e.g. a malformed request
+     * body), so this never lets a failed extraction here mask the real error response below.
+     */
+    try {
+      const lastUserMessageForUsage = (messages ?? []).filter((x) => x.role === 'user').slice(-1)[0];
+      const extracted = lastUserMessageForUsage ? extractPropertiesFromMessage(lastUserMessageForUsage) : null;
+
+      recordAiUsage(accessToken, {
+        projectId: projectId ?? null,
+        requestType: 'quick_chat',
+        provider: extracted?.provider ?? String(errorResponse.provider),
+        apiModel: extracted?.model ?? 'unknown',
+        durationMs: Date.now() - chatStartedAt,
+        status: 'failed',
+        errorCode: 'chat_generation_failed',
+        errorMessage: typeof errorResponse.message === 'string' ? errorResponse.message : 'Chat generation failed',
+      }).catch(() => undefined);
+    } catch {
+      // Never let usage-event extraction affect the error response below.
+    }
 
     if (error.message?.includes('API key')) {
       return new Response(

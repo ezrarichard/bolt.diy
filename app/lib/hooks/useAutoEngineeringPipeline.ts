@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 import {
   addProjectArtifact,
@@ -11,9 +11,13 @@ import {
 import { getLatestArtifact } from '~/lib/projects/artifacts';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
 import { getNextAutoRole, type AutoEngineeringRoleId } from '~/lib/projects/autoEngineeringEngine';
+import { generateRoleWithRecovery, type RoleGenerationFailureKind } from '~/lib/projects/roleGenerationRecovery';
 import { buildRoleContextBlock } from '~/lib/ai/context/buildersDbContextProvider';
 import { getRoleGenerateOptions } from '~/lib/generation-profiles/generationProfileRepository';
+import { createScopedLogger } from '~/utils/logger';
 import { useGenerateText } from './useGenerateText';
+
+const logger = createScopedLogger('autoEngineeringPipeline');
 
 /**
  * Sprint 31 — Autonomous AI Engineering Pipeline.
@@ -44,20 +48,34 @@ import { useGenerateText } from './useGenerateText';
  */
 const runningProjectIds = new Set<string>();
 
+export interface AutoEngineeringPipelineFailure {
+  roleId: AutoEngineeringRoleId;
+
+  /** Sprint 44 — distinguishes a truncated/interrupted response from a genuinely bad one, so the UI can show the right business-friendly message. */
+  kind: RoleGenerationFailureKind;
+  message: string;
+}
+
 export interface AutoEngineeringPipelineState {
   isRunning: boolean;
   currentRoleId: AutoEngineeringRoleId | undefined;
-  failure: { roleId: AutoEngineeringRoleId; message: string } | undefined;
+  failure: AutoEngineeringPipelineFailure | undefined;
+
+  /** Sprint 44 — manually re-run the failed stage (and, on success, resume the rest of the pipeline). No-op while a run is already in flight. */
+  retry: () => void;
 }
 
 export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPipelineState {
   const [isRunning, setIsRunning] = useState(false);
   const [currentRoleId, setCurrentRoleId] = useState<AutoEngineeringRoleId | undefined>(undefined);
-  const [failure, setFailure] = useState<{ roleId: AutoEngineeringRoleId; message: string } | undefined>(undefined);
+  const [failure, setFailure] = useState<AutoEngineeringPipelineFailure | undefined>(undefined);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   const { generate } = useGenerateText();
   const generateRef = useRef(generate);
   generateRef.current = generate;
+
+  const retry = useCallback(() => setRetryNonce((nonce) => nonce + 1), []);
 
   const isMountedRef = useRef(true);
 
@@ -112,8 +130,6 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
             setCurrentRoleId(role.id);
           }
 
-          let result: Awaited<ReturnType<typeof generateRef.current>>;
-
           try {
             const context = role.buildContext(current);
             const { system, prompt } = role.buildPrompt(context);
@@ -124,64 +140,67 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
               role.artifactType,
               current.description ?? current.name,
             );
-            const fullPrompt = buildersDbContext ? `${prompt}\n\n${buildersDbContext}` : prompt;
 
-            // Sprint 39.5 — routes this call through the project's selected Generation Profile, falling back to the user's own model selection if unresolved.
-            result = await generateRef.current(system, fullPrompt, {
-              maxTokens: role.maxOutputTokens,
-              ...getRoleGenerateOptions(current, role.artifactType),
+            /*
+             * Sprint 44 — bounded, finish-reason-aware recovery. A first attempt exactly
+             * reproduces the old call (base prompt + BuildersDB context + 8192 budget +
+             * profile model); on a truncated/empty/invalid response it retries with the
+             * redundant context dropped, a JSON-only + be-concise instruction, and a raised
+             * output budget. Only a fully-parsed, non-truncated draft is ever returned ok —
+             * so nothing below can persist or approve an incomplete response.
+             */
+            const outcome = await generateRoleWithRecovery({
+              projectId,
+              roleKey: role.artifactType,
+              system,
+              prompt,
+              contextBlock: buildersDbContext,
+              maxOutputTokens: role.maxOutputTokens,
+              parseDraft: role.parseDraft,
+              generate: generateRef.current,
+              baseOptions: {
+                ...getRoleGenerateOptions(current, role.artifactType),
+                projectId,
+                roleKey: role.artifactType,
+                requestType: 'auto_role_generation',
+              },
+              onAttempt: (log) =>
+                logger.debug(
+                  `role=${log.roleKey} project=${log.projectId} attempt=${log.attempt} retry=${log.isRetry} ` +
+                    `provider=${log.provider ?? 'default'} model=${log.model ?? 'default'} ` +
+                    `maxOutputTokens=${log.maxOutputTokens} finishReason=${log.finishReason ?? 'n/a'} ` +
+                    `outcome=${log.outcome}`,
+                ),
             });
+
+            if (!outcome.ok) {
+              if (isMountedRef.current) {
+                setFailure({ roleId: role.id, kind: outcome.kind, message: outcome.message });
+              }
+
+              toast.error(`${role.label} could not be completed: ${outcome.message}`);
+              break;
+            }
+
+            const artifacts = getProjectArtifacts(current);
+            const latest = getLatestArtifact(artifacts, role.artifactType);
+            const nextVersion = (latest?.version ?? 0) + 1;
+            const artifact = role.createDraftArtifact(outcome.draft, nextVersion);
+
+            // Sprint 36 — 'automatic' output metadata, so version history can tell this run apart from a human clicking Generate/Regenerate.
+            addProjectArtifact(projectId, artifact, 'automatic');
+            updateProjectArtifact(projectId, artifact.id, { status: 'approved' }, 'automatic');
+            toast.success(`${role.label} completed`);
           } catch (error) {
             const message = error instanceof Error ? error.message : `${role.label} failed unexpectedly.`;
 
             if (isMountedRef.current) {
-              setFailure({ roleId: role.id, message });
+              setFailure({ roleId: role.id, kind: 'error', message });
             }
 
-            toast.error(`${role.label} failed to generate: ${message}`);
+            toast.error(`${role.label} could not be completed: ${message}`);
             break;
           }
-
-          if (!result.ok) {
-            if (isMountedRef.current) {
-              setFailure({ roleId: role.id, message: result.error });
-            }
-
-            toast.error(`${role.label} failed to generate: ${result.error}`);
-            break;
-          }
-
-          if (!result.text || result.text.trim().length === 0) {
-            const message = 'The AI returned an empty response.';
-
-            if (isMountedRef.current) {
-              setFailure({ roleId: role.id, message });
-            }
-
-            toast.error(`${role.label} failed to generate: ${message}`);
-            break;
-          }
-
-          const parsed = role.parseDraft(result.text);
-
-          if (!parsed.ok) {
-            if (isMountedRef.current) {
-              setFailure({ roleId: role.id, message: parsed.error });
-            }
-
-            toast.error(`${role.label} failed to generate: ${parsed.error}`);
-            break;
-          }
-
-          const artifacts = getProjectArtifacts(current);
-          const latest = getLatestArtifact(artifacts, role.artifactType);
-          const nextVersion = (latest?.version ?? 0) + 1;
-          const artifact = role.createDraftArtifact(parsed.draft, nextVersion);
-
-          // Sprint 36 — 'automatic' output metadata, so version history can tell this run apart from a human clicking Generate/Regenerate.
-          addProjectArtifact(projectId, artifact, 'automatic');
-          updateProjectArtifact(projectId, artifact.id, { status: 'approved' }, 'automatic');
-          toast.success(`${role.label} completed`);
         }
       } finally {
         runningProjectIds.delete(projectId);
@@ -192,7 +211,9 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
         }
       }
     })();
-  }, [project]);
 
-  return { isRunning, currentRoleId, failure };
+    // Sprint 44 — `retryNonce` re-enters the effect after a manual "Retry" click even though `project` itself hasn't changed; getNextAutoRole below re-derives the failed (still-unapproved) role from the store, so a retry re-runs only that stage.
+  }, [project, retryNonce]);
+
+  return { isRunning, currentRoleId, failure, retry };
 }

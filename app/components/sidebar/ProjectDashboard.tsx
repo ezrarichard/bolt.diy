@@ -17,7 +17,7 @@ import { getProjectTypeDefinition } from '~/lib/project-types/projectTypeRegistr
 import BackgroundRays from '~/components/ui/BackgroundRays';
 import { blueprintEngine, type RoadmapItemStatus } from '~/lib/blueprints';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
-import { projectKnowledgeEngine, type ReadinessStageStatus } from '~/lib/projects/projectKnowledgeEngine';
+import { projectKnowledgeEngine } from '~/lib/projects/projectKnowledgeEngine';
 import { projectTaskEngine } from '~/lib/projects/taskEngine';
 import { executionEngine } from '~/lib/projects/executionEngine';
 import { reviewEngine } from '~/lib/projects/reviewEngine';
@@ -28,7 +28,6 @@ import {
   formatArtifactTimestamp,
   type ProjectArtifact,
 } from '~/lib/projects/artifacts';
-import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '~/components/ui/Collapsible';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '~/components/ui/Tabs';
 import { ProjectRequirementsDialog } from './ProjectRequirementsDialog';
 import { ProjectTaskCard } from './ProjectTaskCard';
@@ -44,8 +43,6 @@ import { QaDraftPanel } from './QADraftPanel';
 import { DevOpsDraftPanel } from './DevOpsDraftPanel';
 import { AiEngineeringTeamPanel } from './AIEngineeringTeamPanel';
 import { ProjectManagerPanel } from './ProjectManagerPanel';
-import { GenerationPlanPanel } from './GenerationPlanPanel';
-import { ContextPreviewPanel } from './ContextPreviewPanel';
 import { ProductPackagePanel } from './ProductPackagePanel';
 import { ProjectHistoryPanel } from './ProjectHistoryPanel';
 import { SharedProviderStatusCard } from './SharedProviderStatusCard';
@@ -141,32 +138,6 @@ function QuickStatusBadge({ icon, label, connected }: { icon: string; label: str
       <div className={classNames(icon, 'w-3 h-3')} />
       {label}: {connected ? 'Connected' : 'Not Connected'}
     </span>
-  );
-}
-
-interface ActionButtonProps {
-  icon: string;
-  label: string;
-  fullWidth?: boolean;
-}
-
-// All Project Actions/Quick Actions are placeholders — "No functionality yet" per spec.
-function ActionButton({ icon, label, fullWidth }: ActionButtonProps) {
-  return (
-    <button
-      type="button"
-      disabled
-      title="Coming soon"
-      className={classNames(
-        'flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium',
-        'bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/50',
-        'text-bolt-elements-textTertiary cursor-not-allowed opacity-60',
-        fullWidth ? 'w-full justify-start' : '',
-      )}
-    >
-      <div className={classNames(icon, 'w-4 h-4 shrink-0')} />
-      {label}
-    </button>
   );
 }
 
@@ -269,58 +240,6 @@ function RequirementsRow({ label, value }: RequirementsRowProps) {
       <div className="text-sm text-bolt-elements-textSecondary">
         {display && display.length > 0 ? display : <span className="text-bolt-elements-textTertiary">Not set</span>}
       </div>
-    </div>
-  );
-}
-
-/**
- * Sprint 10 — status meta for the Project Readiness panel (Task 5). Purely
- * presentational; status/percent always come from
- * projectKnowledgeEngine.getReadiness(project).
- */
-const READINESS_STATUS_META: Record<
-  ReadinessStageStatus,
-  { icon: string; className: string; label: (percent?: number) => string }
-> = {
-  'not-started': {
-    icon: 'i-ph:circle-dashed',
-    className: 'text-bolt-elements-textTertiary',
-    label: () => 'Not Started',
-  },
-  'in-progress': {
-    icon: 'i-ph:circle-half-duotone',
-    className: 'text-amber-600 dark:text-amber-400',
-    label: (percent) => `${percent ?? 0}%`,
-  },
-  'in-review': {
-    icon: 'i-ph:magnifying-glass-duotone',
-    className: 'text-purple-600 dark:text-purple-400',
-    label: () => 'In Review',
-  },
-  completed: {
-    icon: 'i-ph:check-circle-duotone',
-    className: 'text-green-600 dark:text-green-400',
-    label: () => 'Completed',
-  },
-};
-
-interface ReadinessRowProps {
-  label: string;
-  status: ReadinessStageStatus;
-  percent?: number;
-}
-
-/** One row in the Project Readiness panel — icon, label, and status/percent. */
-function ReadinessRow({ label, status, percent }: ReadinessRowProps) {
-  const meta = READINESS_STATUS_META[status];
-
-  return (
-    <div className="flex items-center justify-between gap-3 py-2">
-      <div className="flex items-center gap-2.5">
-        <span className={classNames(meta.icon, 'w-4 h-4 shrink-0', meta.className)} />
-        <span className="text-sm text-bolt-elements-textSecondary">{label}</span>
-      </div>
-      <span className={classNames('text-xs font-medium', meta.className)}>{meta.label(percent)}</span>
     </div>
   );
 }
@@ -524,7 +443,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
   const navigate = useNavigate();
   const [isRequirementsDialogOpen, setIsRequirementsDialogOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [isDeveloperToolsOpen, setIsDeveloperToolsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<DashboardTabId>('overview');
 
   const handleTabChange = (value: string) => {
@@ -679,16 +597,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
   const workspaceState = project.workspaceState;
 
   /*
-   * Sprint 10 — Project Readiness. The high-level, at-a-glance progress
-   * indicator across the whole project lifecycle. Requirements/Roadmap are
-   * computed from real local data via projectKnowledgeEngine; the remaining
-   * stages (Design/Database/Frontend/Backend/Deployment) have no data
-   * source yet in this sprint and always read "Not Started" until a future
-   * sprint wires real signals into them.
-   */
-  const readiness = projectKnowledgeEngine.getReadiness(project);
-
-  /*
    * Sprint 30.5 — Engineering Journey collapse state. Each stage's latest
    * artifact is read the exact same way every "*DraftPanel" component
    * already reads it internally (getLatestArtifact over
@@ -792,11 +700,11 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
 
                     <div className="flex-1 px-8 py-6 space-y-10">
                       <TabsContent value="overview" className="!mt-0 space-y-10">
-                        {/* SECTION 2 — Next Recommended Action (the primary CTA area; always near the top) */}
+                        {/* SECTION 2 — Project Status (business-friendly summary; engineering detail collapsed inside, Sprint 44.1) */}
                         <section>
                           <GroupHeading
-                            title="Next Recommended Action"
-                            subtitle="Where you are, what's approved, and the one thing to do next."
+                            title="Project Status"
+                            subtitle="How your AI engineering team is progressing on your product."
                           />
                           <div
                             className={classNames(
@@ -805,11 +713,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                             )}
                           >
                             <ProjectManagerPanel project={project} />
-                          </div>
-                          <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                            Computed locally from every artifact, task, review, and roadmap status below — no AI call,
-                            no code generation. This is orchestration only: it decides whether the project is ready,
-                            never what to build.
                           </div>
                         </section>
 
@@ -987,7 +890,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                 footnote="The Architecture Draft is stored locally for this project only — approving it never updates Project Knowledge or generates a database, frontend, or backend."
                                 navSectionId="architecture"
                                 sectionRef={registerSection('architecture')}
-                                alwaysExpanded
                               >
                                 <ArchitectureDraftPanel project={project} />
                               </EngineeringStageSection>
@@ -1001,7 +903,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                 footnote="The Database Design Draft is stored locally for this project only — approving it never generates SQL, connects to Supabase, or creates a database."
                                 navSectionId="database"
                                 sectionRef={registerSection('database')}
-                                alwaysExpanded
                               >
                                 <DatabaseDraftPanel project={project} />
                               </EngineeringStageSection>
@@ -1015,7 +916,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                 footnote="The UI/UX Draft is stored locally for this project only — approving it never generates HTML, CSS, Tailwind, React, Figma files, or images."
                                 navSectionId="uiux"
                                 sectionRef={registerSection('uiux')}
-                                alwaysExpanded
                               >
                                 <UiUxDraftPanel project={project} />
                               </EngineeringStageSection>
@@ -1029,7 +929,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                 footnote="The Backend Draft is stored locally for this project only — approving it never generates backend code, SQL, Prisma/Drizzle/Supabase schemas, connects to GitHub, or deploys anything."
                                 navSectionId="backend"
                                 sectionRef={registerSection('backend')}
-                                alwaysExpanded
                               >
                                 <BackendDraftPanel project={project} />
                               </EngineeringStageSection>
@@ -1043,7 +942,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                 footnote="The Frontend Draft is stored locally for this project only — approving it never generates React, Next.js, Remix, Vue, Angular, Flutter, HTML, CSS, or Tailwind code."
                                 navSectionId="frontend"
                                 sectionRef={registerSection('frontend')}
-                                alwaysExpanded
                               >
                                 <FrontendDraftPanel project={project} />
                               </EngineeringStageSection>
@@ -1057,7 +955,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                 footnote="The QA Draft is stored locally for this project only — approving it never generates test code, connects to GitHub, or deploys anything."
                                 navSectionId="qa"
                                 sectionRef={registerSection('qa')}
-                                alwaysExpanded
                               >
                                 <QaDraftPanel project={project} />
                               </EngineeringStageSection>
@@ -1071,7 +968,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                 footnote="The DevOps Draft is stored locally for this project only — approving it never generates a Dockerfile, GitHub Actions workflow, Kubernetes manifest, Terraform configuration, or shell script, and never deploys or provisions anything."
                                 navSectionId="devops"
                                 sectionRef={registerSection('devops')}
-                                alwaysExpanded
                               >
                                 <DevOpsDraftPanel project={project} />
                               </EngineeringStageSection>
@@ -1083,36 +979,9 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                         <section className="pt-10 border-t border-bolt-elements-borderColor/40">
                           <GroupHeading
                             title="Engineering Readiness"
-                            subtitle="Readiness signals and the review queue, now that every engineering stage above is visible."
+                            subtitle="The review queue, now that every engineering stage above is visible."
                           />
                           <div className="space-y-8">
-                            <div>
-                              <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                                Project Readiness
-                              </h3>
-                              <div
-                                className={classNames(
-                                  'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                                  'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                                  'grid grid-cols-1 sm:grid-cols-2 gap-x-8 divide-y divide-bolt-elements-borderColor/20 sm:divide-y-0',
-                                )}
-                              >
-                                {readiness.map((stage) => (
-                                  <ReadinessRow
-                                    key={stage.id}
-                                    label={stage.label}
-                                    status={stage.status}
-                                    percent={stage.percent}
-                                  />
-                                ))}
-                              </div>
-                              <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                                Readiness is computed locally from Requirements and Roadmap progress — Design, Database,
-                                Frontend, Backend, and Deployment become available in future sprints. Overall readiness,
-                                health, and the next recommended action live in Next Recommended Action above.
-                              </div>
-                            </div>
-
                             <div>
                               <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
                                 Review Summary
@@ -1141,8 +1010,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                           <ProductPackagePanel project={project} />
                         </section>
                       </TabsContent>
-
-                      {/* Sprint 38.5 — Generation Center relocated to the Developer Tools collapsible at the end of this component (see DEVELOPER TOOLS below); GenerationPlanPanel itself is unchanged, only its position moved. */}
 
                       <TabsContent value="workspace" className="!mt-0 space-y-10">
                         {/* SECTION 6 — Workspace (connections + project configuration) */}
@@ -1405,30 +1272,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                     completed={completedRoadmapCount}
                                     total={roadmapWithStatus.length}
                                   />
-
-                                  <div
-                                    className={classNames(
-                                      'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4',
-                                      'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                                    )}
-                                  >
-                                    <div className="text-[13px] font-semibold text-bolt-elements-textPrimary mb-3">
-                                      Quick Actions
-                                    </div>
-                                    <div className="flex flex-col gap-2">
-                                      <ActionButton icon="i-ph:play-circle" label="Continue Building" fullWidth />
-                                      <ActionButton
-                                        icon="i-ph:clipboard-text"
-                                        label="Generate Requirements"
-                                        fullWidth
-                                      />
-                                      <ActionButton icon="i-ph:layout" label="Generate UI" fullWidth />
-                                      <ActionButton icon="i-ph:database" label="Generate Database" fullWidth />
-                                      <ActionButton icon="i-ph:github-logo" label="Connect GitHub" fullWidth />
-                                      <ActionButton icon="i-ph:database-duotone" label="Connect Supabase" fullWidth />
-                                      <ActionButton icon="i-ph:rocket-launch" label="Deploy" fullWidth />
-                                    </div>
-                                  </div>
                                 </div>
                               </div>
 
@@ -1523,84 +1366,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                     </div>
                   </Tabs>
 
-                  {/* DEVELOPER TOOLS — Sprint 38.5: merges the old "Generation Center" (Generation Plan/Queue/Execution Plan/Execution Session/Prototype Test) and "Internal / Developer" (Context Preview) sections into one collapsed-by-default area, persistent across every tab rather than living inside one of them. Neither panel's own internals changed — only their position. */}
-                  <div className="px-8 pt-10 border-t border-bolt-elements-borderColor/40">
-                    <Collapsible open={isDeveloperToolsOpen} onOpenChange={setIsDeveloperToolsOpen}>
-                      <div
-                        className={classNames(
-                          'rounded-xl border border-dashed border-bolt-elements-borderColor/50 p-5',
-                          'bg-[#F7F7F8]/60 dark:bg-[#161616]/60 backdrop-blur-md',
-                        )}
-                      >
-                        <CollapsibleTrigger asChild>
-                          <button
-                            type="button"
-                            className="w-full flex items-center justify-between gap-3 bg-transparent text-left appearance-none focus:outline-none"
-                          >
-                            <div className="flex items-center gap-2">
-                              <span
-                                className={classNames(
-                                  'i-ph:caret-right w-3.5 h-3.5 text-bolt-elements-textTertiary transition-transform duration-150',
-                                  isDeveloperToolsOpen && 'rotate-90',
-                                )}
-                              />
-                              <span className="text-lg font-semibold tracking-tight text-bolt-elements-textPrimary">
-                                Developer Tools
-                              </span>
-                              <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary">
-                                Internal
-                              </span>
-                            </div>
-                            <span className="text-xs text-bolt-elements-textTertiary">
-                              {isDeveloperToolsOpen ? 'Hide' : 'Show'}
-                            </span>
-                          </button>
-                        </CollapsibleTrigger>
-
-                        <CollapsibleContent>
-                          <div className="mt-5 pt-5 border-t border-bolt-elements-borderColor/30 space-y-8">
-                            {/* Generation Center — Sprint 26-28, read-only orchestration view */}
-                            <div>
-                              <div className="flex items-center gap-2 mb-4">
-                                <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">
-                                  Generation Center
-                                </h3>
-                                <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary">
-                                  Read Only
-                                </span>
-                              </div>
-                              <div
-                                className={classNames(
-                                  'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                                  'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                                )}
-                              >
-                                <GenerationPlanPanel project={project} />
-                              </div>
-                              <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                                Generation Plan, Generation Queue, Execution Plan, Execution Session, and the Prototype
-                                Generation Test — grouped together as one workflow. Computed locally; nothing here
-                                touches the workspace, preview, git, or Supabase.
-                              </div>
-                            </div>
-
-                            {/* Context Preview — Sprint 17, internal/team tool only */}
-                            <div>
-                              <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                                Context Preview
-                              </h3>
-                              <ContextPreviewPanel project={project} />
-                              <div className="mt-4 text-[11px] text-bolt-elements-textTertiary">
-                                Preview of what the Context Engine would send a given AI role — computed locally, no AI
-                                call. For the Builders team only; not part of the project workflow.
-                              </div>
-                            </div>
-                          </div>
-                        </CollapsibleContent>
-                      </div>
-                    </Collapsible>
-                  </div>
-
                   <div className="px-8 py-6 space-y-10">
                     {/* SECTION 9 — Recent Chats */}
                     <div
@@ -1627,19 +1392,6 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                           <span className="inline-block i-ph:plus-circle h-4 w-4" />
                           <span className="text-sm font-medium">Start Chat</span>
                         </button>
-                      </div>
-                    </div>
-
-                    {/* SECTION 10 — Project Actions */}
-                    <div>
-                      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                        Project Actions
-                      </h2>
-                      <div className="flex flex-wrap gap-3">
-                        <ActionButton icon="i-ph:github-logo" label="Open GitHub" />
-                        <ActionButton icon="i-ph:database" label="Open Supabase" />
-                        <ActionButton icon="i-ph:rocket-launch" label="Deploy" />
-                        <ActionButton icon="i-ph:sliders-horizontal-duotone" label="Project Settings" />
                       </div>
                     </div>
                   </div>

@@ -3,6 +3,7 @@ import type { Project } from '~/lib/stores/projects';
 import type { ProjectArtifact } from '~/lib/projects/artifacts';
 import {
   fromContextTraceRow,
+  fromProjectMemberRow,
   fromProjectRow,
   fromRoleOutputRow,
   fromTaskReviewRow,
@@ -13,6 +14,8 @@ import {
   type BuildersDbExecutionLogInput,
   type BuildersDbTaskInput,
   type BuildersDbTaskReviewInput,
+  type ProjectMember,
+  type ProjectMemberRole,
   type RoleOutputGenerationType,
 } from '~/lib/builders-db/buildersDbTypes';
 
@@ -55,6 +58,19 @@ function logError(method: string, error: unknown): void {
   console.error(`[BuildersDB] ${method}() failed:`, error);
 }
 
+/** Postgrest errors are plain objects (not `instanceof Error`) but always carry a string `.message` — this extracts it for either shape. */
+function safeErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+
+  return 'Unknown BuildersDB error.';
+}
+
 /** Whether BuildersDB is configured AND reachable enough to attempt calls — the same check every function below starts with. */
 export function isBuildersDbAvailable(): boolean {
   return isBuildersDbConfigured() && getBuildersDbClient() !== null;
@@ -62,29 +78,80 @@ export function isBuildersDbAvailable(): boolean {
 
 // ── Projects ──────────────────────────────────────────────────────────────
 
-export async function createProject(project: Project, ownerId?: string | null): Promise<boolean> {
+export interface BuildersDbWriteResult {
+  ok: boolean;
+
+  /** A safe, user-displayable message (Postgrest's own `.message` — never a key, token, or header). Null on success. */
+  error: string | null;
+}
+
+/**
+ * Sprint 42 — `ownerId` should always be the current authenticated user's id (see
+ * getCurrentActor() in app/lib/stores/projects.ts); RLS's `builders_projects_insert_own`
+ * policy (see the Sprint 42 migration) rejects the insert otherwise. A DB trigger
+ * (`add_owner_membership`) inserts the matching `builders_project_members` Owner row
+ * automatically — this function doesn't need to do that itself.
+ *
+ * Urgent fix — live-verified root cause: this used to call `.upsert()`, which PostgREST
+ * executes as `INSERT ... ON CONFLICT (id) DO UPDATE`. Postgres RLS requires an upsert to
+ * satisfy BOTH the INSERT policy's `WITH CHECK` AND the UPDATE policy's `USING` clause (the
+ * planner can't know in advance whether the conflict branch fires) — but
+ * `builders_projects_update_editable`'s `USING` clause calls `builders_user_can_edit_project(id)`,
+ * which reads `builders_project_members`, which has NO row yet for a brand-new project (the
+ * `add_owner_membership` trigger only inserts that row AFTER a successful INSERT). That's a
+ * chicken-and-egg RLS deadlock: every first-time project insert — Quick Build or Guided
+ * Engineering — was rejected with `42501` before ever reaching the trigger. Confirmed live: an
+ * identical row succeeds via `.insert()` and fails via `.upsert()` under the same policies.
+ * Every project id is minted fresh client-side (see projects.ts's `createLocalProject`), so a
+ * genuine conflict is never expected — a collision surfacing as an error here (rather than a
+ * silent overwrite) is the correct, safe behavior anyway.
+ *
+ * Also unlike every other function in this file, this one returns *why* it failed
+ * (`BuildersDbWriteResult`), not just a boolean. Quick Build's first-message project creation
+ * (see projects.ts's `persistQuickBuildProject`) awaits this result and must show the caller a
+ * real reason ("not signed in" vs. "RLS rejected" vs. "network error") instead of a
+ * console-only `logError()` — every other caller of `createProject` below keeps the plain
+ * boolean it always had.
+ */
+export async function createProjectWithResult(
+  project: Project,
+  ownerId?: string | null,
+): Promise<BuildersDbWriteResult> {
   const client = getBuildersDbClient();
 
   if (!client) {
     unavailable('createProject');
-    return false;
+    return { ok: false, error: 'BuildersDB is not configured on this deployment.' };
   }
 
   try {
-    const { error } = await client.from('builders_projects').upsert(toProjectRow(project, ownerId));
+    const { error } = await client.from('builders_projects').insert(toProjectRow(project, ownerId));
 
     if (error) {
       throw error;
     }
 
-    return true;
+    return { ok: true, error: null };
   } catch (error) {
     logError('createProject', error);
-    return false;
+
+    return { ok: false, error: safeErrorMessage(error) };
   }
 }
 
-export async function updateProject(project: Project): Promise<boolean> {
+export async function createProject(project: Project, ownerId?: string | null): Promise<boolean> {
+  const result = await createProjectWithResult(project, ownerId);
+  return result.ok;
+}
+
+/**
+ * Sprint 42 — `editorId`, if given, is stamped onto `last_editor`. Deliberately strips
+ * `owner_id`/`created_by` from the row `toProjectRow()` builds (rather than reusing it as-is):
+ * an update must never reassign ownership, and RLS's `builders_projects_update_editable`
+ * policy only checks the *current* row's owner/membership anyway, so sending a stale
+ * `owner_id` back on every update is both pointless and risky if that logic ever changes.
+ */
+export async function updateProject(project: Project, editorId?: string | null): Promise<boolean> {
   const client = getBuildersDbClient();
 
   if (!client) {
@@ -93,7 +160,20 @@ export async function updateProject(project: Project): Promise<boolean> {
   }
 
   try {
-    const row = toProjectRow(project);
+    const {
+      owner_id: _ownerId,
+      created_by: _createdBy,
+      last_editor: lastEditor,
+      ...rest
+    } = toProjectRow(project, null, editorId);
+
+    /*
+     * Only include last_editor in the update payload when an editorId was actually given —
+     * otherwise every unattributed updateProject() call (setRoadmapItemStatus,
+     * updateProjectKnowledge, etc. — not every call site threads an actor through yet) would
+     * null out whatever last_editor a previous, attributed update had set.
+     */
+    const row = editorId ? { ...rest, last_editor: lastEditor } : rest;
     const { error } = await client.from('builders_projects').update(row).eq('id', project.id);
 
     if (error) {
@@ -103,6 +183,32 @@ export async function updateProject(project: Project): Promise<boolean> {
     return true;
   } catch (error) {
     logError('updateProject', error);
+    return false;
+  }
+}
+
+/** Sprint 42 (PART 1) — stamps `last_opened_at`. Deliberately a narrow single-column update, not a full updateProject(), so opening a project can never race/clobber a concurrent content edit. */
+export async function touchLastOpened(projectId: string): Promise<boolean> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('touchLastOpened');
+    return false;
+  }
+
+  try {
+    const { error } = await client
+      .from('builders_projects')
+      .update({ last_opened_at: new Date().toISOString() })
+      .eq('id', projectId);
+
+    if (error) {
+      throw error;
+    }
+
+    return true;
+  } catch (error) {
+    logError('touchLastOpened', error);
     return false;
   }
 }
@@ -129,11 +235,20 @@ export async function getProjectById(projectId: string): Promise<Project | null>
   }
 }
 
-export async function listProjects(): Promise<Project[]> {
+/**
+ * Sprint 42 (PART 4) — replaces the old unfiltered `listProjects()`. The actual filtering
+ * (owned + shared-into projects only) is enforced by RLS's `builders_projects_select_accessible`
+ * policy (see the Sprint 42 migration's `builders_user_can_access_project()`), not by a
+ * client-side `.eq('owner_id', ...)` — an authenticated Supabase query already only returns
+ * rows this user's policies allow, including rows shared via `builders_project_members` for
+ * future collaboration, and archived-status filtering (PART 4's "Future archived projects")
+ * can be added here later as a plain `.eq('status', ...)` without touching RLS at all.
+ */
+export async function listProjectsForCurrentUser(): Promise<Project[]> {
   const client = getBuildersDbClient();
 
   if (!client) {
-    unavailable('listProjects');
+    unavailable('listProjectsForCurrentUser');
     return [];
   }
 
@@ -146,12 +261,18 @@ export async function listProjects(): Promise<Project[]> {
 
     return (data ?? []).map(fromProjectRow);
   } catch (error) {
-    logError('listProjects', error);
+    logError('listProjectsForCurrentUser', error);
     return [];
   }
 }
 
-export async function deleteProject(projectId: string): Promise<boolean> {
+/**
+ * Sprint 42 (PART 10) — Owner-only. RLS's `builders_projects_delete_owner_only` policy already
+ * enforces this at the database level (an Editor's delete simply matches zero rows), but this
+ * check runs first so the caller gets a clear `false` instead of a silent no-op delete, and so
+ * the UI can distinguish "nothing to delete" from "you're not allowed to delete this."
+ */
+export async function deleteProject(projectId: string, requestingUserId?: string | null): Promise<boolean> {
   const client = getBuildersDbClient();
 
   if (!client) {
@@ -160,6 +281,15 @@ export async function deleteProject(projectId: string): Promise<boolean> {
   }
 
   try {
+    if (requestingUserId) {
+      const role = await getMemberRole(projectId, requestingUserId);
+
+      if (role !== 'Owner') {
+        console.warn(`[BuildersDB] deleteProject() refused — ${requestingUserId} is not the Owner of ${projectId}.`);
+        return false;
+      }
+    }
+
     /*
      * Every other builders_* table's project_id column has ON DELETE CASCADE
      * (see the migration) — deleting the project row is enough to remove its
@@ -176,6 +306,102 @@ export async function deleteProject(projectId: string): Promise<boolean> {
     logError('deleteProject', error);
     return false;
   }
+}
+
+// ── Project members (PART 3 / PART 11 — share-ready architecture, no sharing UI yet) ──────
+
+/** Every member of a project, Owner first. Used by deleteProject()'s ownership check and future member-management UI. */
+export async function listMembers(projectId: string): Promise<ProjectMember[]> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('listMembers');
+    return [];
+  }
+
+  try {
+    const { data, error } = await client.from('builders_project_members').select('*').eq('project_id', projectId);
+
+    if (error) {
+      throw error;
+    }
+
+    return (data ?? []).map(fromProjectMemberRow);
+  } catch (error) {
+    logError('listMembers', error);
+    return [];
+  }
+}
+
+/** This project's role for one user, or null if they have no access. */
+export async function getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null> {
+  const members = await listMembers(projectId);
+  return members.find((member) => member.userId === userId)?.role ?? null;
+}
+
+/**
+ * Not called from any UI yet (PART 11 — "DO NOT build sharing UI. Only prepare
+ * architecture."). RLS's `builders_project_members_owner_manage` policy restricts this to the
+ * project's current Owner regardless of caller.
+ */
+export async function inviteUserToProject(
+  projectId: string,
+  userId: string,
+  role: ProjectMemberRole = 'Viewer',
+): Promise<boolean> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('inviteUserToProject');
+    return false;
+  }
+
+  try {
+    const { error } = await client
+      .from('builders_project_members')
+      .upsert({ project_id: projectId, user_id: userId, role }, { onConflict: 'project_id,user_id' });
+
+    if (error) {
+      throw error;
+    }
+
+    return true;
+  } catch (error) {
+    logError('inviteUserToProject', error);
+    return false;
+  }
+}
+
+/** Not called from any UI yet — see inviteUserToProject()'s comment. */
+export async function removeUser(projectId: string, userId: string): Promise<boolean> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('removeUser');
+    return false;
+  }
+
+  try {
+    const { error } = await client
+      .from('builders_project_members')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('user_id', userId);
+
+    if (error) {
+      throw error;
+    }
+
+    return true;
+  } catch (error) {
+    logError('removeUser', error);
+    return false;
+  }
+}
+
+/** Not called from any UI yet — see inviteUserToProject()'s comment. */
+export async function changeRole(projectId: string, userId: string, role: ProjectMemberRole): Promise<boolean> {
+  return inviteUserToProject(projectId, userId, role);
 }
 
 // ── Role outputs ──────────────────────────────────────────────────────────
@@ -205,6 +431,7 @@ export async function createOrUpdateRoleOutput(
   projectId: string,
   artifact: ProjectArtifact,
   generationType: RoleOutputGenerationType = 'manual',
+  generatedByUserId?: string | null,
 ): Promise<boolean> {
   const client = getBuildersDbClient();
 
@@ -230,7 +457,7 @@ export async function createOrUpdateRoleOutput(
       ? (versions.find((row) => (row.version ?? 0) < (artifact.version ?? 0))?.id ?? null)
       : null;
 
-    const row = toRoleOutputRow(projectId, artifact, generationType, parentVersionId);
+    const row = toRoleOutputRow(projectId, artifact, generationType, parentVersionId, generatedByUserId);
     const { error } = await client.from('builders_role_outputs').upsert(row, { onConflict: 'artifact_id,version' });
 
     if (error) {
@@ -589,6 +816,8 @@ export async function addProjectActivity(input: BuildersDbActivityInput): Promis
       activity_type: input.activityType,
       description: input.description,
       metadata: input.metadata ?? {},
+      actor_id: input.actorId ?? null,
+      actor_display_name: input.actorDisplayName ?? null,
     });
 
     if (error) {
@@ -635,6 +864,8 @@ export async function getProjectActivity(
       activityType: row.activity_type,
       description: row.description,
       metadata: row.metadata ?? {},
+      actorId: row.actor_id ?? null,
+      actorDisplayName: row.actor_display_name ?? null,
       createdAt: row.created_at,
     }));
   } catch (error) {
@@ -720,10 +951,17 @@ export async function getContextTrace(
 export const buildersDbRepository = {
   isBuildersDbAvailable,
   createProject,
+  createProjectWithResult,
   updateProject,
   getProjectById,
-  listProjects,
+  listProjectsForCurrentUser,
   deleteProject,
+  touchLastOpened,
+  listMembers,
+  getMemberRole,
+  inviteUserToProject,
+  removeUser,
+  changeRole,
   createOrUpdateRoleOutput,
   getRoleOutputsForProject,
   getLatestRoleOutput,

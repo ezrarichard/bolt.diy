@@ -1,5 +1,6 @@
 import type { GeneratedFile, GeneratedProject } from '~/lib/code-generation/codeGenerationTypes';
 import type { CodeReviewIssue, ValidatorDefinition, ValidatorRunResult } from './codeReviewTypes';
+import { REACT_RUNTIME_EXPORTS } from './reactImportRepair';
 
 /**
  * Static Validator Registry — Sprint 39 (Code Reviewer role).
@@ -48,10 +49,38 @@ function resolveImportPath(fromFile: string, importSpecifier: string): string {
   return normalizePath(`${dirname(fromFile)}/${importSpecifier}`);
 }
 
-/** Extracts every `from '...'`/`from "..."` import specifier in a TS/TSX/JS/JSX source, keeping only relative ones (`./`, `../`) — bare package imports (react, react-router-dom, ...) are out of scope. */
+/**
+ * Sprint 43B.1 — the previous pattern's clause group, `([^;]*?)`, is unbounded across
+ * newlines: for source with no semicolons (the common case — Vite/Prettier `semi: false`,
+ * and simply how most LLM-generated files come out), a non-greedy `[^;]*?` will happily
+ * expand PAST the end of one whole `import ... from '...'` statement and into the START of
+ * the next one, as long as doing so is what it takes to reach a `from` clause with a relative
+ * specifier. Concretely, for
+ *   import { StrictMode } from 'react'
+ *   import App from './App.tsx'
+ * the old regex's first match attempt (starting at the first `import`) fails to satisfy the
+ * relative-specifier requirement against `'react'`, so it backtracks by consuming MORE
+ * characters into group 1 — straight through the newline and the second import's own
+ * `import App` — until it reaches `from './App.tsx'`, which DOES look relative. The overall
+ * match then reports "StrictMode is imported from './App.tsx'": a real string that appears
+ * nowhere in the source, entirely an artifact of two independent, individually-correct import
+ * statements being merged by the regex. This was Sprint 43B.1's actual, sole root cause — not
+ * a WebContainer write race, not a lost repair; the deterministic repair pass, the read-back
+ * consistency check, and 3 LLM repair attempts were all being asked to fix a bug that never
+ * existed in the file, which is exactly why none of them could make it go away.
+ *
+ * The fix: each of the four alternatives below is a legal, SELF-TERMINATING import clause
+ * (`* as x`, `x, { ... }`, `{ ... }`, or bare `x`) — none of them can contain another
+ * `import` keyword, and the `\{[^}]*\}` alternative still spans multiple lines fine (for a
+ * long multi-line named-import list) while still stopping at that clause's own closing `}`.
+ * If a specifier isn't relative, the match for that whole statement fails outright — the
+ * clause alternatives give the engine nothing further to consume, so it correctly moves on to
+ * the next `import` keyword instead of bleeding into it.
+ */
 function extractRelativeImports(content: string): { specifier: string; named: string[]; hasDefault: boolean }[] {
   const results: { specifier: string; named: string[]; hasDefault: boolean }[] = [];
-  const importRegex = /import\s+([^;]*?)\s+from\s+['"](\.\.?\/[^'"]+)['"]/g;
+  const importRegex =
+    /import\s+((?:\*\s+as\s+[\w$]+)|(?:[\w$]+\s*,\s*\{[^}]*\})|(?:\{[^}]*\})|(?:[\w$]+))\s+from\s+['"](\.\.?\/[^'"]+)['"]/g;
 
   for (const match of content.matchAll(importRegex)) {
     const clause = match[1];
@@ -181,11 +210,26 @@ function runImportsExportsValidator(project: GeneratedProject): CodeReviewIssue[
 
       for (const name of named) {
         if (!hasNamedExport(target.content, name)) {
+          const symbolName = name.split(/\s+as\s+/)[0].trim();
+          const isReactRuntimeImport = REACT_RUNTIME_EXPORTS.has(symbolName) && specifier !== 'react';
+
           issues.push({
             validatorId: 'imports-exports',
             severity: 'error',
-            message: `${file.path} imports "${name}" from "${specifier}", but ${target.path} doesn't export it.`,
+            message: isReactRuntimeImport
+              ? `${file.path} imports "${name}" from "${specifier}", but that's a React runtime export — it should come from "react" instead.`
+              : `${file.path} imports "${name}" from "${specifier}", but ${target.path} doesn't export it.`,
             filePath: file.path,
+            ...(isReactRuntimeImport
+              ? {
+                  category: 'react-runtime-import',
+                  importedSymbol: symbolName,
+                  invalidSource: specifier,
+                  expectedSource: 'react',
+                  repairable: true,
+                  suggestedAction: `Move ${symbolName} import to react`,
+                }
+              : {}),
           });
         }
       }

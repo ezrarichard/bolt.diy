@@ -162,8 +162,27 @@ export function isAutoEngineeringComplete(project: Project): boolean {
   return AUTO_ENGINEERING_ROLES.every((role) => getLatestArtifact(artifacts, role.artifactType)?.status === 'approved');
 }
 
+/**
+ * Sprint 44 — the stage the pipeline should resume from after a role failed and was retried
+ * (manually or automatically). Deliberately derived ONLY from which artifacts are actually
+ * approved in the store (via getNextAutoRole), never from a UI-held "current role" — so once
+ * a failed role (e.g. QA) is successfully retried and approved, this returns the NEXT
+ * unapproved role (DevOps), and it can never skip or re-run an already-approved earlier role
+ * (Business Analyst … Frontend) no matter what the UI thought was happening.
+ *
+ * `failedRoleId` is accepted for logging/clarity only and never influences the result.
+ */
+export function resumePipelineFromRole(
+  project: Project,
+  failedRoleId?: AutoEngineeringRoleId,
+): AutoEngineeringRole | undefined {
+  void failedRoleId;
+  return getNextAutoRole(project);
+}
+
 export const autoEngineeringEngine = {
   roles: AUTO_ENGINEERING_ROLES,
   getNextAutoRole,
   isAutoEngineeringComplete,
+  resumePipelineFromRole,
 };

@@ -39,6 +39,9 @@ export interface GenerationProfileWithRoles extends GenerationProfile {
 export interface RoleModelResolution {
   provider: string;
   model: string;
+
+  /** Sprint 42.1 — the logical registry key `model` (the raw API model id) was resolved from; carried through for AI usage-ledger attribution (see app/lib/ai-usage/). */
+  modelKey: string;
   temperature?: number;
   maxTokens?: number;
 }

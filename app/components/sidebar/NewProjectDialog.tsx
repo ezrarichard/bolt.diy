@@ -126,7 +126,8 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
                       New Project
                     </RadixDialog.Title>
                     <RadixDialog.Description className="text-sm text-bolt-elements-textTertiary mt-1">
-                      Create a workspace for your next product.
+                      Describe your product and your AI engineering team takes it from requirements to a deployable
+                      prototype.
                     </RadixDialog.Description>
                   </div>
                   <button

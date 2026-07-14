@@ -3,6 +3,7 @@ import type { GenerateFn, GeneratedFile, GeneratedProject } from '~/lib/code-gen
 import type { InstallAndStartResult } from '~/lib/code-generation/webcontainerWriter';
 import { buildRepairPrompt } from './repairPrompt';
 import { runStaticValidators, NPM_INSTALL_AND_BOOT_VALIDATOR } from './codeValidator';
+import { applyDeterministicReactImportRepairs, DETERMINISTIC_REACT_IMPORT_REPAIR_SOURCE } from './reactImportRepair';
 import { runBuildValidation } from './errorCollector';
 import { computePatchSignature, recordRepairAttempt, recordValidationRun } from './repairHistoryRepository';
 import type {
@@ -153,6 +154,7 @@ function recordAttempt(params: {
   affectedFiles: string[];
   status: RepairAttemptStatus;
   patch?: RepairPatch;
+  modelUsed?: string;
 }): void {
   recordRepairAttempt({
     projectId: params.projectId,
@@ -167,8 +169,18 @@ function recordAttempt(params: {
     filesUpdated: params.patch?.filesToUpdate.map((file) => file.path) ?? [],
     filesDeleted: params.patch?.filesToDelete ?? [],
     status: params.status,
+    modelUsed: params.modelUsed,
     patchSignature: computePatchSignature(params.stage, params.validatorId, params.errorMessage),
   }).catch((error) => console.error('[CodeReview] Failed to record repair attempt:', error));
+}
+
+/** Cheap content-level signature for an LLM-produced patch (not to be confused with computePatchSignature's error-shape hash above) — lets both retry loops recognize "the model just handed back the exact same patch it already tried", so an identical unsuccessful patch is never re-applied on the next attempt (see this sprint's "Repair Attempt Safety" requirement). */
+function signPatchContent(patch: RepairPatch): string {
+  return JSON.stringify({
+    create: [...patch.filesToCreate].sort((a, b) => a.path.localeCompare(b.path)),
+    update: [...patch.filesToUpdate].sort((a, b) => a.path.localeCompare(b.path)),
+    delete: [...patch.filesToDelete].sort(),
+  });
 }
 
 export interface StaticReviewLoopParams {
@@ -192,6 +204,17 @@ export async function runStaticReviewLoop(params: StaticReviewLoopParams): Promi
   let project = params.project;
   let attempt = 0;
 
+  /*
+   * Sprint 43A — deterministic repairs never spend an LLM attempt and never loop: this rule
+   * is only ever allowed to run once per call (i.e. once per generation's static review
+   * cycle), regardless of how many validation/LLM-repair iterations follow. Without this gate
+   * it would re-fire every iteration whenever its own fix still left OTHER static issues
+   * unresolved (a real possibility — the LLM repair loop below can still touch the same file).
+   */
+  let deterministicRepairAttempted = false;
+  let lastAppliedPatchSignature: string | undefined;
+  const deterministicRepairedFiles: string[] = [];
+
   params.onEvent({ type: 'code-review-started' });
 
   while (true) {
@@ -205,10 +228,48 @@ export async function runStaticReviewLoop(params: StaticReviewLoopParams): Promi
 
     if (issues.length === 0) {
       params.onEvent({ type: 'static-validation-passed' });
-      return { ok: true, project, issues: [] };
+      return { ok: true, project, issues: [], deterministicRepairedFiles };
     }
 
     params.onEvent({ type: 'static-validation-failed', issues });
+
+    // ── Deterministic repair pass — runs once, ahead of any LLM repair attempt ──
+    if (!deterministicRepairAttempted) {
+      deterministicRepairAttempted = true;
+
+      const { project: deterministicProject, repairedFiles } = applyDeterministicReactImportRepairs(project, issues);
+
+      if (repairedFiles.length > 0) {
+        project = deterministicProject;
+        deterministicRepairedFiles.push(...repairedFiles);
+
+        const errorMessage = issues
+          .filter((issue) => issue.category === 'react-runtime-import')
+          .map((issue) => issue.message)
+          .join('; ');
+
+        params.onEvent({ type: 'repair-attempt-started', stage: 'static', attemptNumber: attempt, maxAttempts });
+        recordAttempt({
+          projectId: params.projectId,
+          attemptNumber: attempt,
+          stage: 'static',
+          validatorId: 'imports-exports',
+          errorMessage,
+          affectedFiles: repairedFiles,
+          status: 'applied',
+          modelUsed: DETERMINISTIC_REACT_IMPORT_REPAIR_SOURCE,
+        });
+        params.onEvent({
+          type: 'repair-patch-applied',
+          stage: 'static',
+          attemptNumber: attempt,
+          summary: `Deterministic repair: moved React runtime import(s) to "react" in ${repairedFiles.join(', ')}`,
+        });
+
+        // Re-validate immediately — this repair didn't consume an LLM attempt.
+        continue;
+      }
+    }
 
     if (attempt >= maxAttempts) {
       params.onEvent({
@@ -217,7 +278,7 @@ export async function runStaticReviewLoop(params: StaticReviewLoopParams): Promi
         detail: issues.map((issue) => issue.message).join('; '),
       });
 
-      return { ok: false, project, issues };
+      return { ok: false, project, issues, deterministicRepairedFiles };
     }
 
     attempt += 1;
@@ -259,12 +320,39 @@ export async function runStaticReviewLoop(params: StaticReviewLoopParams): Promi
       continue;
     }
 
+    const patchSignature = signPatchContent(result.patch);
+
+    if (patchSignature === lastAppliedPatchSignature) {
+      // The model handed back the exact same patch it already tried — refuse to loop on it.
+      params.onEvent({
+        type: 'repair-failed',
+        stage: 'static',
+        attemptNumber: attempt,
+        reason: 'The repair response was identical to the previous attempt; skipping re-application.',
+      });
+      recordAttempt({
+        projectId: params.projectId,
+        attemptNumber: attempt,
+        stage: 'static',
+        validatorId: failingValidatorId,
+        errorMessage: issues.map((issue) => issue.message).join('; '),
+        affectedFiles: Array.from(affectedPaths),
+        status: 'rejected',
+        patch: result.patch,
+      });
+      continue;
+    }
+
     const { project: patchedProject, rejectedPaths } = applyRepairPatch(project, result.patch);
     project = patchedProject;
 
     const touchedCount =
       result.patch.filesToCreate.length + result.patch.filesToUpdate.length + result.patch.filesToDelete.length;
     const status: RepairAttemptStatus = rejectedPaths.length >= touchedCount ? 'rejected' : 'applied';
+
+    if (status === 'applied') {
+      lastAppliedPatchSignature = patchSignature;
+    }
 
     recordAttempt({
       projectId: params.projectId,
@@ -310,6 +398,7 @@ export async function runBuildRepairLoop(params: BuildRepairLoopParams): Promise
   const maxAttempts = params.maxAttempts ?? MAX_REPAIR_ATTEMPTS;
   let project = params.project;
   let attempt = 0;
+  let lastAppliedPatchSignature: string | undefined;
 
   while (true) {
     params.onEvent({ type: 'build-validation-started' });
@@ -383,12 +472,38 @@ export async function runBuildRepairLoop(params: BuildRepairLoopParams): Promise
       continue;
     }
 
+    const buildPatchSignature = signPatchContent(result.patch);
+
+    if (buildPatchSignature === lastAppliedPatchSignature) {
+      params.onEvent({
+        type: 'repair-failed',
+        stage: 'build',
+        attemptNumber: attempt,
+        reason: 'The repair response was identical to the previous attempt; skipping re-application.',
+      });
+      recordAttempt({
+        projectId: params.projectId,
+        attemptNumber: attempt,
+        stage: 'build',
+        validatorId: NPM_INSTALL_AND_BOOT_VALIDATOR.id,
+        errorMessage: buildError.message,
+        affectedFiles: affectedFiles.map((file) => file.path),
+        status: 'rejected',
+        patch: result.patch,
+      });
+      continue;
+    }
+
     const { project: patchedProject, rejectedPaths } = applyRepairPatch(project, result.patch);
     project = patchedProject;
 
     const touchedCount =
       result.patch.filesToCreate.length + result.patch.filesToUpdate.length + result.patch.filesToDelete.length;
     const status: RepairAttemptStatus = rejectedPaths.length >= touchedCount ? 'rejected' : 'applied';
+
+    if (status === 'applied') {
+      lastAppliedPatchSignature = buildPatchSignature;
+    }
 
     recordAttempt({
       projectId: params.projectId,

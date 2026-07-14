@@ -8,6 +8,7 @@ import {
   PROVIDER_COMPLETION_LIMITS,
   isReasoningModel,
   isClaudeReasoningModel,
+  modelRejectsSamplingParameters,
 } from '~/lib/.server/llm/constants';
 import { LLMManager } from '~/lib/modules/llm/manager';
 import type { ModelInfo } from '~/lib/modules/llm/types';
@@ -220,11 +221,17 @@ async function llmCallAction({ context, request }: ActionFunctionArgs) {
        * so they're excluded from the default `temperature: 0` every other
        * model gets.
        */
-      const finalParams = isReasoning
-        ? { ...baseParams, temperature: 1 } // Set to 1 for reasoning models (only supported value)
-        : isClaudeReasoning
-          ? baseParams // Claude 5-family reasoning models: omit temperature entirely
-          : { ...baseParams, temperature: 0 };
+      /*
+       * Sprint 44 — sampling parameters via the centralized guard (constants.ts), no
+       * duplicated model prefixes. OpenAI o1/o3/gpt-5 pin temperature to 1 (their only
+       * accepted value); Claude Sonnet 5+/Opus 4.7+ omit it entirely (the API rejects it);
+       * every other model (including Sonnet 4.5/4.6) gets the default temperature: 0.
+       */
+      const finalParams = modelRejectsSamplingParameters(modelDetails.name)
+        ? isReasoning
+          ? { ...baseParams, temperature: 1 }
+          : baseParams
+        : { ...baseParams, temperature: 0 };
 
       // DEBUG: Log final parameters
       logger.info(

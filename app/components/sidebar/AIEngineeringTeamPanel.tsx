@@ -7,7 +7,6 @@ import {
   isAutoEngineeringComplete,
 } from '~/lib/projects/autoEngineeringEngine';
 import { useAutoEngineeringPipeline } from '~/lib/hooks/useAutoEngineeringPipeline';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '~/components/ui/Collapsible';
 import { useEffect, useState } from 'react';
 
 interface AiEngineeringTeamPanelProps {
@@ -68,13 +67,13 @@ function TeamRow({ meta, elapsedSeconds }: { meta: RowMeta; elapsedSeconds: numb
           {meta.version !== undefined && <span>v{meta.version}</span>}
           {meta.generatedAt && <span>{formatArtifactTimestamp(meta.generatedAt)}</span>}
           {meta.status === 'pending' && <span>Waiting…</span>}
-          {meta.status === 'running' && <span className="text-purple-600 dark:text-purple-400">Generating…</span>}
-          {meta.status === 'failed' && <span className="text-red-600 dark:text-red-400">Failed</span>}
+          {meta.status === 'running' && <span className="text-purple-600 dark:text-purple-400">Working…</span>}
+          {meta.status === 'failed' && <span className="text-red-600 dark:text-red-400">Needs attention</span>}
         </div>
       </div>
       {meta.status === 'running' && (
         <div className="mt-1 pl-7 text-[11px] text-purple-600/80 dark:text-purple-400/80">
-          Generating {meta.label}… {elapsedSeconds}s elapsed (est. ~{AUTO_ENGINEERING_ESTIMATED_SECONDS}s)
+          {meta.label} is working… {elapsedSeconds}s elapsed (est. ~{AUTO_ENGINEERING_ESTIMATED_SECONDS}s)
         </div>
       )}
     </li>
@@ -102,11 +101,15 @@ export function AiEngineeringTeamPanel({
   requirementsArtifact,
   children,
 }: AiEngineeringTeamPanelProps) {
-  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
-  const { isRunning, currentRoleId, failure } = useAutoEngineeringPipeline(project);
+  const { isRunning, currentRoleId, failure, retry } = useAutoEngineeringPipeline(project);
   const elapsedSeconds = useElapsedSeconds(currentRoleId !== undefined);
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
   const artifacts = getProjectArtifacts(project);
   const complete = isAutoEngineeringComplete(project);
+
+  const failedRoleLabel = failure
+    ? (AUTO_ENGINEERING_ROLES.find((role) => role.id === failure.roleId)?.label ?? 'stage')
+    : 'stage';
 
   const rows: RowMeta[] = [
     {
@@ -178,53 +181,50 @@ export function AiEngineeringTeamPanel({
       </div>
 
       {failure && (
-        <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/5 px-3.5 py-2.5 text-xs text-red-600 dark:text-red-400">
-          The pipeline stopped at a failed stage — {failure.message} Open "View AI Decisions" below to regenerate or
-          approve that stage manually; the pipeline resumes automatically from there.
+        <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3.5 py-3">
+          <div className="text-sm font-medium text-bolt-elements-textPrimary">
+            The {failedRoleLabel} stage was interrupted before completion.
+          </div>
+          <div className="text-xs text-bolt-elements-textTertiary mt-0.5">
+            Retry this stage to continue your AI engineering pipeline. Your completed stages are safe and won't be
+            regenerated.
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={retry}
+              disabled={isRunning}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium bg-purple-500 text-white hover:bg-purple-600 transition-colors disabled:opacity-50"
+            >
+              <span className="i-ph:arrow-clockwise w-4 h-4" />
+              {isRunning ? 'Retrying…' : `Retry ${failedRoleLabel}`}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowTechnicalDetails((value) => !value)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-bolt-elements-borderColor/50 text-bolt-elements-textSecondary hover:bg-bolt-elements-background-depth-2 transition-colors"
+            >
+              {showTechnicalDetails ? 'Hide technical details' : 'View technical details'}
+            </button>
+          </div>
+          {showTechnicalDetails && (
+            <div className="mt-2 rounded-md border border-bolt-elements-borderColor/40 bg-bolt-elements-background-depth-2 px-3 py-2 text-[11px] text-bolt-elements-textTertiary break-words">
+              {failure.message}
+            </div>
+          )}
         </div>
       )}
 
-      <div className="mt-4">
-        <Collapsible open={isAdvancedOpen} onOpenChange={setIsAdvancedOpen}>
-          <div
-            className={classNames(
-              'rounded-xl border border-dashed border-bolt-elements-borderColor/50 p-5',
-              'bg-[#F7F7F8]/60 dark:bg-[#161616]/60 backdrop-blur-md',
-            )}
-          >
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className="w-full flex items-center justify-between gap-3 bg-transparent text-left appearance-none focus:outline-none"
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={classNames(
-                      'i-ph:caret-right w-3.5 h-3.5 text-bolt-elements-textTertiary transition-transform duration-150',
-                      isAdvancedOpen && 'rotate-90',
-                    )}
-                  />
-                  <span className="text-sm font-semibold text-bolt-elements-textPrimary">View AI Decisions</span>
-                  <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary">
-                    Advanced
-                  </span>
-                </div>
-                <span className="text-xs text-bolt-elements-textTertiary">{isAdvancedOpen ? 'Hide' : 'Show'}</span>
-              </button>
-            </CollapsibleTrigger>
-
-            <CollapsibleContent>
-              <div className="mt-5 pt-5 border-t border-bolt-elements-borderColor/30 space-y-6">
-                <p className="text-[11px] text-bolt-elements-textTertiary">
-                  Every engineering document exactly as before — regenerate, approve, or discard any stage manually if
-                  you want to override what the AI Engineering Team decided. Nothing here is required; the pipeline
-                  above already ran every stage automatically.
-                </p>
-                {children}
-              </div>
-            </CollapsibleContent>
-          </div>
-        </Collapsible>
+      {/* Sprint 44.1 — the AI team's deliverables are shown here directly, no longer hidden behind an "Advanced" gate. Each stage's own panel still collapses to a summary once approved, so the detail stays available without overwhelming the page. */}
+      <div className="mt-6">
+        <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">
+          What your AI team produced
+        </h3>
+        <p className="text-[11px] text-bolt-elements-textTertiary mt-0.5 mb-4">
+          Each engineer's work, in order. Open any stage to see the details, or regenerate it if you'd like a different
+          direction.
+        </p>
+        <div className="space-y-6">{children}</div>
       </div>
     </div>
   );

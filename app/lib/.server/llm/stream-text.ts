@@ -4,6 +4,7 @@ import {
   PROVIDER_COMPLETION_LIMITS,
   isReasoningModel,
   isClaudeReasoningModel,
+  stripUnsupportedSamplingParameters,
   type FileMap,
 } from './constants';
 import { getSystemPrompt } from '~/lib/common/prompts/prompts';
@@ -244,25 +245,16 @@ export async function streamText(props: {
   // Use maxCompletionTokens for reasoning models (o1, GPT-5), maxTokens for traditional models — Claude 5-family reasoning models still use maxTokens like every other Claude model.
   const tokenParams = isReasoning ? { maxCompletionTokens: safeMaxTokens } : { maxTokens: safeMaxTokens };
 
-  // Filter out unsupported parameters for reasoning models — both OpenAI's o1/o3/gpt-5 and the Claude 5-family (Sonnet 5, Opus 4.8, Fable 5) reject `temperature` and the other sampling params below, just for different reasons (see isClaudeReasoningModel's doc comment).
-  const omitTemperatureParams = isReasoning || isClaudeReasoning;
-  const filteredOptions =
-    omitTemperatureParams && options
-      ? Object.fromEntries(
-          Object.entries(options).filter(
-            ([key]) =>
-              ![
-                'temperature',
-                'topP',
-                'presencePenalty',
-                'frequencyPenalty',
-                'logprobs',
-                'topLogprobs',
-                'logitBias',
-              ].includes(key),
-          ),
-        )
-      : options || {};
+  /*
+   * Sprint 44 — single centralized compatibility filter (see constants.ts). Removes
+   * temperature/topP/topK/... for models that reject non-default sampling parameters (OpenAI
+   * o1/o3/gpt-5 and Claude Sonnet 5+/Opus 4.7+); Sonnet 4.5/4.6 keep them. The OpenAI
+   * `temperature: 1` pin is re-added in streamParams below.
+   */
+  const filteredOptions = stripUnsupportedSamplingParameters(
+    modelDetails.name,
+    options as Record<string, unknown> | undefined,
+  );
 
   // DEBUG: Log filtered options
   logger.info(

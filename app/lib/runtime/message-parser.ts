@@ -10,6 +10,32 @@ const ARTIFACT_ACTION_TAG_CLOSE = '</boltAction>';
 const BOLT_QUICK_ACTIONS_OPEN = '<bolt-quick-actions>';
 const BOLT_QUICK_ACTIONS_CLOSE = '</bolt-quick-actions>';
 
+/**
+ * Sprint 43A — Claude Haiku 4.5 has been observed emitting `<artifact ...>`/`</artifact>`
+ * instead of the required `<boltArtifact ...>`/`</boltArtifact>` protocol tags. Rather than
+ * silently accepting arbitrary tag names (which would mean any freeform XML-ish text the
+ * model happens to emit gets treated as a real artifact), this normalizes ONLY that one exact,
+ * observed alias before parsing — chosen over strengthening the system prompt alone (option A
+ * in the sprint brief) because a prompt can reduce the rate but not guarantee it never
+ * recurs, and this is cheap, safe, and fully reversible if the model stops needing it.
+ * `<boltArtifact` itself is never matched (it starts with "<bolt", not "<artifact"), so this
+ * can never double-rewrite or corrupt an already-correct tag.
+ */
+const ARTIFACT_ALIAS_TAG_OPEN_RE = /<artifact(?=[\s>])/g;
+const ARTIFACT_ALIAS_TAG_CLOSE = '</artifact>';
+
+/** Exported for use by any other caller that inspects raw assistant text before it reaches this parser (see quickBuildOrchestrator.ts's artifact-completeness check, which counts `<boltArtifact`/`<boltAction` tags in the same raw text). */
+export function normalizeArtifactAliasTags(input: string): string {
+  if (!input.includes('<artifact') && !input.includes(ARTIFACT_ALIAS_TAG_CLOSE)) {
+    return input;
+  }
+
+  return input
+    .replace(ARTIFACT_ALIAS_TAG_OPEN_RE, ARTIFACT_TAG_OPEN)
+    .split(ARTIFACT_ALIAS_TAG_CLOSE)
+    .join(ARTIFACT_TAG_CLOSE);
+}
+
 const logger = createScopedLogger('MessageParser');
 
 export interface ArtifactCallbackData extends BoltArtifactData {
@@ -79,7 +105,8 @@ export class StreamingMessageParser {
 
   constructor(private _options: StreamingMessageParserOptions = {}) {}
 
-  parse(messageId: string, input: string) {
+  parse(messageId: string, rawInput: string) {
+    const input = normalizeArtifactAliasTags(rawInput);
     let state = this.#messages.get(messageId);
 
     if (!state) {

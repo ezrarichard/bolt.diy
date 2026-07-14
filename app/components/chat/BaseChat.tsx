@@ -25,7 +25,6 @@ import {
   BuildersStatsSection,
   RecentProjectsSection,
   BuildersActivitySection,
-  ComingSoonStrip,
 } from './HomeDashboardSections';
 import type { ActionAlert, SupabaseAlert, DeployAlert, LlmErrorAlertType } from '~/types/actions';
 import DeployChatAlert from '~/components/deploy/DeployAlert';
@@ -487,10 +486,8 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
         <ClientOnly>{() => <Menu />}</ClientOnly>
         <div className="flex flex-col lg:flex-row overflow-y-auto flex-1 min-w-0 h-full">
           <div className={classNames(styles.Chat, 'flex flex-col flex-grow lg:min-w-[var(--chat-min-width)] h-full')}>
-            {/* Sprint 39.6/39.7 — video hero (heading/subtitle/action cards/prompt box) replaces the old plain #intro block; HomeWorkflows.tsx owns the chrome, `promptBox` above is unchanged. */}
-            {!chatStarted && (
-              <HomeWorkflows onFocusPrompt={() => textareaRef?.current?.focus()}>{promptBox}</HomeWorkflows>
-            )}
+            {/* Phase 1 (Software Factory) — the home hero is now a single-workflow funnel into the New Project dialog; the Quick Build prompt box no longer renders on the home screen. `promptBox` still renders in-chat once `chatStarted` (see below). */}
+            {!chatStarted && <HomeWorkflows />}
             <StickToBottom
               className={classNames('pt-4 px-2 sm:px-6 relative', {
                 'h-full flex flex-col modern-scrollbar': chatStarted,
@@ -530,7 +527,6 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
                 <BuildersStatsSection />
                 <RecentProjectsSection />
                 <BuildersActivitySection />
-                <ComingSoonStrip />
               </>
             )}
             <div className="flex flex-col justify-center">

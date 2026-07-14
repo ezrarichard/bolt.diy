@@ -22,8 +22,12 @@ import type { Snapshot } from './types';
 import { webcontainer } from '~/lib/webcontainer';
 import { detectProjectCommands, createCommandActionsString } from '~/utils/projectCommands';
 import type { ContextAnnotation } from '~/types/context';
-import { addProject, currentProjectIdStore, linkProjectChat } from '~/lib/stores/projects';
+import { addProject, currentProjectIdStore, linkProjectChat, projectsStore } from '~/lib/stores/projects';
 import { PROJECT_TYPE_REGISTRY, stripModelProviderPrefix } from '~/lib/project-types/projectTypeRegistry';
+import { isBuildersDbAvailable } from '~/lib/builders-db/repositories/buildersDbRepository';
+import { getWorkspaceSnapshotProvider } from '~/lib/workspace-snapshot';
+import { shouldSkipLegacyFileRestore } from '~/lib/quick-build/authoritativeRestoreSource';
+import { buildRestoreArtifact } from './restoreArtifact';
 
 export interface ChatHistoryItem {
   id: string;
@@ -120,6 +124,42 @@ export function useChatHistory() {
               // Call the modified function to get only the command actions string
               const commandActionsString = createCommandActionsString(projectCommands);
 
+              /*
+               * Sprint 44.1 — decide the authoritative file-restore source BEFORE building
+               * the synthetic restore message, because that decision determines whether the
+               * message may carry executable `<boltAction>`s at all. For a quick_build project
+               * with a real BuildersDB snapshot, workspaceResumeOrchestrator.ts's
+               * resumeQuickBuildWorkspace() is the SOLE owner of file restore + dependency
+               * install + dev-server start. The synthetic artifact below is replayed by the
+               * message parser on load (useMessageParser.ts's parseMessages) — and its command
+               * actions (from createCommandActionsString) literally run
+               * `npx update-browserslist-db@latest && npm install` + `npm run dev`. Left intact
+               * during a resume, that is a SECOND installer and dev server racing the
+               * orchestrator's own inside one WebContainer — the real cause of the resume
+               * "install hang" (the prior report saw `update-browserslist-db` and misread it as
+               * npm/network). When resume owns the workspace we emit a descriptive-only restore
+               * message with no actions; every other case keeps the full restore artifact and
+               * the legacy fallback exactly as before.
+               */
+              const linkedProject = storedMessages.metadata?.projectId
+                ? projectsStore.get().find((candidate) => candidate.id === storedMessages.metadata?.projectId)
+                : undefined;
+
+              const buildersDbAvailable = isBuildersDbAvailable();
+              const snapshotMeta =
+                linkedProject?.projectType === 'quick_build' && buildersDbAvailable
+                  ? await getWorkspaceSnapshotProvider().getSnapshotMeta(linkedProject.id)
+                  : null;
+              const resumeOwnsWorkspace = shouldSkipLegacyFileRestore(linkedProject, buildersDbAvailable, snapshotMeta);
+
+              /*
+               * The full restore artifact (file + command actions) — used only when the legacy
+               * replay path owns restoration. When resume owns it, `restoreArtifact` is empty so
+               * the parser has nothing to execute (no competing install/dev-server, no duplicate
+               * file writes); the descriptive text and the revert affordance are preserved.
+               */
+              const restoreArtifact = buildRestoreArtifact(resumeOwnsWorkspace, snapshot?.files, commandActionsString);
+
               filteredMessages = [
                 {
                   id: generateId(),
@@ -131,25 +171,10 @@ export function useChatHistory() {
                   id: storedMessages.messages[snapshotIndex].id,
                   role: 'assistant',
 
-                  // Combine followup message and the artifact with files and command actions
+                  // Combine followup message and (unless resume owns restoration) the restore artifact
                   content: `Builders restored your chat from a snapshot. You can revert this message to load the full chat history.
-                  <boltArtifact id="restored-project-setup" title="Restored Project & Setup" type="bundled">
-                  ${Object.entries(snapshot?.files || {})
-                    .map(([key, value]) => {
-                      if (value?.type === 'file') {
-                        return `
-                      <boltAction type="file" filePath="${key}">
-${value.content}
-                      </boltAction>
-                      `;
-                      } else {
-                        return ``;
-                      }
-                    })
-                    .join('\n')}
-                  ${commandActionsString} 
-                  </boltArtifact>
-                  `, // Added commandActionsString, followupMessage, updated id and title
+                  ${restoreArtifact}
+                  `,
                   annotations: [
                     'no-store',
                     ...(summary
@@ -172,7 +197,10 @@ ${value.content}
                  */
                 ...filteredMessages,
               ];
-              restoreSnapshot(mixedId);
+
+              if (!resumeOwnsWorkspace) {
+                restoreSnapshot(mixedId);
+              }
             }
 
             setInitialMessages(filteredMessages);
