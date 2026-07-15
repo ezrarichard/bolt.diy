@@ -19,4 +19,6 @@ interface Env {
   XAI_API_KEY: string;
   PERPLEXITY_API_KEY: string;
   AWS_BEDROCK_CONFIG: string;
+  BUILDERS_DB_SUPABASE_URL: string;
+  BUILDERS_DB_SUPABASE_ANON_KEY: string;
 }
