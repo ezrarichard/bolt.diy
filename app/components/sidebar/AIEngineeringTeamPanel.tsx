@@ -1,6 +1,6 @@
 import { classNames } from '~/utils/classNames';
 import { getProjectArtifacts, type Project } from '~/lib/stores/projects';
-import { formatArtifactTimestamp, getLatestArtifact, type ProjectArtifact } from '~/lib/projects/artifacts';
+import { formatArtifactTimestamp, getResumableArtifact, type ProjectArtifact } from '~/lib/projects/artifacts';
 import {
   AUTO_ENGINEERING_ESTIMATED_SECONDS,
   AUTO_ENGINEERING_ROLES,
@@ -119,7 +119,8 @@ export function AiEngineeringTeamPanel({
       generatedAt: requirementsArtifact?.updatedAt,
     },
     ...AUTO_ENGINEERING_ROLES.map((role): RowMeta => {
-      const latest = getLatestArtifact(artifacts, role.artifactType);
+      // Sprint 46.1 — live-verified bugfix: same resolution as useDraftPanel.ts, so this row's status agrees with what the panel below actually shows (see getResumableArtifact's comment).
+      const latest = getResumableArtifact(artifacts, role.artifactType);
       const isApproved = latest?.status === 'approved';
 
       let status: RowStatus = 'pending';
@@ -183,11 +184,14 @@ export function AiEngineeringTeamPanel({
       {failure && (
         <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3.5 py-3">
           <div className="text-sm font-medium text-bolt-elements-textPrimary">
-            The {failedRoleLabel} stage was interrupted before completion.
+            {failure.kind === 'hydration'
+              ? "Couldn't load this project's saved progress."
+              : `The ${failedRoleLabel} stage was interrupted before completion.`}
           </div>
           <div className="text-xs text-bolt-elements-textTertiary mt-0.5">
-            Retry this stage to continue your AI engineering pipeline. Your completed stages are safe and won't be
-            regenerated.
+            {failure.kind === 'hydration'
+              ? 'Retry loading before continuing — starting the AI Engineering Team now could duplicate work already saved.'
+              : "Retry this stage to continue your AI engineering pipeline. Your completed stages are safe and won't be regenerated."}
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button
@@ -197,7 +201,7 @@ export function AiEngineeringTeamPanel({
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium bg-purple-500 text-white hover:bg-purple-600 transition-colors disabled:opacity-50"
             >
               <span className="i-ph:arrow-clockwise w-4 h-4" />
-              {isRunning ? 'Retrying…' : `Retry ${failedRoleLabel}`}
+              {isRunning ? 'Retrying…' : failure.kind === 'hydration' ? 'Retry Loading' : `Retry ${failedRoleLabel}`}
             </button>
             <button
               type="button"

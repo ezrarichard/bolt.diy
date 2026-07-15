@@ -128,6 +128,59 @@ export function parseArtifactContent<T>(content: string): T | undefined {
 }
 
 /**
+ * Sprint 46.1 — live-verified hydration bugfix. `getLatestArtifact` above answers "which
+ * version is numerically newest," not "which version is actually approved" — those used to be
+ * the same question because the pre-hydration local array only ever held ONE entry per role
+ * (`updateProjectArtifact` always overwrote the same array slot in place, so a role's entry was
+ * always whatever the most recent operation left it as). BuildersDB-hydrated arrays (see
+ * `hydrateProjectData` in app/lib/stores/projects.ts) can legitimately contain several rows for
+ * one role — a version once approved, later manually regenerated (useDraftPanel.ts's
+ * `runGeneration`, which reuses the SAME artifact id across versions) and left as a pending
+ * draft or discarded — and `getLatestArtifact`'s version-only comparison has no way to tell
+ * that apart from a genuinely newer approved version. This is approval-aware instead: it never
+ * returns a draft/discarded/placeholder entry, no matter how high its version number is, and
+ * is what `getNextAutoRole`/`isAutoEngineeringComplete`
+ * (app/lib/projects/autoEngineeringEngine.ts) use to decide whether a role is actually done.
+ */
+export function getLatestApprovedArtifact(artifacts: ProjectArtifact[], type: string): ProjectArtifact | undefined {
+  const approved = artifacts.filter((artifact) => artifact.type === type && artifact.status === 'approved');
+
+  if (approved.length === 0) {
+    return undefined;
+  }
+
+  return approved.reduce((latest, candidate) => {
+    const latestVersion = latest.version ?? 0;
+    const candidateVersion = candidate.version ?? 0;
+
+    if (candidateVersion !== latestVersion) {
+      return candidateVersion > latestVersion ? candidate : latest;
+    }
+
+    return new Date(candidate.updatedAt).getTime() > new Date(latest.updatedAt).getTime() ? candidate : latest;
+  });
+}
+
+/**
+ * Sprint 46.1 — the artifact a "*DraftPanel" should treat as "current": the true latest
+ * version, UNLESS it was discarded, in which case this falls back to the latest APPROVED
+ * version instead of dead-ending on "nothing here, generate from scratch." An abandoned
+ * regenerate-then-discard on a role that was previously approved must not make that earlier
+ * approved output disappear from the UI — see useDraftPanel.ts and AIEngineeringTeamPanel.tsx,
+ * the only callers. A genuinely pending (not yet discarded) draft is left untouched here —
+ * that's still real, unfinished human review work, not something to paper over.
+ */
+export function getResumableArtifact(artifacts: ProjectArtifact[], type: string): ProjectArtifact | undefined {
+  const latest = getLatestArtifact(artifacts, type);
+
+  if (latest && latest.status !== 'discarded') {
+    return latest;
+  }
+
+  return getLatestApprovedArtifact(artifacts, type) ?? latest;
+}
+
+/**
  * Sprint 16 — "read the latest artifact of `type`, but only if it's been
  * approved" — the exact check every gated AI role needs before it can run
  * (Database Designer gating on an approved Architecture Draft, UI/UX
@@ -136,15 +189,20 @@ export function parseArtifactContent<T>(content: string): T | undefined {
  * databaseDesignerEngine.ts so it's defined once rather than re-implemented
  * per engine. Returns undefined for "doesn't exist yet", "still a draft",
  * and "discarded" alike — callers only care about the approved case.
+ *
+ * Sprint 46.1 — now backed by `getLatestApprovedArtifact` rather than
+ * `getLatestArtifact` + a status check, so a role that's genuinely approved doesn't lose its
+ * gating content just because a newer, still-pending or discarded regenerate attempt also
+ * exists for the same role (see that function's comment for why the two used to differ).
  */
 export function getApprovedArtifactContent<T>(artifacts: ProjectArtifact[], type: string): T | undefined {
-  const latest = getLatestArtifact(artifacts, type);
+  const approved = getLatestApprovedArtifact(artifacts, type);
 
-  if (!latest || latest.status !== 'approved') {
+  if (!approved) {
     return undefined;
   }
 
-  return parseArtifactContent<T>(latest.content);
+  return parseArtifactContent<T>(approved.content);
 }
 
 /** Sprint 14 — shared timestamp formatting for artifact status lines. */

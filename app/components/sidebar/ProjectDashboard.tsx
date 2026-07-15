@@ -7,10 +7,12 @@ import {
   getRoadmapItemStatus,
   getProjectKnowledge,
   getTaskReview,
+  hydrateProjectData,
   hydrateWorkspaceState,
   updateProjectWorkspaceState,
 } from '~/lib/stores/projects';
 import { getProjectArtifacts } from '~/lib/stores/projects';
+import { shouldHydrateProjectData } from '~/lib/projects/hydration';
 import type { Project } from '~/lib/stores/projects';
 import { PROJECT_COLOR_CLASSES } from './ProjectListItem';
 import { getProjectTypeDefinition } from '~/lib/project-types/projectTypeRegistry';
@@ -469,7 +471,17 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
 
     setActiveTab((project.workspaceState?.lastSelectedTab as DashboardTabId | undefined) ?? 'overview');
     hydrateWorkspaceState(project.id);
-  }, [open, project?.id]);
+
+    /*
+     * Sprint 46 — Quick Build has its own restore path (workspaceResumeOrchestrator.ts) and
+     * must stay untouched; only guided_engineering projects have role outputs/tasks/reviews
+     * to restore into `project.artifacts` etc. before the AI Engineering Team panel decides
+     * which role to resume from (see useAutoEngineeringPipeline.ts).
+     */
+    if (shouldHydrateProjectData(project.projectType)) {
+      hydrateProjectData(project.id);
+    }
+  }, [open, project?.id, project?.projectType]);
 
   /*
    * Sprint 38.5 — `EngineeringStageSection` still accepts a `sectionRef`/`navSectionId`

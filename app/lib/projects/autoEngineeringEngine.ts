@@ -1,5 +1,5 @@
 import { getProjectArtifacts, type Project } from '~/lib/stores/projects';
-import { ARTIFACT_TYPES, getLatestArtifact, type ProjectArtifact } from './artifacts';
+import { ARTIFACT_TYPES, getLatestApprovedArtifact, type ProjectArtifact } from './artifacts';
 import type { ParsedDraftResult } from './draftParsing';
 import { solutionArchitectEngine } from './solutionArchitectEngine';
 import { databaseDesignerEngine } from './databaseDesignerEngine';
@@ -141,25 +141,31 @@ export const AUTO_ENGINEERING_ROLES: AutoEngineeringRole[] = [
 
 /**
  * The single next role the autonomous pipeline should run: the first one
- * (in fixed order) whose latest artifact isn't `approved` yet and whose own
+ * (in fixed order) that has no approved artifact yet and whose own
  * gate (`canGenerate`) is currently satisfied. Returns undefined once every
  * role is approved, or when the next unapproved role's gate isn't satisfied
  * yet (which in practice only happens transiently, one store write behind
  * the previous role's approval).
+ *
+ * Sprint 46.1 — live-verified bugfix: checks `getLatestApprovedArtifact` (does an approved
+ * version exist at all), not "is the numerically-latest version approved." A hydrated
+ * project's artifact array can contain a role's approved version alongside a newer, abandoned
+ * draft/discarded regenerate attempt (see artifacts.ts's getLatestApprovedArtifact comment) —
+ * the old "latest version's status" check saw that newer non-approved row and concluded the
+ * role needed regenerating, even though a perfectly good approved output already existed.
  */
 export function getNextAutoRole(project: Project): AutoEngineeringRole | undefined {
   const artifacts = getProjectArtifacts(project);
 
-  return AUTO_ENGINEERING_ROLES.find((role) => {
-    const latest = getLatestArtifact(artifacts, role.artifactType);
-    return latest?.status !== 'approved' && role.canGenerate(project);
-  });
+  return AUTO_ENGINEERING_ROLES.find(
+    (role) => !getLatestApprovedArtifact(artifacts, role.artifactType) && role.canGenerate(project),
+  );
 }
 
-/** True once every role in the pipeline has an approved artifact. */
+/** True once every role in the pipeline has an approved artifact. See getNextAutoRole's comment for why this checks `getLatestApprovedArtifact`, not the numerically-latest version's status. */
 export function isAutoEngineeringComplete(project: Project): boolean {
   const artifacts = getProjectArtifacts(project);
-  return AUTO_ENGINEERING_ROLES.every((role) => getLatestArtifact(artifacts, role.artifactType)?.status === 'approved');
+  return AUTO_ENGINEERING_ROLES.every((role) => getLatestApprovedArtifact(artifacts, role.artifactType) !== undefined);
 }
 
 /**

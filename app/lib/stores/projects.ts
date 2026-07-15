@@ -21,8 +21,10 @@ import { DEFAULT_WORKSPACE_STATE, type ProjectWorkspaceState } from '~/lib/proje
 import { createProjectRepository } from '~/lib/builders-db/repositories/projectsRepository';
 import { buildersDbRepository, isBuildersDbAvailable } from '~/lib/builders-db/repositories/buildersDbRepository';
 import { workspaceStateRepository } from '~/lib/builders-db/repositories/workspaceStateRepository';
+import { checkBuildersDbConnection } from '~/lib/builders-db/client';
 import type { RoleOutputGenerationType } from '~/lib/builders-db/buildersDbTypes';
 import { getCurrentSession } from '~/lib/auth/authClient';
+import { invalidateProjectHydration, setProjectHydrationState } from '~/lib/projects/hydration';
 
 /**
  * Project data model — Sprint 1 (UI-only).
@@ -416,6 +418,184 @@ export async function hydrateWorkspaceState(projectId: string): Promise<void> {
   }
 }
 
+/** Transient in-flight guard (not the reactive hydration state — see hydration.ts) purely to stop two near-simultaneous triggers (ProjectDashboard's open effect and the pipeline hook's own not_started check) from firing duplicate concurrent fetches for the same user+project. */
+const inFlightHydrations = new Set<string>();
+
+/**
+ * Sprint 46 — atomic per-project hydration from BuildersDB. Unlike `hydrateWorkspaceState`
+ * (workspace state only) and `hydrateProjectsFromBuildersDb` (project metadata only, bulk,
+ * startup), this restores everything the autonomous pipeline and dashboard need to resume
+ * correctly — role output artifacts (+ version history via their distinct ids), requirements/
+ * knowledge, task status/notes, task reviews, and workspace state — into ONE
+ * `projectsStore.set()` call, so nothing downstream (`getNextAutoRole`, `getProjectArtifacts`,
+ * ...) ever observes a partially-hydrated project.
+ *
+ * Merge rules (Sprint 46 design report):
+ *  - BuildersDB role outputs, if any exist, are authoritative and replace local artifacts.
+ *  - If BuildersDB legitimately returns zero role outputs but local artifacts already exist,
+ *    local is KEPT (never erased) and a reconciliation warning is logged — a project that has
+ *    completed work sitting in the browser must never look "new" and restart its pipeline.
+ *  - Tasks/reviews/knowledge/workspace state merge remote-wins-per-key onto local, the same
+ *    reasoning as every other mirror-then-merge path in this file.
+ *  - `checkBuildersDbConnection()` distinguishes "BuildersDB reachable but legitimately empty"
+ *    from "BuildersDB unreachable right now" — the two must never be confused, since the
+ *    second must never present as a fresh, never-generated project (see
+ *    `useAutoEngineeringPipeline.ts`, which blocks automatic generation on a `failed` status
+ *    with no local artifacts rather than treating it as "nothing to resume").
+ *
+ * Hydration state (not_started/loading/ready/failed) is tracked per `${userId}:${projectId}`
+ * in app/lib/projects/hydration.ts — read reactively by the pipeline hook, and invalidated on
+ * sign-out/user-change (AuthProvider) and project deletion (deleteProject below).
+ */
+export async function hydrateProjectData(projectId: string): Promise<void> {
+  const actor = await getCurrentActor();
+  const userId = actor?.id ?? null;
+  const inFlightKey = `${userId ?? 'anonymous'}:${projectId}`;
+
+  if (inFlightHydrations.has(inFlightKey)) {
+    return;
+  }
+
+  if (!isBuildersDbAvailable()) {
+    setProjectHydrationState(userId, projectId, {
+      status: 'ready',
+      userId,
+      hydratedAt: new Date().toISOString(),
+      error: null,
+      usedLocalFallback: true,
+    });
+    return;
+  }
+
+  inFlightHydrations.add(inFlightKey);
+  setProjectHydrationState(userId, projectId, { status: 'loading', userId, error: null });
+
+  try {
+    const reachable = await checkBuildersDbConnection();
+
+    if (!reachable) {
+      throw new Error('BuildersDB is configured but not reachable right now.');
+    }
+
+    const [remoteArtifacts, remoteProject, remoteTasks, remoteReviews, remoteWorkspaceState] = await Promise.all([
+      buildersDbRepository.getRoleOutputsForProject(projectId),
+      buildersDbRepository.getProjectById(projectId),
+      buildersDbRepository.getProjectTasks(projectId),
+      buildersDbRepository.getTaskReviews(projectId),
+      workspaceStateRepository.getWorkspaceState(projectId),
+    ]);
+
+    const local = projectsStore.get().find((project) => project.id === projectId);
+
+    if (!local) {
+      // Project was removed from the store mid-fetch (e.g. deleteProject) — nothing to merge into.
+      setProjectHydrationState(userId, projectId, {
+        status: 'ready',
+        userId,
+        hydratedAt: new Date().toISOString(),
+        error: null,
+        usedLocalFallback: false,
+      });
+      return;
+    }
+
+    /*
+     * Sprint 46.1 — live-verified bugfix: dedupe by the COMPOUND (artifact_id, version) key,
+     * matching BuildersDB's own upsert conflict target — NOT by artifact_id alone. The manual
+     * "Regenerate" flow (useDraftPanel.ts's runGeneration) intentionally reuses the SAME
+     * artifact_id across versions, bumping only `version` — exactly BuildersDB's "one row per
+     * version" model (see buildersDbTypes.ts). Deduping by artifact_id alone treated every
+     * version sharing an id as a duplicate write to collapse, silently discarding an earlier
+     * APPROVED version whenever a later regenerate attempt (draft or discarded) for the same
+     * artifact_id had a newer `updatedAt` — exactly the live-reproduced QA/DevOps resume bug.
+     * A genuine duplicate-write race for the IDENTICAL (artifact_id, version) pair is still
+     * collapsed here (last write, by updatedAt, wins); distinct versions never are.
+     */
+    const byArtifactVersion = new Map<string, ProjectArtifact>();
+
+    for (const artifact of remoteArtifacts) {
+      const key = `${artifact.id}:${artifact.version ?? 0}`;
+      const existing = byArtifactVersion.get(key);
+
+      if (!existing || new Date(artifact.updatedAt).getTime() >= new Date(existing.updatedAt).getTime()) {
+        byArtifactVersion.set(key, artifact);
+      }
+    }
+
+    const dedupedRemoteArtifacts = Array.from(byArtifactVersion.values());
+    const localArtifacts = local.artifacts ?? [];
+
+    let mergedArtifacts: ProjectArtifact[];
+    let usedLocalFallback = false;
+
+    if (dedupedRemoteArtifacts.length > 0) {
+      mergedArtifacts = dedupedRemoteArtifacts;
+    } else if (localArtifacts.length > 0) {
+      mergedArtifacts = localArtifacts;
+      usedLocalFallback = true;
+      console.warn(
+        `[BuildersDB] hydrateProjectData(${projectId}): BuildersDB returned no role outputs but ${localArtifacts.length} local artifact(s) exist — keeping local artifacts rather than erasing completed work. This may mean this project's mirror write hasn't landed in BuildersDB yet.`,
+      );
+    } else {
+      mergedArtifacts = [];
+    }
+
+    const taskStatus = { ...local.taskStatus };
+    const taskNotes = { ...local.taskNotes };
+
+    for (const task of remoteTasks) {
+      if (task.status !== undefined) {
+        taskStatus[task.taskId] = task.status;
+      }
+
+      if (task.notes !== undefined) {
+        taskNotes[task.taskId] = task.notes;
+      }
+    }
+
+    const taskReview = { ...local.taskReview };
+
+    for (const review of remoteReviews) {
+      taskReview[review.taskId] = review;
+    }
+
+    const merged: Project = {
+      ...local,
+      artifacts: mergedArtifacts,
+      taskStatus,
+      taskNotes,
+      taskReview,
+      projectKnowledge: remoteProject?.projectKnowledge ?? local.projectKnowledge,
+      roadmapStatus: remoteProject?.roadmapStatus ?? local.roadmapStatus,
+      workspaceState: remoteWorkspaceState ?? local.workspaceState,
+    };
+
+    const nextProjects = projectsStore.get().map((project) => (project.id === projectId ? merged : project));
+    projectsStore.set(nextProjects);
+    projectRepository.saveProjects(nextProjects);
+
+    setProjectHydrationState(userId, projectId, {
+      status: 'ready',
+      userId,
+      hydratedAt: new Date().toISOString(),
+      error: null,
+      usedLocalFallback,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'BuildersDB hydration failed.';
+    console.error(`[BuildersDB] hydrateProjectData(${projectId}) failed:`, error);
+    setProjectHydrationState(userId, projectId, {
+      status: 'failed',
+      userId,
+      hydratedAt: null,
+      error: message,
+      usedLocalFallback: false,
+    });
+  } finally {
+    inFlightHydrations.delete(inFlightKey);
+  }
+}
+
 /**
  * Sprint 38.5 — updates one project's workspace state, both in-memory (instant, so the UI
  * reacts immediately — e.g. flipping "Generate Application" to "Continue Development" the
@@ -616,6 +796,7 @@ export function deleteProject(projectId: string): void {
 
   projectsStore.set(projectsStore.get().filter((candidate) => candidate.id !== projectId));
   projectRepository.deleteProject(projectId);
+  invalidateProjectHydration(projectId);
 
   mirrorToBuildersDb(async () => {
     const actor = await getCurrentActor();

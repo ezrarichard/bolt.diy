@@ -3,7 +3,7 @@ import { toast } from 'react-toastify';
 import { addProjectArtifact, getProjectArtifacts, updateProjectArtifact, type Project } from '~/lib/stores/projects';
 import {
   ARTIFACT_STATUS_META,
-  getLatestArtifact,
+  getResumableArtifact,
   parseArtifactContent,
   type ProjectArtifact,
 } from '~/lib/projects/artifacts';
@@ -93,7 +93,13 @@ export function useDraftPanel<TDraft extends object, TContext>(
   const { generate, isGenerating } = useGenerateText();
 
   const canGenerate = canGenerateFn ? canGenerateFn(project) : true;
-  const latest = getLatestArtifact(getProjectArtifacts(project), artifactType);
+
+  /*
+   * Sprint 46.1 — live-verified bugfix: falls back to the latest APPROVED version when the
+   * true-latest version was discarded, instead of dead-ending on "Generate Draft" as if this
+   * role had never produced anything. See getResumableArtifact's comment in artifacts.ts.
+   */
+  const latest = getResumableArtifact(getProjectArtifacts(project), artifactType);
   const latestDraft = latest ? parseArtifactContent<TDraft>(latest.content) : undefined;
   const isPendingApproval = latest?.status === 'draft';
   const isPreviewing = Boolean(latestDraft && (latest?.status === 'draft' || latest?.status === 'approved'));

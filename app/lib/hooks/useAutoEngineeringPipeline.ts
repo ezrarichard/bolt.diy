@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useStore } from '@nanostores/react';
 import { toast } from 'react-toastify';
 import {
   addProjectArtifact,
   getProjectArtifacts,
   getProjectKnowledge,
+  hydrateProjectData,
   projectsStore,
   updateProjectArtifact,
   type Project,
@@ -15,6 +17,9 @@ import { generateRoleWithRecovery, type RoleGenerationFailureKind } from '~/lib/
 import { buildRoleContextBlock } from '~/lib/ai/context/buildersDbContextProvider';
 import { getRoleGenerateOptions } from '~/lib/generation-profiles/generationProfileRepository';
 import { createScopedLogger } from '~/utils/logger';
+import { projectHydrationStore, readHydrationState } from '~/lib/projects/hydration';
+import { resolvePipelineHydrationGate } from '~/lib/projects/pipelineHydrationGate';
+import { useAuth } from '~/lib/auth/AuthProvider';
 import { useGenerateText } from './useGenerateText';
 
 const logger = createScopedLogger('autoEngineeringPipeline');
@@ -49,10 +54,17 @@ const logger = createScopedLogger('autoEngineeringPipeline');
 const runningProjectIds = new Set<string>();
 
 export interface AutoEngineeringPipelineFailure {
-  roleId: AutoEngineeringRoleId;
+  /** Undefined for a 'hydration' failure — it happens before any role has been picked. */
+  roleId?: AutoEngineeringRoleId;
 
-  /** Sprint 44 — distinguishes a truncated/interrupted response from a genuinely bad one, so the UI can show the right business-friendly message. */
-  kind: RoleGenerationFailureKind;
+  /**
+   * Sprint 44 — distinguishes a truncated/interrupted response from a genuinely bad one, so
+   * the UI can show the right business-friendly message. Sprint 46 adds 'hydration': BuildersDB
+   * hydration failed AND this project has no local artifacts to fall back on, so automatic
+   * generation is blocked rather than risking a full restart of a project that may already have
+   * completed work sitting in BuildersDB.
+   */
+  kind: RoleGenerationFailureKind | 'hydration';
   message: string;
 }
 
@@ -75,7 +87,23 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
   const generateRef = useRef(generate);
   generateRef.current = generate;
 
-  const retry = useCallback(() => setRetryNonce((nonce) => nonce + 1), []);
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
+
+  /** Sprint 46 — subscribed so a hydration status change (loading -> ready/failed) re-enters the effect below even when `project`/`retryNonce` haven't changed themselves (a 'failed' hydration never touches `projectsStore`, only this map). */
+  const hydrationMap = useStore(projectHydrationStore);
+
+  const failureRef = useRef(failure);
+  failureRef.current = failure;
+
+  const retry = useCallback(() => {
+    if (failureRef.current?.kind === 'hydration') {
+      // Re-attempt the BuildersDB fetch itself; the effect below re-enters once the store updates.
+      hydrateProjectData(project.id);
+    }
+
+    setRetryNonce((nonce) => nonce + 1);
+  }, [project.id]);
 
   const isMountedRef = useRef(true);
 
@@ -98,8 +126,36 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
       return;
     }
 
+    /*
+     * Sprint 46 — never decide "which role to run next" from a project whose BuildersDB data
+     * (role outputs in particular) hasn't been restored into `projectsStore` yet. `getNextAutoRole`
+     * is a pure function of `project.artifacts`, so reading it before hydration finishes would
+     * see every role as unapproved and restart the whole pipeline from Solution Architect —
+     * exactly the Sprint 46 resume bug. See pipelineHydrationGate.ts for the decision table.
+     */
+    const hydrationState = readHydrationState(hydrationMap, userId, projectId);
     const freshAtStart = projectsStore.get().find((candidate) => candidate.id === projectId) ?? project;
+    const gate = resolvePipelineHydrationGate(hydrationState, getProjectArtifacts(freshAtStart).length);
 
+    if (gate.action === 'trigger-hydration') {
+      // Safety net — normally ProjectDashboard's own open effect already triggered this.
+      hydrateProjectData(projectId);
+      return;
+    }
+
+    if (gate.action === 'wait') {
+      return;
+    }
+
+    if (gate.action === 'block') {
+      if (isMountedRef.current) {
+        setFailure({ kind: 'hydration', message: gate.message });
+      }
+
+      return;
+    }
+
+    // gate.action === 'proceed': hydration is 'ready', or 'failed' with local artifacts to fall back on.
     if (!getNextAutoRole(freshAtStart)) {
       return;
     }
@@ -212,8 +268,15 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
       }
     })();
 
-    // Sprint 44 — `retryNonce` re-enters the effect after a manual "Retry" click even though `project` itself hasn't changed; getNextAutoRole below re-derives the failed (still-unapproved) role from the store, so a retry re-runs only that stage.
-  }, [project, retryNonce]);
+    /*
+     * Sprint 44 — `retryNonce` re-enters the effect after a manual "Retry" click even though
+     * `project` itself hasn't changed; getNextAutoRole below re-derives the failed (still-
+     * unapproved) role from the store, so a retry re-runs only that stage.
+     * Sprint 46 — `hydrationMap`/`userId` re-enter the effect the moment hydration finishes
+     * (loading -> ready/failed), which a 'failed' result alone wouldn't otherwise do (it never
+     * touches `projectsStore`, only the hydration map).
+     */
+  }, [project, retryNonce, hydrationMap, userId]);
 
   return { isRunning, currentRoleId, failure, retry };
 }
