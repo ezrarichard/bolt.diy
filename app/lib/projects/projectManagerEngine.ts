@@ -2,7 +2,7 @@ import { blueprintEngine } from '~/lib/blueprints';
 import { executionEngine, type BlockingTask, type ExecutionProgress } from './executionEngine';
 import { reviewEngine, type ReviewSummary } from './reviewEngine';
 import { isRequirementsCaptured } from './knowledge';
-import { ARTIFACT_TYPES, formatArtifactTimestamp, getLatestArtifact, type ProjectArtifact } from './artifacts';
+import { ARTIFACT_TYPES, formatArtifactTimestamp, getResumableArtifact, type ProjectArtifact } from './artifacts';
 import { getProjectArtifacts, getProjectKnowledge, getRoadmapItemStatus, type Project } from '~/lib/stores/projects';
 
 /**
@@ -133,7 +133,13 @@ function resolveStageStatus(
   artifacts: ProjectArtifact[],
   config: (typeof STAGE_CONFIGS)[number],
 ): EngineeringStageStatus {
-  const latest = getLatestArtifact(artifacts, config.artifactType);
+  /*
+   * Sprint 46.2 — `getResumableArtifact` (not `getLatestArtifact`) so an optional
+   * regenerate-then-discard of a stage's draft (Requirements included — see
+   * requirementsSync.ts) never makes an already-approved stage look incomplete again just
+   * because a newer, discarded attempt happens to have a higher version number.
+   */
+  const latest = getResumableArtifact(artifacts, config.artifactType);
 
   if (!latest) {
     return {

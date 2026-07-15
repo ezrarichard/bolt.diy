@@ -51,11 +51,14 @@ vi.mock('~/lib/builders-db/repositories/workspaceStateRepository', () => ({
   },
 }));
 
-const { hydrateProjectData, projectsStore } = await import('./projects');
+const { hydrateProjectData, updateProjectKnowledge, projectsStore } = await import('./projects');
 const { getProjectHydrationState, projectHydrationStore } = await import('~/lib/projects/hydration');
+const { getLatestArtifact, getResumableArtifact, ARTIFACT_TYPES } = await import('~/lib/projects/artifacts');
+const { syncedRequirementsArtifactId } = await import('~/lib/projects/requirementsSync');
 
 import type { Project } from './projects';
 import type { ProjectArtifact } from '~/lib/projects/artifacts';
+import type { ProjectKnowledge } from '~/lib/projects/knowledge';
 
 function artifact(overrides: Partial<ProjectArtifact> & Pick<ProjectArtifact, 'id' | 'type'>): ProjectArtifact {
   return {
@@ -281,5 +284,118 @@ describe('hydrateProjectData', () => {
     await Promise.all([first, second]);
 
     expect(getRoleOutputsForProjectMock).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Sprint 46.2 — a project whose Requirements were only ever captured through the manual
+   * dialog (project.projectKnowledge) has no requirements-draft artifact at all. Hydration
+   * must self-heal this by synthesizing one locally (no LLM call), using a deterministic id so
+   * repeated reopens never duplicate it.
+   */
+  const CAPTURED_KNOWLEDGE: ProjectKnowledge = {
+    projectVision: 'A modern, mobile-friendly website for Riverside Dental Clinic.',
+    targetUsers: 'Local residents seeking dental care.',
+    coreFeatures: ['Service pages', 'Doctor profiles'],
+  };
+
+  it('self-heals a missing requirements-draft artifact from captured projectKnowledge during hydration', async () => {
+    projectsStore.set([baseProject({ projectKnowledge: CAPTURED_KNOWLEDGE })]);
+    getProjectByIdMock.mockResolvedValue(baseProject({ projectKnowledge: CAPTURED_KNOWLEDGE }));
+
+    await hydrateProjectData('proj-1');
+
+    const project = projectsStore.get().find((p) => p.id === 'proj-1')!;
+    const requirementsArtifact = getLatestArtifact(project.artifacts ?? [], ARTIFACT_TYPES.REQUIREMENTS_DRAFT);
+
+    expect(requirementsArtifact).toBeDefined();
+    expect(requirementsArtifact?.status).toBe('approved');
+    expect(requirementsArtifact?.id).toBe(syncedRequirementsArtifactId('proj-1'));
+  });
+
+  it('does not duplicate the synced requirements artifact on repeated reopen', async () => {
+    projectsStore.set([baseProject({ projectKnowledge: CAPTURED_KNOWLEDGE })]);
+    getProjectByIdMock.mockResolvedValue(baseProject({ projectKnowledge: CAPTURED_KNOWLEDGE }));
+
+    await hydrateProjectData('proj-1');
+    await hydrateProjectData('proj-1');
+    await hydrateProjectData('proj-1');
+
+    const project = projectsStore.get().find((p) => p.id === 'proj-1')!;
+    const matching = (project.artifacts ?? []).filter((a) => a.type === ARTIFACT_TYPES.REQUIREMENTS_DRAFT);
+
+    expect(matching).toHaveLength(1);
+    expect(matching[0].version).toBe(1);
+  });
+
+  it('never overwrites a real, independently-generated Requirements Draft artifact', async () => {
+    const realDraft: ProjectArtifact = {
+      id: 'artifact-real-requirements',
+      taskId: 'requirements',
+      title: 'Requirements Draft v1',
+      type: ARTIFACT_TYPES.REQUIREMENTS_DRAFT,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      status: 'draft',
+      content: '{"businessVision":"real AI content"}',
+      generatedBy: 'AI Business Analyst',
+      version: 1,
+    };
+    projectsStore.set([baseProject({ projectKnowledge: CAPTURED_KNOWLEDGE, artifacts: [realDraft] })]);
+    getRoleOutputsForProjectMock.mockResolvedValue([realDraft]);
+    getProjectByIdMock.mockResolvedValue(baseProject({ projectKnowledge: CAPTURED_KNOWLEDGE }));
+
+    await hydrateProjectData('proj-1');
+
+    const project = projectsStore.get().find((p) => p.id === 'proj-1')!;
+    const matching = (project.artifacts ?? []).filter((a) => a.type === ARTIFACT_TYPES.REQUIREMENTS_DRAFT);
+
+    expect(matching).toHaveLength(1);
+    expect(matching[0]).toEqual(realDraft);
+  });
+
+  it('saving manual Requirements & Knowledge synthesizes/updates the approved artifact without an Anthropic call', async () => {
+    projectsStore.set([baseProject()]);
+
+    updateProjectKnowledge('proj-1', CAPTURED_KNOWLEDGE);
+
+    const project = projectsStore.get().find((p) => p.id === 'proj-1')!;
+    const requirementsArtifact = getLatestArtifact(project.artifacts ?? [], ARTIFACT_TYPES.REQUIREMENTS_DRAFT);
+
+    expect(requirementsArtifact?.status).toBe('approved');
+    expect(requirementsArtifact?.id).toBe(syncedRequirementsArtifactId('proj-1'));
+
+    const parsedContent = JSON.parse(requirementsArtifact!.content);
+    expect(parsedContent.businessVision).toBe(CAPTURED_KNOWLEDGE.projectVision);
+  });
+
+  it('getResumableArtifact keeps Requirements approved even if the synced artifact is later discarded and no other version exists', async () => {
+    projectsStore.set([baseProject()]);
+    updateProjectKnowledge('proj-1', CAPTURED_KNOWLEDGE);
+
+    let project = projectsStore.get().find((p) => p.id === 'proj-1')!;
+    expect(getResumableArtifact(project.artifacts ?? [], ARTIFACT_TYPES.REQUIREMENTS_DRAFT)?.status).toBe('approved');
+
+    // Re-saving with the exact same knowledge is a no-op write (idempotent) — still exactly one artifact.
+    updateProjectKnowledge('proj-1', CAPTURED_KNOWLEDGE);
+    project = projectsStore.get().find((p) => p.id === 'proj-1')!;
+
+    const matching = (project.artifacts ?? []).filter((a) => a.type === ARTIFACT_TYPES.REQUIREMENTS_DRAFT);
+    expect(matching).toHaveLength(1);
+  });
+
+  it('Quick Build projects are never affected by requirements syncing', async () => {
+    projectsStore.set([
+      baseProject({
+        id: 'proj-qb',
+        projectType: 'quick_build',
+        createdFrom: 'quick_build',
+        projectKnowledge: CAPTURED_KNOWLEDGE,
+      }),
+    ]);
+
+    await hydrateProjectData('proj-qb');
+
+    const project = projectsStore.get().find((p) => p.id === 'proj-qb')!;
+    expect(project.artifacts ?? []).toHaveLength(0);
   });
 });

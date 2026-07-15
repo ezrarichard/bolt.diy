@@ -11,6 +11,8 @@ import {
 } from './authClient';
 import { ensureUserProfile, fetchUserProfile, updateUserProfile, type ProfileUpdateInput } from './profileClient';
 import type { AuthState } from './authTypes';
+import { invalidateAllProjectHydration } from '~/lib/projects/hydration';
+import { shouldInvalidateProjectHydration } from './authHydrationInvalidation';
 
 interface AuthContextValue extends AuthState {
   signIn: (email: string, password: string) => Promise<string | null>;
@@ -52,6 +54,9 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: 'loading', user: null, profile: null });
   const hasHydrated = useRef(false);
+
+  /** Sprint 46 — last authenticated user id seen, so the effect below can tell "still the same user" apart from "a different user just signed in without an explicit sign-out in between" (both must invalidate every project's BuildersDB hydration state — see app/lib/projects/hydration.ts). */
+  const lastHydratedUserIdRef = useRef<string | null>(null);
 
   const loadProfileFor = async (rawUser: SupabaseUser) => {
     const profile = await ensureUserProfile(rawUser);
@@ -98,6 +103,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    /*
+     * Sprint 46 — a signed-in user's per-project BuildersDB hydration state (see
+     * app/lib/projects/hydration.ts) is only valid for the user who produced it. Covers BOTH a
+     * genuine sign-out -> sign-in cycle and a same-tab account switch (a different user id
+     * becoming authenticated with no intervening 'unauthenticated' state) — see
+     * authHydrationInvalidation.ts's decision table — so `useAutoEngineeringPipeline` never
+     * resumes (or blocks) a project using another user's hydration result.
+     */
+    if (state.status === 'authenticated' || state.status === 'unauthenticated') {
+      if (shouldInvalidateProjectHydration(lastHydratedUserIdRef.current, state.status, state.user?.id ?? null)) {
+        invalidateAllProjectHydration();
+      }
+
+      lastHydratedUserIdRef.current = state.status === 'authenticated' ? (state.user?.id ?? null) : null;
+    }
+
     if (state.status === 'authenticated' && !hasHydrated.current) {
       hasHydrated.current = true;
       import('~/lib/stores/projects').then(({ hydrateProjectsFromBuildersDb }) => {
@@ -108,7 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (state.status === 'unauthenticated') {
       hasHydrated.current = false;
     }
-  }, [state.status]);
+  }, [state.status, state.user?.id]);
 
   const value: AuthContextValue = {
     ...state,

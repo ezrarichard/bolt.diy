@@ -8,8 +8,10 @@ import {
 } from '~/lib/project-types/projectTypeRegistry';
 import type { RoadmapItemStatus } from '~/lib/blueprints';
 import type { ProjectKnowledge } from '~/lib/projects/knowledge';
+import { isRequirementsCaptured } from '~/lib/projects/knowledge';
 import type { ProjectTaskStatus } from '~/lib/projects/executionEngine';
-import type { ProjectArtifact } from '~/lib/projects/artifacts';
+import { ARTIFACT_TYPES, getLatestArtifact, type ProjectArtifact } from '~/lib/projects/artifacts';
+import { createSyncedRequirementsArtifact, isSyncedRequirementsArtifact } from '~/lib/projects/requirementsSync';
 import type {
   ReviewDecision,
   TaskHistoryEvent,
@@ -457,6 +459,12 @@ export async function hydrateProjectData(projectId: string): Promise<void> {
   }
 
   if (!isBuildersDbAvailable()) {
+    const localOnly = projectsStore.get().find((project) => project.id === projectId);
+
+    if (localOnly) {
+      syncRequirementsArtifact(projectId, localOnly);
+    }
+
     setProjectHydrationState(userId, projectId, {
       status: 'ready',
       userId,
@@ -464,6 +472,7 @@ export async function hydrateProjectData(projectId: string): Promise<void> {
       error: null,
       usedLocalFallback: true,
     });
+
     return;
   }
 
@@ -573,6 +582,15 @@ export async function hydrateProjectData(projectId: string): Promise<void> {
     const nextProjects = projectsStore.get().map((project) => (project.id === projectId ? merged : project));
     projectsStore.set(nextProjects);
     projectRepository.saveProjects(nextProjects);
+
+    /*
+     * Sprint 46.2 — self-heal: a project hydrated from BuildersDB may have captured
+     * projectKnowledge but no requirements-draft artifact at all (see requirementsSync.ts's
+     * comment) if Requirements was only ever captured through the manual dialog. Runs AFTER
+     * the merge above so it sees the final, authoritative artifact list — deterministic id
+     * means this never creates a duplicate on repeated reopens.
+     */
+    syncRequirementsArtifact(projectId, merged);
 
     setProjectHydrationState(userId, projectId, {
       status: 'ready',
@@ -1163,6 +1181,61 @@ export function getProjectKnowledge(project: Project): ProjectKnowledge | undefi
 }
 
 /**
+ * Sprint 46.2 — keeps a locally-synthesized, always-approved Requirements Draft artifact in
+ * sync with captured Project Knowledge, entirely without an LLM call. See
+ * app/lib/projects/requirementsSync.ts for the derivation.
+ *
+ * `projectManagerEngine.ts` (Overview/Project Details/readiness %/next action) treats
+ * Requirements exactly like every other engineering stage — "done" means an approved
+ * `requirements-draft` artifact exists — but the manual Requirements & Knowledge dialog
+ * (ProjectRequirementsDialog.tsx) only ever writes `project.projectKnowledge`, never an
+ * artifact. This keeps the artifact-based view honest without touching any of those
+ * consumers: whenever knowledge is captured and no artifact exists yet, one is synthesized
+ * from it; if a REAL AI-generated Requirements Draft already exists (a different, independently
+ * minted id, from RequirementsDraftPanel's "Generate Requirements Draft" flow), it is left
+ * completely alone and remains authoritative.
+ *
+ * Always the same deterministic artifact id for a given project (see
+ * syncedRequirementsArtifactId), so calling this on every knowledge save AND once during
+ * hydration's self-heal (see hydrateProjectData) never creates a duplicate artifact or a new
+ * version — it's the same (artifact_id, version 1) upsert target every time. Guarded to
+ * guided_engineering projects; Quick Build never calls `updateProjectKnowledge` at all, but
+ * this is a cheap, explicit second safety net.
+ */
+function syncRequirementsArtifact(projectId: string, project: Project): void {
+  if (project.projectType !== 'guided_engineering') {
+    return;
+  }
+
+  const knowledge = project.projectKnowledge;
+
+  if (!isRequirementsCaptured(knowledge)) {
+    return;
+  }
+
+  const artifacts = getProjectArtifacts(project);
+  const existing = getLatestArtifact(artifacts, ARTIFACT_TYPES.REQUIREMENTS_DRAFT);
+
+  if (existing && !isSyncedRequirementsArtifact(existing, projectId)) {
+    // A real AI-generated Requirements Draft already exists — it stays authoritative.
+    return;
+  }
+
+  const synced = createSyncedRequirementsArtifact(projectId, knowledge!);
+
+  if (!existing) {
+    addProjectArtifact(projectId, synced, 'automatic');
+    return;
+  }
+
+  if (existing.content === synced.content && existing.status === 'approved') {
+    return; // nothing actually changed — avoid a needless write/activity entry on every save or reopen
+  }
+
+  updateProjectArtifact(projectId, existing.id, { content: synced.content, status: 'approved' }, 'automatic');
+}
+
+/**
  * Phase 2 Sprint 9 — merge partial Project Knowledge into a project and
  * persist it via the ProjectRepository (see app/lib/builders-db/), same
  * pattern as setRoadmapItemStatus/addProject. A shallow merge is
@@ -1189,6 +1262,7 @@ export function updateProjectKnowledge(projectId: string, partialKnowledge: Part
 
   if (updated) {
     mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
+    syncRequirementsArtifact(projectId, updated);
   }
 }
 
