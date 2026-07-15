@@ -10,6 +10,8 @@ import { classNames } from '~/utils/classNames';
 import { useStore } from '@nanostores/react';
 import { projectsStore, currentProjectIdStore, isProjectDashboardOpenStore } from '~/lib/stores/projects';
 import { sidebarCollapsedStore, setSidebarCollapsed, toggleSidebarCollapsed } from '~/lib/stores/sidebar';
+import { workbenchStore } from '~/lib/stores/workbench';
+import { shouldHideSidebarForWorkbench } from '~/lib/stores/workbenchViewVisibility';
 import { useAuth } from '~/lib/auth/AuthProvider';
 import { firstNameFromFullName } from '~/lib/auth/deriveName';
 import { BuildersLogoMark } from '~/components/branding/BuildersLogo';
@@ -106,6 +108,7 @@ export const Menu = () => {
   const isMobile = useViewport(MOBILE_BREAKPOINT_PX);
   const [mobileOpen, setMobileOpen] = useState(false);
   const collapsed = useStore(sidebarCollapsedStore);
+  const showWorkbench = useStore(workbenchStore.showWorkbench);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const projects = useStore(projectsStore);
   const currentProjectId = useStore(currentProjectIdStore);
@@ -231,6 +234,18 @@ export const Menu = () => {
    */
   const collapsedDesktop = !isMobile && collapsed;
 
+  /*
+   * Workbench-open layout — the icon sidebar reserves real width (it's a normal flex
+   * sibling, not an overlay — see this file's Sprint 41.1 header comment) and makes Code,
+   * Diff, and Preview all feel cramped alike whenever the Workbench is open, not only
+   * Preview. Hidden for the whole time the Workbench is open, regardless of which of the
+   * three views is selected, so switching between them never briefly restores it;
+   * `ProjectDashboard`/`ControlPanel` below are unaffected so an open dialog never gets
+   * force-closed by opening the Workbench. Shared identically by Quick Build and Software
+   * Factory, since `showWorkbench` is the same global store for both.
+   */
+  const isWorkbenchOpen = shouldHideSidebarForWorkbench(showWorkbench);
+
   const header = (
     <div
       className={classNames(
@@ -299,37 +314,39 @@ export const Menu = () => {
 
   return (
     <>
-      {isMobile ? (
-        <motion.div
-          ref={menuRef}
-          initial="closed"
-          animate={mobileOpen ? 'open' : 'closed'}
-          variants={mobileMenuVariants}
-          style={{ width: `${MOBILE_DRAWER_WIDTH_PX}px` }}
-          className={classNames(
-            'flex selection-accent flex-col side-menu fixed top-0 h-full rounded-r-2xl',
-            'bg-white dark:bg-gray-950 border-r border-bolt-elements-borderColor',
-            'shadow-sm text-sm',
-            isSettingsOpen ? 'z-40' : 'z-sidebar',
-          )}
-        >
-          {header}
-          {body}
-        </motion.div>
-      ) : (
-        <div
-          ref={menuRef}
-          style={{ width: `${collapsed ? COLLAPSED_WIDTH_PX : EXPANDED_WIDTH_PX}px`, transition: WIDTH_TRANSITION }}
-          className={classNames(
-            'flex selection-accent flex-col side-menu h-full shrink-0 overflow-hidden',
-            'bg-white dark:bg-gray-950 border-r border-bolt-elements-borderColor',
-            'text-sm',
-          )}
-        >
-          {header}
-          {body}
-        </div>
-      )}
+      {!isWorkbenchOpen &&
+        (isMobile ? (
+          <motion.div
+            ref={menuRef}
+            initial="closed"
+            animate={mobileOpen ? 'open' : 'closed'}
+            variants={mobileMenuVariants}
+            style={{ width: `${MOBILE_DRAWER_WIDTH_PX}px` }}
+            className={classNames(
+              'flex selection-accent flex-col side-menu fixed top-0 h-full rounded-r-2xl',
+              'bg-white dark:bg-gray-950 border-r border-bolt-elements-borderColor',
+              'shadow-sm text-sm',
+              isSettingsOpen ? 'z-40' : 'z-sidebar',
+            )}
+          >
+            {header}
+            {body}
+          </motion.div>
+        ) : (
+          <div
+            ref={menuRef}
+            data-testid="desktop-sidebar"
+            style={{ width: `${collapsed ? COLLAPSED_WIDTH_PX : EXPANDED_WIDTH_PX}px`, transition: WIDTH_TRANSITION }}
+            className={classNames(
+              'flex selection-accent flex-col side-menu h-full shrink-0 overflow-hidden',
+              'bg-white dark:bg-gray-950 border-r border-bolt-elements-borderColor',
+              'text-sm',
+            )}
+          >
+            {header}
+            {body}
+          </div>
+        ))}
 
       <ProjectDashboard
         project={currentProject || null}
