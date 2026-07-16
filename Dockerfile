@@ -63,7 +63,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 # wrangler is a devDependency, so `pnpm prune --prod` (prod-deps stage) removes it —
 # dockerstart needs it at runtime, so install it globally in this final stage instead.
-RUN pnpm add -g wrangler@4.44.0
+RUN npm install -g wrangler@4.44.0 \
+  && wrangler --version
 
 # Copy built files and scripts
 COPY --from=prod-deps /app/build /app/build
