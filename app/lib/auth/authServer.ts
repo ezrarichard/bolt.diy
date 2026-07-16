@@ -15,14 +15,30 @@ import type { AppLoadContext } from '@remix-run/cloudflare';
  * `context.cloudflare.env` is checked first (how every other server route in this codebase
  * reads env vars — see api.shared-key-status.ts, api.chat.ts) because this app runs under
  * `wrangler pages dev` even in the Oracle-hosted Docker container (see bindings.sh / package.json
- * `start`), not a plain Node server — `process.env` is only a fallback for local
- * `remix vite:dev`.
+ * `start`), not a plain Node server. `import.meta.env` is checked next — the same Vite
+ * build-time fallback `app/lib/builders-db/client.ts`'s own `readEnv()` already uses for
+ * these exact two var names (see `envPrefix` in vite.config.ts), and confirmed to actually
+ * be populated on the Oracle deployment (BuildersDB itself works there) even when the
+ * Cloudflare binding is empty — this was previously missing here, which was the entire
+ * reason `getServerAuthClient()` returned null (and every authenticated route 401'd) on
+ * that deployment despite BuildersDB using the identical env var names successfully.
+ * `process.env` remains the last fallback, for local `remix vite:dev`.
  */
 function readServerEnv(context: AppLoadContext | undefined, name: string): string | undefined {
   const cloudflareEnv = (context as { cloudflare?: { env?: Record<string, string | undefined> } } | undefined)
     ?.cloudflare?.env;
 
-  return cloudflareEnv?.[name] ?? (typeof process !== 'undefined' ? process.env?.[name] : undefined);
+  if (cloudflareEnv?.[name]) {
+    return cloudflareEnv[name];
+  }
+
+  const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+
+  if (viteEnv?.[name]) {
+    return viteEnv[name];
+  }
+
+  return typeof process !== 'undefined' ? process.env?.[name] : undefined;
 }
 
 let cachedClient: SupabaseClient | null | undefined;
