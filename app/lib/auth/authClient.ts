@@ -1,5 +1,5 @@
 import type { Session, User } from '@supabase/supabase-js';
-import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/client';
+import { getBuildersDbClient, getBuildersDbConfig, isBuildersDbConfigured } from '~/lib/builders-db/client';
 import { deriveFirstName } from './deriveName';
 import type { AuthUser } from './authTypes';
 
@@ -27,6 +27,27 @@ export function toAuthUser(session: Session | null): AuthUser | null {
 
 export function isAuthConfigured(): boolean {
   return isBuildersDbConfigured();
+}
+
+/**
+ * TEMPORARY DIAGNOSTIC — SHA-256 fingerprint (first 8 hex chars) of the browser's own
+ * BUILDERS_DB_SUPABASE_ANON_KEY, for comparing against the server's fingerprint
+ * (see getServerAuthAnonKeyFingerprint in authServer.ts) without ever logging the key
+ * itself. Remove once the getUser() 401 investigation is closed.
+ */
+export async function getBrowserAnonKeyFingerprintForDiagnostics(): Promise<string | null> {
+  const anonKey = getBuildersDbConfig()?.anonKey;
+
+  if (!anonKey) {
+    return null;
+  }
+
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(anonKey));
+  const hex = Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+
+  return hex.slice(0, 8);
 }
 
 export async function getCurrentSession(): Promise<Session | null> {

@@ -1,5 +1,5 @@
 import type { AppLoadContext } from '@remix-run/cloudflare';
-import { getServerAuthClient } from './authServer';
+import { getServerAuthAnonKeyFingerprint, getServerAuthClient, getServerAuthProjectHost } from './authServer';
 import { AUTH_TOKEN_HEADER } from './authClient';
 import { deriveFirstName } from './deriveName';
 import type { AuthUser } from './authTypes';
@@ -9,6 +9,37 @@ function unauthorized(message: string): Response {
     status: 401,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+/**
+ * TEMPORARY DIAGNOSTIC — decodes a JWT's payload for logging ONLY iss/aud/exp/iat (never the
+ * token itself, never any secret). Does not verify the signature — this is purely to see what
+ * the token *claims* without ever printing it; real verification still happens via
+ * `client.auth.getUser(token)` below. Remove once the getUser() 401 investigation is closed.
+ */
+function decodeJwtClaimsForDiagnostics(
+  token: string,
+): { iss?: string; aud?: string; exp?: number; iat?: number } | null {
+  try {
+    const payloadSegment = token.split('.')[1];
+
+    if (!payloadSegment) {
+      return null;
+    }
+
+    const normalized = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
+    const json = atob(normalized);
+    const payload = JSON.parse(json) as Record<string, unknown>;
+
+    return {
+      iss: typeof payload.iss === 'string' ? payload.iss : undefined,
+      aud: typeof payload.aud === 'string' ? payload.aud : undefined,
+      exp: typeof payload.exp === 'number' ? payload.exp : undefined,
+      iat: typeof payload.iat === 'number' ? payload.iat : undefined,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -43,9 +74,43 @@ export async function requireAuthenticatedUser(request: Request, context: AppLoa
     throw unauthorized('Authentication is not configured on this deployment');
   }
 
-  const { data, error } = await client.auth.getUser(token);
+  /*
+   * TEMPORARY DIAGNOSTIC — see decodeJwtClaimsForDiagnostics's comment. Remove once the
+   * getUser() 401 investigation is closed. Never logs the token, anon key, or any secret.
+   */
+  const diagnosticClaims = decodeJwtClaimsForDiagnostics(token);
+  const serverAnonKeyFingerprint = await getServerAuthAnonKeyFingerprint(context);
+  console.log('[auth-diagnostic]', {
+    serverProjectHost: getServerAuthProjectHost(context),
+    serverAnonKeyFingerprint,
+    tokenReceived: true,
+    tokenIss: diagnosticClaims?.iss,
+    tokenAud: diagnosticClaims?.aud,
+    tokenExpISO: diagnosticClaims?.exp ? new Date(diagnosticClaims.exp * 1000).toISOString() : undefined,
+    tokenIatISO: diagnosticClaims?.iat ? new Date(diagnosticClaims.iat * 1000).toISOString() : undefined,
+    containerUtcNowISO: new Date().toISOString(),
+  });
+
+  let getUserResult: Awaited<ReturnType<typeof client.auth.getUser>>;
+
+  try {
+    getUserResult = await client.auth.getUser(token);
+  } catch (networkError) {
+    console.log('[auth-diagnostic] getUser threw (network/transport error)', {
+      errorType: networkError instanceof Error ? networkError.constructor.name : typeof networkError,
+      errorMessage: networkError instanceof Error ? networkError.message : String(networkError),
+    });
+    throw unauthorized('Invalid or expired session');
+  }
+
+  const { data, error } = getUserResult;
 
   if (error || !data.user) {
+    console.log('[auth-diagnostic] getUser rejected the token', {
+      supabaseErrorCode: (error as { code?: string } | null)?.code,
+      supabaseErrorStatus: (error as { status?: number } | null)?.status,
+      supabaseErrorMessage: error?.message,
+    });
     throw unauthorized('Invalid or expired session');
   }
 
