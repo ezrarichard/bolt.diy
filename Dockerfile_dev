@@ -67,11 +67,16 @@ ENV WRANGLER_SEND_METRICS=false \
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
   && rm -rf /var/lib/apt/lists/*
 
+# wrangler is a devDependency, so `pnpm prune --prod` (prod-deps stage) removes it —
+# dockerstart needs it at runtime, so install it globally in this final stage instead.
+RUN pnpm add -g wrangler@4.44.0
+
 # Copy built files and scripts
 COPY --from=prod-deps /app/build /app/build
 COPY --from=prod-deps /app/node_modules /app/node_modules
 COPY --from=prod-deps /app/package.json /app/package.json
 COPY --from=prod-deps /app/bindings.sh /app/bindings.sh
+COPY --from=prod-deps /app/worker-configuration.d.ts /app/worker-configuration.d.ts
 
 
 # Pre-configure wrangler to disable metrics
