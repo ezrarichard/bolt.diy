@@ -7,6 +7,7 @@ import type { ProductPackage, ProductPackageFile } from '~/lib/product-assembly/
 import { formatArtifactTimestamp } from '~/lib/projects/artifacts';
 import { getWorkspaceSnapshotProvider } from '~/lib/workspace-snapshot';
 import { useCodeGeneration } from '~/lib/hooks/useCodeGeneration';
+import { ApplicationManifestPanel } from './ApplicationManifestPanel';
 
 interface ProductPackagePanelProps {
   project: Project;
@@ -41,6 +42,7 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
   const [isAssembling, setIsAssembling] = useState(false);
   const [isLoadingPackage, setIsLoadingPackage] = useState(true);
   const [generatedFileCount, setGeneratedFileCount] = useState<number | null>(null);
+  const [manifestRefreshKey, setManifestRefreshKey] = useState(0);
   const codeGeneration = useCodeGeneration();
 
   const workspaceState = project.workspaceState;
@@ -65,6 +67,15 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
       cancelled = true;
     };
   }, [project.id]);
+
+  useEffect(() => {
+    /*
+     * The Application Manifest is persisted early (during the 'planning' stage, before any
+     * AI file-generation call — see useCodeGeneration.ts's createPlanReadyHandler), so a
+     * re-fetch on every stage change picks it up as soon as it exists, not just on completion.
+     */
+    setManifestRefreshKey((key) => key + 1);
+  }, [codeGeneration.stage]);
 
   useEffect(() => {
     if (!applicationGenerated) {
@@ -215,6 +226,8 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
           </div>
         </div>
       )}
+
+      <ApplicationManifestPanel projectId={project.id} refreshKey={manifestRefreshKey} />
 
       {!pkg && !isLoadingPackage && (
         <div className="text-xs text-bolt-elements-textTertiary px-1">

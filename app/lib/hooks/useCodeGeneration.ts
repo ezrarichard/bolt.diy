@@ -8,6 +8,8 @@ import {
   writeGeneratedProjectToWebContainer,
 } from '~/lib/code-generation/webcontainerWriter';
 import type { GenerateFn, GenerationResult, GenerationStage } from '~/lib/code-generation/codeGenerationTypes';
+import { buildApplicationManifest } from '~/lib/application-manifest/manifestBuilder';
+import { saveApplicationManifest } from '~/lib/application-manifest/applicationManifestRepository';
 import { runBuildRepairLoop, runStaticReviewLoop } from '~/lib/code-review/repairEngine';
 import type { OnRepairLoopEvent } from '~/lib/code-review/codeReviewTypes';
 import { getRoleGenerateOptions } from '~/lib/generation-profiles/generationProfileRepository';
@@ -16,6 +18,7 @@ import { chatStore } from '~/lib/stores/chat';
 import { resetEngineeringTimeline, upsertEngineeringTimelineEvent } from '~/lib/stores/engineeringTimeline';
 import { buildersDbRepository } from '~/lib/builders-db/repositories/buildersDbRepository';
 import { getWorkspaceSnapshotProvider } from '~/lib/workspace-snapshot';
+import { useAuth } from '~/lib/auth/AuthProvider';
 import { useGenerateText } from './useGenerateText';
 
 /**
@@ -88,6 +91,64 @@ function logActivity(projectId: string, activityType: string, description: strin
   buildersDbRepository
     .addProjectActivity({ projectId, activityType, description })
     .catch((error) => console.error(`[CodeGeneration] ${activityType} activity log failed:`, error));
+}
+
+/**
+ * Sprint 44.2 — builds the Application Manifest from the pipeline's own deterministic
+ * plan (see generationPipeline.ts's `OnPlanReady`) and persists it BEFORE any AI
+ * file-generation call runs. Phase 1 is purely observational: a persistence failure is
+ * recorded on workspace state (`manifestStatus`/`manifestPersistenceError`) and logged as
+ * activity, but never blocks or fails the generation the user is watching — see
+ * applicationManifestRepository.ts's own header comment on why Phase 3, not this one, is
+ * where that becomes a hard precondition.
+ */
+function createPlanReadyHandler(project: Project, productPackage: ProductPackage, createdBy: string | null) {
+  return async (plan: Parameters<typeof buildApplicationManifest>[0]['plan']) => {
+    updateProjectWorkspaceState(project.id, { manifestStatus: 'creating' });
+
+    const built = buildApplicationManifest({
+      projectId: project.id,
+      plan,
+      sourcePackageAssembledAt: productPackage.assembledAt,
+    });
+
+    if (!built.ok || !built.manifest) {
+      const message = built.issues.find((issue) => issue.severity === 'error')?.message ?? 'Manifest build failed.';
+      updateProjectWorkspaceState(project.id, { manifestStatus: 'failed', manifestPersistenceError: message });
+      logActivity(project.id, 'manifest_build_failed', `Application Manifest could not be built: ${message}`);
+
+      return;
+    }
+
+    const result = await saveApplicationManifest(built.manifest, built.files, { createdBy: createdBy ?? undefined });
+
+    if (!result.ok || !result.manifest) {
+      updateProjectWorkspaceState(project.id, {
+        manifestStatus: 'failed',
+        manifestPersistenceError: result.error ?? 'Unknown persistence error',
+      });
+      logActivity(
+        project.id,
+        'manifest_persistence_failed',
+        `Application Manifest persistence failed: ${result.error}`,
+      );
+
+      return;
+    }
+
+    updateProjectWorkspaceState(project.id, {
+      manifestStatus: 'persisted',
+      manifestVersion: result.manifest.version,
+      manifestPersistenceError: undefined,
+    });
+    logActivity(
+      project.id,
+      result.created ? 'manifest_created' : 'manifest_unchanged',
+      result.created
+        ? `Application Manifest v${result.manifest.version} persisted (${result.manifest.totalFiles} planned file(s))`
+        : `Application Manifest unchanged — reused v${result.manifest.version}`,
+    );
+  };
 }
 
 /**
@@ -192,6 +253,7 @@ function createRepairEventHandler(projectId: string, onAttempt: (attemptNumber: 
 
 export function useCodeGeneration() {
   const { generate } = useGenerateText();
+  const { user } = useAuth();
   const [state, setState] = useState<CodeGenerationState>(IDLE_STATE);
 
   const runGeneration = useCallback(
@@ -225,24 +287,30 @@ export function useCodeGeneration() {
       const codeGenGenerate: GenerateFn = (system, prompt, opts) =>
         generate(system, prompt, { ...opts, ...getRoleGenerateOptions(project, 'frontend-draft') });
 
-      const result = await generateProject(project, productPackage, codeGenGenerate, (progress) => {
-        setState((prev) => ({
-          ...prev,
-          stage: progress.stage,
-          stageLabel: STAGE_GROUP_LABELS[progress.stage],
-          detail: progress.detail,
-        }));
-        logActivity(
-          project.id,
-          'generation_stage_completed',
-          `${STAGE_GROUP_LABELS[progress.stage]}${progress.detail ? ` — ${progress.detail}` : ''}`,
-        );
-        upsertEngineeringTimelineEvent(STAGE_TIMELINE_ID[progress.stage], {
-          label: STAGE_GROUP_LABELS[progress.stage],
-          status: 'active',
-          detail: progress.detail,
-        });
-      });
+      const result = await generateProject(
+        project,
+        productPackage,
+        codeGenGenerate,
+        (progress) => {
+          setState((prev) => ({
+            ...prev,
+            stage: progress.stage,
+            stageLabel: STAGE_GROUP_LABELS[progress.stage],
+            detail: progress.detail,
+          }));
+          logActivity(
+            project.id,
+            'generation_stage_completed',
+            `${STAGE_GROUP_LABELS[progress.stage]}${progress.detail ? ` — ${progress.detail}` : ''}`,
+          );
+          upsertEngineeringTimelineEvent(STAGE_TIMELINE_ID[progress.stage], {
+            label: STAGE_GROUP_LABELS[progress.stage],
+            status: 'active',
+            detail: progress.detail,
+          });
+        },
+        createPlanReadyHandler(project, productPackage, user?.id ?? null),
+      );
 
       if (!result.ok || !result.project) {
         const message = result.issues.find((issue) => issue.severity === 'error')?.message ?? 'Generation failed.';

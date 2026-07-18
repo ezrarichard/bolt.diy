@@ -409,6 +409,19 @@ function prefixSrc(files: GeneratedFile[], folder: string): GeneratedFile[] {
 }
 
 /**
+ * Fired once, right after the deterministic plan is built and validated but BEFORE any
+ * AI file-generation call runs (see this file's own header — planning is deterministic,
+ * every stage after it is not) — Sprint 44.2's hook point for persisting the Application
+ * Manifest (app/lib/application-manifest/) ahead of generation. Awaited: a caller that
+ * needs the manifest durably persisted before any file's status can become "generating"
+ * (Phase 1's own requirement) can rely on this resolving first. A thrown/rejected
+ * callback is caught below and recorded as a warning issue, never as a pipeline
+ * failure — Phase 1 is purely observational, so manifest persistence failing must not
+ * stop generation the user is watching (see manifestBuilder.ts's own header comment).
+ */
+export type OnPlanReady = (plan: GenerationPlan) => Promise<void> | void;
+
+/**
  * Runs the full pipeline for one project against its already-assembled Product
  * Package, reporting progress via `onProgress` as each stage starts. Always resolves
  * (never throws) — a stage failure becomes `{ ok: false, failedStage, issues }` rather
@@ -420,6 +433,7 @@ export async function runGenerationPipeline(
   productPackage: ProductPackage,
   generate: GenerateFn,
   onProgress: OnGenerationProgress,
+  onPlanReady?: OnPlanReady,
 ): Promise<GenerationResult> {
   const issues: GenerationIssue[] = [];
 
@@ -440,6 +454,18 @@ export async function runGenerationPipeline(
       ],
       failedStage: 'planning',
     };
+  }
+
+  if (onPlanReady) {
+    try {
+      await onPlanReady(plan);
+    } catch (error) {
+      issues.push({
+        severity: 'warning',
+        stage: 'planning',
+        message: `onPlanReady callback failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   }
 
   const generatedFiles: GeneratedFile[] = [];

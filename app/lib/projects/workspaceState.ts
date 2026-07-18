@@ -45,6 +45,15 @@ export interface ProjectWorkspaceState {
 
   /** Sprint 39.5 — which Generation Profile (app/lib/generation-profiles/) this project uses for every AI Engineering Team role. Undefined means "not chosen yet" — every reader falls back to DEFAULT_GENERATION_PROFILE_ID ('balanced'). */
   selectedGenerationProfileId?: string;
+
+  /** Sprint 44.2 — outcome of the most recent Application Manifest persistence attempt (app/lib/application-manifest/), mirroring lastRepairStatus's shape. 'not-attempted' before the first "Generate Application" run; a failure here is non-blocking in Phase 1 (see manifestPersistenceError) — Phase 3 may make it a hard precondition. */
+  manifestStatus?: 'not-attempted' | 'creating' | 'persisted' | 'failed';
+
+  /** The persisted manifest's version number, once persistence has ever succeeded. */
+  manifestVersion?: number;
+
+  /** Set only when manifestStatus is 'failed' — the repository error, for the Workspace tab. */
+  manifestPersistenceError?: string;
 }
 
 export const DEFAULT_WORKSPACE_STATE: ProjectWorkspaceState = {

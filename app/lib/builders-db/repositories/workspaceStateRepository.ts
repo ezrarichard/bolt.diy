@@ -43,6 +43,9 @@ interface WorkspaceStateRow {
   repair_attempts: number;
   last_repair_status: string | null;
   selected_generation_profile_id: string | null;
+  manifest_status: string | null;
+  manifest_version: number | null;
+  manifest_persistence_error: string | null;
 }
 
 function fromRow(row: WorkspaceStateRow): ProjectWorkspaceState {
@@ -63,6 +66,9 @@ function fromRow(row: WorkspaceStateRow): ProjectWorkspaceState {
     repairAttempts: row.repair_attempts,
     lastRepairStatus: (row.last_repair_status ?? undefined) as ProjectWorkspaceState['lastRepairStatus'],
     selectedGenerationProfileId: row.selected_generation_profile_id ?? undefined,
+    manifestStatus: (row.manifest_status ?? undefined) as ProjectWorkspaceState['manifestStatus'],
+    manifestVersion: row.manifest_version ?? undefined,
+    manifestPersistenceError: row.manifest_persistence_error ?? undefined,
   };
 }
 
@@ -130,6 +136,9 @@ export async function upsertWorkspaceState(projectId: string, patch: Partial<Pro
         repair_attempts: next.repairAttempts ?? 0,
         last_repair_status: next.lastRepairStatus ?? null,
         selected_generation_profile_id: next.selectedGenerationProfileId ?? null,
+        manifest_status: next.manifestStatus ?? null,
+        manifest_version: next.manifestVersion ?? null,
+        manifest_persistence_error: next.manifestPersistenceError ?? null,
       },
       { onConflict: 'project_id' },
     );
