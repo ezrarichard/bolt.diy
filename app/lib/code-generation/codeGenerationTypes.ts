@@ -120,10 +120,34 @@ export interface GenerationPlanPage {
   fileName: string;
 }
 
+/**
+ * Sprint 44.2, Phase 3 — one deterministic checksum per generation CATEGORY, over
+ * exactly the draft fields that category's prompt (prompts.ts) actually reads. Lets
+ * resumable generation tell "the Product Package changed in a way that affects this
+ * category" apart from "changed but this category's own inputs are untouched" —
+ * app/lib/application-manifest/manifestBuilder.ts's `sourceContentChecksum` is the
+ * combination of all four; dependency invalidation (useCodeGeneration.ts's
+ * `classifyResumeAction`/carry-forward logic) compares them individually.
+ *
+ * Deliberately COARSE, not per-page: `pages` covers every page's shared inputs
+ * (businessVision/coreFeatures/uiuxNotes/pageHierarchy) because buildPagePrompt() itself
+ * gives every page the exact same businessVision/coreFeatures — there is no per-page
+ * requirements concept anywhere in this codebase today, so a real per-page fingerprint
+ * would be fabricating precision the underlying data doesn't have. See this sprint's
+ * Known Limitations for why "only Home changed" isn't representable yet.
+ */
+export interface GenerationPlanFingerprints {
+  types: string;
+  services: string;
+  pages: string;
+  components: string;
+}
+
 /** The full deterministic plan — every AI call stage after "planning" reads from this rather than re-deriving it. */
 export interface GenerationPlan {
   pages: GenerationPlanPage[];
   sharedComponents: string[];
   entities: string[];
   apiEndpoints: string[];
+  fingerprints: GenerationPlanFingerprints;
 }

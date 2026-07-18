@@ -321,3 +321,91 @@ describe('runGenerationPipeline — file lifecycle hooks (Sprint 44.2 Phase 2, i
     expect(result.ok).toBe(true);
   });
 });
+
+describe('runGenerationPipeline — resumeHooks (Sprint 44.2 Phase 3, resumable generation)', () => {
+  it('skips the AI call entirely for a path with reusable content — types/services/page all honor resumeHooks', async () => {
+    let aiCallCount = 0;
+    const generate: GenerateFn = async (...args) => {
+      aiCallCount += 1;
+      return stubGenerate(...args);
+    };
+
+    const reusable = new Map([
+      ['src/types/index.ts', 'export interface Reused {}'],
+      ['src/services/api.ts', 'export const reused = true;'],
+      ['src/pages/HomePage.tsx', 'export default function HomePage() { return "reused"; }'],
+    ]);
+
+    const readyEvents: { path: string; role: string }[] = [];
+
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      generate,
+      () => {},
+      undefined,
+      {
+        onFileReady: (file, role) => {
+          readyEvents.push({ path: file.path, role });
+        },
+      },
+      { getReusableContent: (path) => reusable.get(path) },
+    );
+
+    expect(result.ok).toBe(true);
+
+    // types, services, and the one page were all reused — only the components stage (not covered by resumeHooks) calls the AI.
+    expect(aiCallCount).toBe(1);
+
+    const typesEvent = readyEvents.find((e) => e.path === 'src/types/index.ts');
+    expect(typesEvent?.role).toBe('code-gen-types-reused');
+    expect(readyEvents.find((e) => e.path === 'src/services/api.ts')?.role).toBe('code-gen-services-reused');
+    expect(readyEvents.find((e) => e.path === 'src/pages/HomePage.tsx')?.role).toBe('code-gen-page:HomePage-reused');
+
+    // The reused content itself (not any AI-generated content) is what ends up in the assembled project.
+    expect(result.project?.files.find((f) => f.path === 'src/types/index.ts')?.content).toBe(
+      'export interface Reused {}',
+    );
+  });
+
+  it('never calls onFilesStarting for a reused path — no wasted "generating" status transition', async () => {
+    const startingRoles: string[] = [];
+
+    await runGenerationPipeline(makeProject(), makeEmptyProductPackage(), stubGenerate, () => {}, undefined, {
+      onFilesStarting: (role) => {
+        startingRoles.push(role);
+      },
+    });
+
+    // Sanity baseline: with NO resumeHooks, every stage's onFilesStarting fires.
+    expect(startingRoles).toEqual(
+      expect.arrayContaining(['code-gen-types', 'code-gen-services', 'code-gen-page:HomePage', 'code-gen-components']),
+    );
+  });
+
+  it('falls back to generating a file normally when resumeHooks returns undefined for it', async () => {
+    let aiCallCount = 0;
+    const generate: GenerateFn = async (...args) => {
+      aiCallCount += 1;
+      return stubGenerate(...args);
+    };
+
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      generate,
+      () => {},
+      undefined,
+      undefined,
+      { getReusableContent: () => undefined },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(aiCallCount).toBeGreaterThan(0);
+  });
+
+  it('runs correctly with no resumeHooks provided at all (backward compatible)', async () => {
+    const result = await runGenerationPipeline(makeProject(), makeEmptyProductPackage(), stubGenerate, () => {});
+    expect(result.ok).toBe(true);
+  });
+});

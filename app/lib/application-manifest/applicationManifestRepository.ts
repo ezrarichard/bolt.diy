@@ -4,6 +4,7 @@ import type {
   ApplicationManifestFile,
   ApplicationManifestFileDraft,
   ApplicationManifestDraft,
+  ManifestFingerprints,
   ManifestPersistResult,
 } from './manifestTypes';
 
@@ -60,6 +61,8 @@ interface ManifestRow {
   completed_files: number;
   failed_files: number;
   plan_checksum: string;
+  source_content_checksum: string | null;
+  metadata: { fingerprints?: ManifestFingerprints } | null;
   persisted_at: string;
   created_by: string | null;
   created_at: string;
@@ -106,6 +109,8 @@ function fromManifestRow(row: ManifestRow): ApplicationManifest {
     completedFiles: row.completed_files,
     failedFiles: row.failed_files,
     planChecksum: row.plan_checksum,
+    sourceContentChecksum: row.source_content_checksum ?? '',
+    fingerprints: row.metadata?.fingerprints ?? { types: '', services: '', pages: '', components: '' },
     persistedAt: row.persisted_at,
     createdBy: row.created_by ?? undefined,
     createdAt: row.created_at,
@@ -223,7 +228,7 @@ export async function listApplicationManifestFiles(manifestId: string): Promise<
 export async function saveApplicationManifest(
   draft: ApplicationManifestDraft,
   files: ApplicationManifestFileDraft[],
-  options: { createdBy?: string } = {},
+  options: { createdBy?: string; forceNewVersion?: boolean } = {},
 ): Promise<ManifestPersistResult> {
   const client = getBuildersDbClient();
 
@@ -246,7 +251,23 @@ export async function saveApplicationManifest(
 
     const latest = (existingRows?.[0] as ManifestRow | undefined) ?? undefined;
 
-    if (latest && latest.status === 'active' && latest.plan_checksum === draft.planChecksum) {
+    /*
+     * Sprint 44.2, Phase 3 — a new version is created whenever EITHER checksum changed
+     * (or `forceNewVersion` — "Restart Generation"), not just `plan_checksum` (Phase 1's
+     * original condition): the Product Package's CONTENT can change (different business
+     * vision/requirements) while the resulting file STRUCTURE stays identical (same
+     * pages/paths) — see manifestTypes.ts's own comment on why these are two separate
+     * checksums. Requirement: "Compare Manifest checksum against Product Package
+     * checksum. If different: DO NOT RESUME... Create Manifest Version +1."
+     */
+    const unchanged =
+      latest &&
+      latest.status === 'active' &&
+      !options.forceNewVersion &&
+      latest.plan_checksum === draft.planChecksum &&
+      latest.source_content_checksum === draft.sourceContentChecksum;
+
+    if (unchanged) {
       const existingFiles = await listApplicationManifestFiles(latest.id);
       return { ok: true, created: false, manifest: fromManifestRow(latest), files: existingFiles };
     }
@@ -278,6 +299,8 @@ export async function saveApplicationManifest(
         completed_files: 0,
         failed_files: 0,
         plan_checksum: draft.planChecksum,
+        source_content_checksum: draft.sourceContentChecksum,
+        metadata: { fingerprints: draft.fingerprints },
         persisted_at: new Date().toISOString(),
         created_by: options.createdBy ?? null,
       })

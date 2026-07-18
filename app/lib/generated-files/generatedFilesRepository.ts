@@ -1,6 +1,7 @@
 import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/client';
 import { addProjectActivity } from '~/lib/builders-db/repositories/buildersDbRepository';
 import { checkPathSafety } from '~/lib/application-manifest/manifestBuilder';
+import { fnv1aHash } from '~/lib/checksum/fnv1a';
 import type {
   GeneratedApplicationFile,
   GeneratedApplicationFileVersion,
@@ -46,22 +47,9 @@ function safeErrorMessage(error: unknown): string {
   return 'Unknown error';
 }
 
-/**
- * FNV-1a (32-bit) over the raw file content — deliberately the SAME algorithm as
- * manifestBuilder.ts's computeManifestChecksum (structural fingerprint), just applied to
- * content bytes instead of a structural shape; a plain, non-cryptographic hash is enough
- * for change detection and avoids Node's `crypto` module (see that file's own comment on
- * why — this runs in the browser/Worker/Node test runner alike).
- */
+/** Content checksum — see ~/lib/checksum/fnv1a.ts for why this is a plain, non-cryptographic hash. */
 export function computeFileChecksum(content: string): string {
-  let hash = 0x811c9dc5;
-
-  for (let i = 0; i < content.length; i++) {
-    hash ^= content.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-
-  return `fnv1a:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+  return fnv1aHash(content);
 }
 
 interface GeneratedFileRow {
@@ -497,6 +485,30 @@ export async function listFileVersions(generatedFileId: string): Promise<Generat
 }
 
 /**
+ * Sprint 44.2, Phase 3 — "Workspace Restore"/"WebContainer Restart" requirement:
+ * reconstructs the runnable file set from the latest REUSABLE (`generated`/`validated`/
+ * `complete`) version of every generated file for a manifest — never regenerating via
+ * the AI. Returns `{ path, content }` pairs (deliberately duck-typed rather than
+ * importing `GeneratedFile` from code-generation/ — this module stays a leaf, not
+ * dependent on that domain). A file with no reusable content (still pending/failed) is
+ * simply omitted — the caller decides whether that's an acceptable partial
+ * reconstruction or a reason to fall back to a full "Generate Application" run.
+ */
+export async function reconstructFilesFromManifest(manifestId: string): Promise<{ path: string; content: string }[]> {
+  const files = await listGeneratedFiles(manifestId);
+  const reusable = files.filter((file) => isReusableGeneratedStatus(file.status));
+
+  const results = await Promise.all(
+    reusable.map(async (file) => {
+      const content = await getReusableFileContent(file.manifestFileId);
+      return content !== undefined ? { path: file.path, content } : null;
+    }),
+  );
+
+  return results.filter((entry): entry is { path: string; content: string } => entry !== null);
+}
+
+/**
  * Requirement G — an AI response returned a file path that isn't itself in the
  * manifest. Validates the path (rejects anything checkPathSafety() flags — never
  * silently discarded, but never persisted unsafely either), then creates a new
@@ -591,12 +603,154 @@ export async function reconcileUnplannedFile(input: {
   }
 }
 
+/** A generated file's status counts as "content already exists, don't call the AI again" — Phase 3's resume/skip signal. `repairing` is deliberately excluded: no per-file repair loop exists yet (see resumeOrchestrator.ts's own header comment), so a file caught mid-repair is safer to retreat and regenerate than to trust as-is. */
+export function isReusableGeneratedStatus(status: GeneratedFileStatus): boolean {
+  return status === 'generated' || status === 'validated' || status === 'complete';
+}
+
+/**
+ * Sprint 44.2, Phase 3 — the content of a file's latest version, but ONLY when its
+ * current status is one resume trusts (requirement: "Resume MUST use file status" —
+ * see `isReusableGeneratedStatus`). Returns `undefined` for anything else (pending,
+ * failed, mid-generation/repair, or no row at all), which the caller (generationPipeline
+ * .ts's `resumeHooks.getReusableContent`) treats as "no reusable content — generate it."
+ */
+export async function getReusableFileContent(manifestFileId: string): Promise<string | undefined> {
+  const client = getBuildersDbClient();
+
+  if (!isAvailable() || !client) {
+    return undefined;
+  }
+
+  try {
+    const file = await getFileByManifestFileId(manifestFileId);
+
+    if (!file || !isReusableGeneratedStatus(file.status) || file.latest_version <= 0) {
+      return undefined;
+    }
+
+    const { data: version, error } = await client
+      .from('builders_generated_application_file_versions')
+      .select('content')
+      .eq('generated_file_id', file.id)
+      .eq('version', file.latest_version)
+      .maybeSingle();
+
+    if (error || !version) {
+      return undefined;
+    }
+
+    return (version as { content: string }).content;
+  } catch (error) {
+    logError('getReusableFileContent', error);
+    return undefined;
+  }
+}
+
+/**
+ * Sprint 44.2, Phase 3 — copies a previous manifest version's already-generated content
+ * forward onto a NEW manifest's file row, instead of starting it at `pending` (which
+ * would force a wasted AI regeneration for a file dependency invalidation decided is
+ * still reusable — see resumeOrchestrator.ts). `downgradeToGenerated: true` implements
+ * the spec's own example ("types/index.ts changes → dependent pages become validated →
+ * pending validation, NOT regenerated immediately"): the content is carried forward
+ * as-is, but the status is deliberately set to `'generated'` rather than the source's
+ * own `'complete'`/`'validated'`, so the next validation pass re-checks it instead of
+ * silently trusting it unchanged.
+ */
+export async function carryForwardFile(input: {
+  projectId: string;
+  newManifestId: string;
+  newManifestFileId: string;
+  path: string;
+  sourceManifestFileId: string;
+  downgradeToGenerated: boolean;
+}): Promise<{ ok: boolean; carried: boolean; error?: string }> {
+  const client = getBuildersDbClient();
+
+  if (!isAvailable() || !client) {
+    return { ok: false, carried: false, error: 'BuildersDB is not configured.' };
+  }
+
+  try {
+    const source = await getFileByManifestFileId(input.sourceManifestFileId);
+
+    if (!source || !isReusableGeneratedStatus(source.status) || source.latest_version <= 0) {
+      return { ok: true, carried: false };
+    }
+
+    const { data: sourceVersion, error: versionError } = await client
+      .from('builders_generated_application_file_versions')
+      .select('content')
+      .eq('generated_file_id', source.id)
+      .eq('version', source.latest_version)
+      .maybeSingle();
+
+    if (versionError || !sourceVersion) {
+      return { ok: true, carried: false };
+    }
+
+    const content = (sourceVersion as { content: string }).content;
+    const status: GeneratedFileStatus = input.downgradeToGenerated ? 'generated' : source.status;
+
+    const { data: newRow, error: insertError } = await client
+      .from('builders_generated_application_files')
+      .insert({
+        project_id: input.projectId,
+        manifest_id: input.newManifestId,
+        manifest_file_id: input.newManifestFileId,
+        path: input.path,
+        status,
+        latest_version: 1,
+        latest_checksum: source.latest_checksum,
+        generated_by_role: source.generated_by_role,
+        generated_at: source.generated_at,
+      })
+      .select('id')
+      .single();
+
+    if (insertError || !newRow) {
+      throw insertError ?? new Error('Insert returned no row');
+    }
+
+    const { error: versionInsertError } = await client.from('builders_generated_application_file_versions').insert({
+      generated_file_id: (newRow as { id: string }).id,
+      project_id: input.projectId,
+      manifest_id: input.newManifestId,
+      version: 1,
+      content,
+      checksum: source.latest_checksum,
+      change_reason: `Carried forward from manifest ${source.manifest_id} (unaffected by Product Package change)`,
+      generation_source: source.generated_by_role ?? 'carried-forward',
+    });
+
+    if (versionInsertError) {
+      throw versionInsertError;
+    }
+
+    await updateManifestFileStatus(input.newManifestFileId, {
+      status,
+      checksum: source.latest_checksum ?? undefined,
+      generatedAt: source.generated_at ?? undefined,
+    });
+
+    return { ok: true, carried: true };
+  } catch (error) {
+    logError('carryForwardFile', error);
+    return { ok: false, carried: false, error: safeErrorMessage(error) };
+  }
+}
+
 export const generatedFilesRepository = {
   computeFileChecksum,
+  isReusableGeneratedStatus,
+  getReusableFileContent,
+  carryForwardFile,
   markFileGenerating,
   markFileFailed,
   persistGeneratedFile,
   listGeneratedFiles,
   listFileVersions,
   reconcileUnplannedFile,
+  reconstructFilesFromManifest,
 };

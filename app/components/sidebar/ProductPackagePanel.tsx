@@ -121,6 +121,19 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
     }
   };
 
+  /**
+   * Sprint 44.2, Phase 3 — "Restart Generation": always creates a new manifest version
+   * (skipping the checksum comparison — see resumeOrchestrator.ts's `forceRestart`) and
+   * regenerates every file from scratch, deliberately WITHOUT carrying forward any
+   * previously-generated content. Distinct from the default action above, which resumes
+   * (skips already-complete/validated files) whenever a manifest already exists.
+   */
+  const handleRestart = () => {
+    if (pkg) {
+      codeGeneration.runGeneration(project, pkg, { forceRestart: true });
+    }
+  };
+
   const handleContinueDevelopment = () => {
     codeGeneration.resumeApplication(project);
   };
@@ -175,10 +188,23 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
                 type="button"
                 onClick={handleGenerate}
                 disabled={codeGeneration.isRunning}
+                title="Continues from wherever generation left off — already-complete files are skipped, not regenerated."
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium border border-bolt-elements-borderColor/50 text-bolt-elements-textSecondary hover:bg-bolt-elements-background-depth-2 transition-colors disabled:opacity-50"
               >
                 <span className="i-ph:arrow-clockwise w-3.5 h-3.5" />
-                Regenerate
+                Resume Generation
+              </button>
+            )}
+            {pkg && (
+              <button
+                type="button"
+                onClick={handleRestart}
+                disabled={codeGeneration.isRunning}
+                title="Creates a new manifest version and regenerates every file from scratch — nothing is carried forward."
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium border border-bolt-elements-borderColor/50 text-bolt-elements-textSecondary hover:bg-bolt-elements-background-depth-2 transition-colors disabled:opacity-50"
+              >
+                <span className="i-ph:arrow-counter-clockwise w-3.5 h-3.5" />
+                Restart Generation
               </button>
             )}
           </div>

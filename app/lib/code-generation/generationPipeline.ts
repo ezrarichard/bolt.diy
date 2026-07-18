@@ -16,6 +16,7 @@ import {
 } from './prompts';
 import { REACT_VITE_TS_TEMPLATE_ID, resolveTemplate } from './templateResolver';
 import { scaffoldReactViteProject } from './projectScaffolder';
+import { fnv1aHash } from '~/lib/checksum/fnv1a';
 import type {
   GenerateFn,
   GeneratedFile,
@@ -230,12 +231,38 @@ export function buildGenerationPlan(drafts: ResolvedDrafts): GenerationPlan {
   });
 
   const sharedComponents = dedupePreserveOrder(drafts.frontend?.sharedComponents ?? []).slice(0, 6);
+  const entities = dedupePreserveOrder(drafts.database?.entities ?? []);
+  const apiEndpoints = dedupePreserveOrder(drafts.backend?.apiEndpoints ?? []);
+  const resolvedSharedComponents = sharedComponents.length > 0 ? sharedComponents : ['Navbar', 'Footer'];
 
   return {
     pages,
-    sharedComponents: sharedComponents.length > 0 ? sharedComponents : ['Navbar', 'Footer'],
-    entities: dedupePreserveOrder(drafts.database?.entities ?? []),
-    apiEndpoints: dedupePreserveOrder(drafts.backend?.apiEndpoints ?? []),
+    sharedComponents: resolvedSharedComponents,
+    entities,
+    apiEndpoints,
+    fingerprints: {
+      types: fnv1aHash(JSON.stringify({ entities: [...entities].sort() })),
+      services: fnv1aHash(
+        JSON.stringify({
+          apiEndpoints: [...apiEndpoints].sort(),
+          apiArchitecture: drafts.backend?.apiArchitecture ?? '',
+        }),
+      ),
+      pages: fnv1aHash(
+        JSON.stringify({
+          businessVision: drafts.requirements?.businessVision ?? '',
+          coreFeatures: [...(drafts.requirements?.coreFeatures ?? [])].sort(),
+          uiuxNotes: drafts.frontend?.frontendOverview ?? '',
+          pageNames: pageNames.slice().sort(),
+        }),
+      ),
+      components: fnv1aHash(
+        JSON.stringify({
+          sharedComponents: [...resolvedSharedComponents].sort(),
+          layoutStrategy: drafts.frontend?.layoutStrategy ?? '',
+        }),
+      ),
+    },
   };
 }
 
@@ -455,6 +482,24 @@ export interface FileLifecycleHooks {
 }
 
 /**
+ * Sprint 44.2, Phase 3 — resumable generation's actual AI-call-skipping mechanism.
+ * Checked for `src/types/index.ts`, `src/services/api.ts`, and each page's canonical
+ * `src/pages/<Component>.tsx` path (every one of these is a FIXED, deterministic path
+ * the pipeline already knows before calling the AI — see prompts.ts's own "Generate
+ * exactly one file, ..." instructions) — if it returns content, that stage's AI call is
+ * skipped entirely and the returned content is used as-is via `onFileReady` (tagged with
+ * a `-reused` role suffix so the caller can log/count it distinctly from a fresh
+ * generation). Deliberately NOT applied to the shared-components batch: that stage's
+ * planned paths are only fully known via manifestBuilder.ts's own PascalCase/collision
+ * logic, which this module intentionally stays decoupled from (see `OnPlanReady`'s own
+ * comment) — skipping only a SUBSET of one batched AI call isn't meaningfully cheaper
+ * than making it, so Phase 3 keeps the components call atomic and always-regenerated.
+ */
+export interface ResumeHooks {
+  getReusableContent?: (path: string) => Promise<string | undefined> | string | undefined;
+}
+
+/**
  * Runs the full pipeline for one project against its already-assembled Product
  * Package, reporting progress via `onProgress` as each stage starts. Always resolves
  * (never throws) — a stage failure becomes `{ ok: false, failedStage, issues }` rather
@@ -468,6 +513,7 @@ export async function runGenerationPipeline(
   onProgress: OnGenerationProgress,
   onPlanReady?: OnPlanReady,
   fileHooks?: FileLifecycleHooks,
+  resumeHooks?: ResumeHooks,
 ): Promise<GenerationResult> {
   const issues: GenerationIssue[] = [];
 
@@ -524,76 +570,98 @@ export async function runGenerationPipeline(
 
   const generatedFiles: GeneratedFile[] = [];
 
-  onProgress({ stage: 'generating-types' });
-  await safeInvoke(fileHooks?.onFilesStarting, 'generating-types', 'code-gen-types', 'src/types/index.ts');
-
-  const typesResult = await callForFiles(
-    buildSharedTypesPrompt({
-      projectName: project.name,
-      entities: plan.entities,
-      coreFeatures: drafts.requirements?.coreFeatures ?? [],
-    }),
-    generate,
-    project.id,
-    'code-gen-types',
-  );
-
-  if (!typesResult.ok) {
-    await safeInvoke(
-      fileHooks?.onStageFailed,
-      'generating-types',
-      'code-gen-types',
-      typesResult.error,
-      'src/types/index.ts',
-    );
-
-    return {
-      ok: false,
-      issues: [...issues, { severity: 'error', stage: 'generating-types', message: typesResult.error }],
-      failedStage: 'generating-types',
-    };
+  async function getReusable(path: string): Promise<string | undefined> {
+    return resumeHooks?.getReusableContent ? await resumeHooks.getReusableContent(path) : undefined;
   }
 
-  generatedFiles.push(...typesResult.files);
+  onProgress({ stage: 'generating-types' });
 
-  for (const file of typesResult.files) {
-    await safeInvoke(fileHooks?.onFileReady, 'generating-types', file, 'code-gen-types');
+  const reusableTypes = await getReusable('src/types/index.ts');
+
+  if (reusableTypes !== undefined) {
+    const reusedFile = { path: 'src/types/index.ts', content: reusableTypes };
+    generatedFiles.push(reusedFile);
+    await safeInvoke(fileHooks?.onFileReady, 'generating-types', reusedFile, 'code-gen-types-reused');
+  } else {
+    await safeInvoke(fileHooks?.onFilesStarting, 'generating-types', 'code-gen-types', 'src/types/index.ts');
+
+    const typesResult = await callForFiles(
+      buildSharedTypesPrompt({
+        projectName: project.name,
+        entities: plan.entities,
+        coreFeatures: drafts.requirements?.coreFeatures ?? [],
+      }),
+      generate,
+      project.id,
+      'code-gen-types',
+    );
+
+    if (!typesResult.ok) {
+      await safeInvoke(
+        fileHooks?.onStageFailed,
+        'generating-types',
+        'code-gen-types',
+        typesResult.error,
+        'src/types/index.ts',
+      );
+
+      return {
+        ok: false,
+        issues: [...issues, { severity: 'error', stage: 'generating-types', message: typesResult.error }],
+        failedStage: 'generating-types',
+      };
+    }
+
+    generatedFiles.push(...typesResult.files);
+
+    for (const file of typesResult.files) {
+      await safeInvoke(fileHooks?.onFileReady, 'generating-types', file, 'code-gen-types');
+    }
   }
 
   onProgress({ stage: 'generating-services' });
-  await safeInvoke(fileHooks?.onFilesStarting, 'generating-services', 'code-gen-services', 'src/services/api.ts');
 
-  const servicesResult = await callForFiles(
-    buildServicesPrompt({
-      projectName: project.name,
-      apiEndpoints: plan.apiEndpoints,
-      apiArchitecture: drafts.backend?.apiArchitecture,
-    }),
-    generate,
-    project.id,
-    'code-gen-services',
-  );
+  const reusableServices = await getReusable('src/services/api.ts');
 
-  if (!servicesResult.ok) {
-    await safeInvoke(
-      fileHooks?.onStageFailed,
-      'generating-services',
+  if (reusableServices !== undefined) {
+    const reusedFile = { path: 'src/services/api.ts', content: reusableServices };
+    generatedFiles.push(reusedFile);
+    await safeInvoke(fileHooks?.onFileReady, 'generating-services', reusedFile, 'code-gen-services-reused');
+  } else {
+    await safeInvoke(fileHooks?.onFilesStarting, 'generating-services', 'code-gen-services', 'src/services/api.ts');
+
+    const servicesResult = await callForFiles(
+      buildServicesPrompt({
+        projectName: project.name,
+        apiEndpoints: plan.apiEndpoints,
+        apiArchitecture: drafts.backend?.apiArchitecture,
+      }),
+      generate,
+      project.id,
       'code-gen-services',
-      servicesResult.error,
-      'src/services/api.ts',
     );
 
-    return {
-      ok: false,
-      issues: [...issues, { severity: 'error', stage: 'generating-services', message: servicesResult.error }],
-      failedStage: 'generating-services',
-    };
-  }
+    if (!servicesResult.ok) {
+      await safeInvoke(
+        fileHooks?.onStageFailed,
+        'generating-services',
+        'code-gen-services',
+        servicesResult.error,
+        'src/services/api.ts',
+      );
 
-  generatedFiles.push(...servicesResult.files);
+      return {
+        ok: false,
+        issues: [...issues, { severity: 'error', stage: 'generating-services', message: servicesResult.error }],
+        failedStage: 'generating-services',
+      };
+    }
 
-  for (const file of servicesResult.files) {
-    await safeInvoke(fileHooks?.onFileReady, 'generating-services', file, 'code-gen-services');
+    generatedFiles.push(...servicesResult.files);
+
+    for (const file of servicesResult.files) {
+      await safeInvoke(fileHooks?.onFileReady, 'generating-services', file, 'code-gen-services');
+    }
   }
 
   for (const [index, page] of plan.pages.entries()) {
@@ -601,6 +669,15 @@ export async function runGenerationPipeline(
 
     const pageRole = `code-gen-page:${page.componentName}`;
     const pagePath = `src/pages/${page.fileName}`;
+    const reusablePage = await getReusable(pagePath);
+
+    if (reusablePage !== undefined) {
+      const reusedFile = { path: pagePath, content: reusablePage };
+      generatedFiles.push(reusedFile);
+      await safeInvoke(fileHooks?.onFileReady, 'generating-pages', reusedFile, `${pageRole}-reused`);
+      continue;
+    }
+
     await safeInvoke(fileHooks?.onFilesStarting, 'generating-pages', pageRole, pagePath);
 
     const pageResult = await callForFiles(

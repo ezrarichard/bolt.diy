@@ -14,8 +14,17 @@ vi.mock('~/lib/builders-db/repositories/buildersDbRepository', () => ({
   addProjectActivity: addProjectActivityMock,
 }));
 
-const { persistGeneratedFile, markFileGenerating, markFileFailed, computeFileChecksum, reconcileUnplannedFile } =
-  await import('./generatedFilesRepository');
+const {
+  persistGeneratedFile,
+  markFileGenerating,
+  markFileFailed,
+  computeFileChecksum,
+  reconcileUnplannedFile,
+  getReusableFileContent,
+  carryForwardFile,
+  reconstructFilesFromManifest,
+  isReusableGeneratedStatus,
+} = await import('./generatedFilesRepository');
 
 const BASE_INPUT = {
   projectId: 'proj-1',
@@ -342,5 +351,356 @@ describe('reconcileUnplannedFile', () => {
     expect(addProjectActivityMock).toHaveBeenCalledWith(
       expect.objectContaining({ activityType: 'unplanned_file_rejected' }),
     );
+  });
+});
+
+describe('isReusableGeneratedStatus — Resume "trusted" statuses', () => {
+  it('trusts generated, validated, and complete', () => {
+    expect(isReusableGeneratedStatus('generated')).toBe(true);
+    expect(isReusableGeneratedStatus('validated')).toBe(true);
+    expect(isReusableGeneratedStatus('complete')).toBe(true);
+  });
+
+  it('does not trust pending, failed, generating, or repairing', () => {
+    expect(isReusableGeneratedStatus('pending')).toBe(false);
+    expect(isReusableGeneratedStatus('failed')).toBe(false);
+    expect(isReusableGeneratedStatus('generating')).toBe(false);
+    expect(isReusableGeneratedStatus('repairing')).toBe(false);
+  });
+});
+
+describe('getReusableFileContent', () => {
+  beforeEach(() => {
+    getBuildersDbClientMock.mockReset();
+  });
+
+  function makeReadOnlyClient(
+    fileByManifestFileId: Record<string, any>,
+    versionByFileIdAndVersion: Record<string, string>,
+  ) {
+    return {
+      from: (table: string) => {
+        if (table === 'builders_generated_application_files') {
+          return {
+            select: () => ({
+              eq: (_col: string, value: string) => ({
+                maybeSingle: () => Promise.resolve({ data: fileByManifestFileId[value] ?? null, error: null }),
+              }),
+            }),
+          };
+        }
+
+        if (table === 'builders_generated_application_file_versions') {
+          return {
+            select: () => ({
+              eq: (_col: string, generatedFileId: string) => ({
+                eq: (_col2: string, version: number) => ({
+                  maybeSingle: () =>
+                    Promise.resolve({
+                      data: versionByFileIdAndVersion[`${generatedFileId}:${version}`]
+                        ? { content: versionByFileIdAndVersion[`${generatedFileId}:${version}`] }
+                        : null,
+                      error: null,
+                    }),
+                }),
+              }),
+            }),
+          };
+        }
+
+        throw new Error(`Unexpected table: ${table}`);
+      },
+    };
+  }
+
+  it('returns content for a file whose status is trusted (generated/validated/complete)', async () => {
+    getBuildersDbClientMock.mockReturnValue(
+      makeReadOnlyClient(
+        { 'file-1': { id: 'gen-1', status: 'complete', latest_version: 2 } },
+        { 'gen-1:2': 'export const x = 1;' },
+      ),
+    );
+
+    const content = await getReusableFileContent('file-1');
+    expect(content).toBe('export const x = 1;');
+  });
+
+  it('returns undefined for a file whose status is not trusted (e.g. pending/failed)', async () => {
+    getBuildersDbClientMock.mockReturnValue(
+      makeReadOnlyClient({ 'file-1': { id: 'gen-1', status: 'failed', latest_version: 1 } }, {}),
+    );
+
+    const content = await getReusableFileContent('file-1');
+    expect(content).toBeUndefined();
+  });
+
+  it('returns undefined when no generated-file row exists at all', async () => {
+    getBuildersDbClientMock.mockReturnValue(makeReadOnlyClient({}, {}));
+
+    const content = await getReusableFileContent('file-never-generated');
+    expect(content).toBeUndefined();
+  });
+});
+
+describe('carryForwardFile', () => {
+  beforeEach(() => {
+    getBuildersDbClientMock.mockReset();
+    addProjectActivityMock.mockClear();
+  });
+
+  it('copies content/status forward from the source file onto the new manifest file (undowngraded)', async () => {
+    const sourceFileRow = {
+      id: 'old-gen-1',
+      manifest_id: 'old-manifest',
+      status: 'complete',
+      latest_version: 1,
+      latest_checksum: 'fnv1a:abc',
+      generated_by_role: 'code-gen-types',
+      generated_at: '2026-07-18T00:00:00.000Z',
+    };
+
+    const insertedFiles: any[] = [];
+    const insertedVersions: any[] = [];
+
+    const from = vi.fn((table: string) => {
+      if (table === 'builders_generated_application_files') {
+        return {
+          select: () => ({
+            eq: () => ({ maybeSingle: () => Promise.resolve({ data: sourceFileRow, error: null }) }),
+          }),
+          insert: (row: any) => ({
+            select: () => ({
+              single: () => {
+                const inserted = { id: 'new-gen-1', ...row };
+                insertedFiles.push(inserted);
+
+                return Promise.resolve({ data: inserted, error: null });
+              },
+            }),
+          }),
+        };
+      }
+
+      if (table === 'builders_generated_application_file_versions') {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: () => Promise.resolve({ data: { content: 'export interface X {}' }, error: null }),
+              }),
+            }),
+          }),
+          insert: (row: any) => {
+            insertedVersions.push(row);
+            return Promise.resolve({ error: null });
+          },
+        };
+      }
+
+      if (table === 'builders_application_manifest_files') {
+        return { update: () => ({ eq: () => Promise.resolve({ error: null }) }) };
+      }
+
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const result = await carryForwardFile({
+      projectId: 'proj-1',
+      newManifestId: 'new-manifest',
+      newManifestFileId: 'new-manifest-file-1',
+      path: 'src/types/index.ts',
+      sourceManifestFileId: 'old-manifest-file-1',
+      downgradeToGenerated: false,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.carried).toBe(true);
+    expect(insertedFiles[0].status).toBe('complete');
+    expect(insertedVersions[0].content).toBe('export interface X {}');
+    expect(insertedVersions[0].version).toBe(1);
+  });
+
+  it('downgrades to "generated" instead of the source status when downgradeToGenerated is true', async () => {
+    const sourceFileRow = {
+      id: 'old-gen-2',
+      manifest_id: 'old-manifest',
+      status: 'complete',
+      latest_version: 1,
+      latest_checksum: 'fnv1a:def',
+      generated_by_role: 'code-gen-services',
+      generated_at: '2026-07-18T00:00:00.000Z',
+    };
+
+    const insertedFiles: any[] = [];
+
+    const from = vi.fn((table: string) => {
+      if (table === 'builders_generated_application_files') {
+        return {
+          select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: sourceFileRow, error: null }) }) }),
+          insert: (row: any) => ({
+            select: () => ({
+              single: () => {
+                const inserted = { id: 'new-gen-2', ...row };
+                insertedFiles.push(inserted);
+
+                return Promise.resolve({ data: inserted, error: null });
+              },
+            }),
+          }),
+        };
+      }
+
+      if (table === 'builders_generated_application_file_versions') {
+        return {
+          select: () => ({
+            eq: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { content: 'x' }, error: null }) }) }),
+          }),
+          insert: () => Promise.resolve({ error: null }),
+        };
+      }
+
+      if (table === 'builders_application_manifest_files') {
+        return { update: () => ({ eq: () => Promise.resolve({ error: null }) }) };
+      }
+
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    await carryForwardFile({
+      projectId: 'proj-1',
+      newManifestId: 'new-manifest',
+      newManifestFileId: 'new-manifest-file-2',
+      path: 'src/services/api.ts',
+      sourceManifestFileId: 'old-manifest-file-2',
+      downgradeToGenerated: true,
+    });
+
+    expect(insertedFiles[0].status).toBe('generated');
+  });
+
+  it('does not carry forward when the source file is not in a trusted status', async () => {
+    const from = vi.fn((table: string) => {
+      if (table === 'builders_generated_application_files') {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: () => Promise.resolve({ data: { status: 'failed', latest_version: 0 }, error: null }),
+            }),
+          }),
+        };
+      }
+
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const result = await carryForwardFile({
+      projectId: 'proj-1',
+      newManifestId: 'new-manifest',
+      newManifestFileId: 'new-manifest-file-3',
+      path: 'src/App.tsx',
+      sourceManifestFileId: 'old-manifest-file-3',
+      downgradeToGenerated: false,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.carried).toBe(false);
+  });
+});
+
+describe('reconstructFilesFromManifest — Workspace Restore / WebContainer Restart', () => {
+  beforeEach(() => {
+    getBuildersDbClientMock.mockReset();
+  });
+
+  it("reconstructs only files with a trusted status, fetching each one's latest content — never calling the AI", async () => {
+    const generatedFileRows = [
+      {
+        id: 'gen-1',
+        manifest_id: 'manifest-1',
+        manifest_file_id: 'mf-1',
+        path: 'src/App.tsx',
+        status: 'complete',
+        latest_version: 1,
+      },
+      {
+        id: 'gen-2',
+        manifest_id: 'manifest-1',
+        manifest_file_id: 'mf-2',
+        path: 'src/pages/HomePage.tsx',
+        status: 'validated',
+        latest_version: 1,
+      },
+      {
+        id: 'gen-3',
+        manifest_id: 'manifest-1',
+        manifest_file_id: 'mf-3',
+        path: 'src/pages/ContactPage.tsx',
+        status: 'pending',
+        latest_version: 0,
+      },
+    ];
+
+    const from = vi.fn((table: string) => {
+      if (table === 'builders_generated_application_files') {
+        return {
+          select: () => ({
+            eq: (col: string, value: string) => {
+              if (col === 'manifest_id') {
+                return Promise.resolve({ data: generatedFileRows, error: null });
+              }
+
+              // manifest_file_id lookup (used internally by getReusableFileContent)
+              return {
+                maybeSingle: () =>
+                  Promise.resolve({
+                    data: generatedFileRows.find((r) => r.manifest_file_id === value) ?? null,
+                    error: null,
+                  }),
+              };
+            },
+          }),
+        };
+      }
+
+      if (table === 'builders_generated_application_file_versions') {
+        return {
+          select: () => ({
+            eq: (_col: string, generatedFileId: string) => ({
+              eq: () => ({
+                maybeSingle: () =>
+                  Promise.resolve({
+                    data: { content: `content of ${generatedFileId}` },
+                    error: null,
+                  }),
+              }),
+            }),
+          }),
+        };
+      }
+
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const files = await reconstructFilesFromManifest('manifest-1');
+
+    // Only the 'complete'/'validated' files (not the 'pending' one) are reconstructed.
+    expect(files).toHaveLength(2);
+    expect(files.map((f) => f.path).sort()).toEqual(['src/App.tsx', 'src/pages/HomePage.tsx']);
+    expect(files.find((f) => f.path === 'src/App.tsx')?.content).toBe('content of gen-1');
+  });
+
+  it('returns an empty array when BuildersDB is unavailable', async () => {
+    getBuildersDbClientMock.mockReturnValue(null);
+
+    const files = await reconstructFilesFromManifest('manifest-1');
+    expect(files).toEqual([]);
   });
 });

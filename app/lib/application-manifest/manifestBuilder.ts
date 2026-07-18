@@ -1,5 +1,6 @@
 import type { GenerationPlan } from '~/lib/code-generation/codeGenerationTypes';
 import { REACT_VITE_TS_TEMPLATE_ID } from '~/lib/code-generation/templateResolver';
+import { fnv1aHash } from '~/lib/checksum/fnv1a';
 import type {
   ApplicationManifestFileDraft,
   BuildManifestResult,
@@ -280,16 +281,7 @@ export function computeManifestChecksum(files: ApplicationManifestFileDraft[]): 
       dependencies: [...file.dependencies].sort(),
     }));
 
-  const text = JSON.stringify(canonical);
-
-  let hash = 0x811c9dc5;
-
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-
-  return `fnv1a:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+  return fnv1aHash(JSON.stringify(canonical));
 }
 
 export interface BuildManifestInput {
@@ -319,6 +311,8 @@ export function buildApplicationManifest(input: BuildManifestInput): BuildManife
       entryFile: ENTRY_FILE,
       sourcePackageAssembledAt: input.sourcePackageAssembledAt,
       planChecksum: computeManifestChecksum(files),
+      fingerprints: input.plan.fingerprints,
+      sourceContentChecksum: fnv1aHash(JSON.stringify(input.plan.fingerprints)),
     },
   };
 }

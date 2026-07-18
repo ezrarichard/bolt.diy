@@ -19,6 +19,8 @@ function makeDraft(overrides: Partial<ApplicationManifestDraft> = {}): Applicati
     packageManager: 'npm',
     entryFile: 'src/main.tsx',
     planChecksum: 'fnv1a:deadbeef',
+    sourceContentChecksum: 'fnv1a:content0',
+    fingerprints: { types: 'fnv1a:t', services: 'fnv1a:s', pages: 'fnv1a:p', components: 'fnv1a:c' },
     ...overrides,
   };
 }
@@ -110,6 +112,8 @@ describe('saveApplicationManifest', () => {
       completed_files: 0,
       failed_files: 0,
       plan_checksum: 'fnv1a:deadbeef',
+      source_content_checksum: 'fnv1a:content0',
+      metadata: {},
       persisted_at: '2026-07-18T00:00:00.000Z',
       created_by: null,
       created_at: '2026-07-18T00:00:00.000Z',
@@ -204,6 +208,141 @@ describe('saveApplicationManifest', () => {
     expect(update).toHaveBeenCalled();
     expect(insert).toHaveBeenCalled();
     expect(result.ok).toBe(true);
+    expect(result.created).toBe(true);
+    expect(result.manifest?.version).toBe(2);
+  });
+
+  /**
+   * Sprint 44.2, Phase 3 — the core "manifest checksum vs Product Package checksum"
+   * requirement: a project can have the exact same FILE STRUCTURE (same pages/paths,
+   * `plan_checksum` unchanged) while the underlying Product Package CONTENT changed
+   * (different business vision/requirements) — `source_content_checksum` is what
+   * catches that, independent of `plan_checksum`.
+   */
+  it('creates a new version when only the Product Package content checksum changed (file structure/plan_checksum identical)', async () => {
+    const existingRow = {
+      id: 'manifest-1',
+      project_id: 'proj-1',
+      version: 1,
+      status: 'active',
+      source_package_version: null,
+      source_package_assembled_at: null,
+      framework: 'react-vite-ts',
+      package_manager: 'npm',
+      entry_file: 'src/main.tsx',
+      total_files: 1,
+      completed_files: 0,
+      failed_files: 0,
+      plan_checksum: 'fnv1a:deadbeef', // SAME as makeDraft()'s default — structure unchanged.
+      source_content_checksum: 'fnv1a:content0', // will differ from the new draft below.
+      metadata: {},
+      persisted_at: '2026-07-18T00:00:00.000Z',
+      created_by: null,
+      created_at: '2026-07-18T00:00:00.000Z',
+      updated_at: '2026-07-18T00:00:00.000Z',
+      completed_at: null,
+    };
+
+    const update = vi.fn(() => ({ eq: () => Promise.resolve({ error: null }) }));
+    const insert = vi.fn(() => ({
+      select: () => ({
+        single: () => Promise.resolve({ data: { ...existingRow, id: 'manifest-2', version: 2 }, error: null }),
+      }),
+    }));
+
+    const from = vi.fn((table: string) => {
+      if (table === 'builders_application_manifests') {
+        return {
+          select: () => ({
+            eq: () => ({ order: () => ({ limit: () => Promise.resolve({ data: [existingRow], error: null }) }) }),
+          }),
+          update,
+          insert,
+        };
+      }
+
+      if (table === 'builders_application_manifest_files') {
+        return {
+          insert: () => Promise.resolve({ error: null }),
+          select: () => ({ eq: () => ({ order: () => Promise.resolve({ data: [], error: null }) }) }),
+        };
+      }
+
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const result = await saveApplicationManifest(
+      makeDraft({ planChecksum: 'fnv1a:deadbeef', sourceContentChecksum: 'fnv1a:DIFFERENT' }),
+      makeFiles(),
+    );
+
+    expect(update).toHaveBeenCalled(); // previous version superseded
+    expect(insert).toHaveBeenCalled(); // new version created
+    expect(result.ok).toBe(true);
+    expect(result.created).toBe(true);
+    expect(result.manifest?.version).toBe(2);
+  });
+
+  it('forceNewVersion always creates a new version even when both checksums are unchanged ("Restart Generation")', async () => {
+    const existingRow = {
+      id: 'manifest-1',
+      project_id: 'proj-1',
+      version: 1,
+      status: 'active',
+      source_package_version: null,
+      source_package_assembled_at: null,
+      framework: 'react-vite-ts',
+      package_manager: 'npm',
+      entry_file: 'src/main.tsx',
+      total_files: 1,
+      completed_files: 0,
+      failed_files: 0,
+      plan_checksum: 'fnv1a:deadbeef',
+      source_content_checksum: 'fnv1a:content0',
+      metadata: {},
+      persisted_at: '2026-07-18T00:00:00.000Z',
+      created_by: null,
+      created_at: '2026-07-18T00:00:00.000Z',
+      updated_at: '2026-07-18T00:00:00.000Z',
+      completed_at: null,
+    };
+
+    const update = vi.fn(() => ({ eq: () => Promise.resolve({ error: null }) }));
+    const insert = vi.fn(() => ({
+      select: () => ({
+        single: () => Promise.resolve({ data: { ...existingRow, id: 'manifest-2', version: 2 }, error: null }),
+      }),
+    }));
+
+    const from = vi.fn((table: string) => {
+      if (table === 'builders_application_manifests') {
+        return {
+          select: () => ({
+            eq: () => ({ order: () => ({ limit: () => Promise.resolve({ data: [existingRow], error: null }) }) }),
+          }),
+          update,
+          insert,
+        };
+      }
+
+      if (table === 'builders_application_manifest_files') {
+        return {
+          insert: () => Promise.resolve({ error: null }),
+          select: () => ({ eq: () => ({ order: () => Promise.resolve({ data: [], error: null }) }) }),
+        };
+      }
+
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    // Identical checksums to the existing row — would normally be a no-op — but forceNewVersion overrides that.
+    const result = await saveApplicationManifest(makeDraft(), makeFiles(), { forceNewVersion: true });
+
+    expect(insert).toHaveBeenCalled();
     expect(result.created).toBe(true);
     expect(result.manifest?.version).toBe(2);
   });

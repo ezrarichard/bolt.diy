@@ -8,15 +8,17 @@ import {
   writeGeneratedProjectToWebContainer,
 } from '~/lib/code-generation/webcontainerWriter';
 import type { GenerateFn, GenerationResult, GenerationStage } from '~/lib/code-generation/codeGenerationTypes';
-import type { FileLifecycleHooks } from '~/lib/code-generation/generationPipeline';
-import { buildApplicationManifest } from '~/lib/application-manifest/manifestBuilder';
-import { saveApplicationManifest } from '~/lib/application-manifest/applicationManifestRepository';
+import type { FileLifecycleHooks, ResumeHooks } from '~/lib/code-generation/generationPipeline';
+import { prepareManifestForGeneration } from '~/lib/application-manifest/resumeOrchestrator';
+import { getActiveApplicationManifest } from '~/lib/application-manifest/applicationManifestRepository';
 import type { ApplicationManifestFile } from '~/lib/application-manifest/manifestTypes';
 import {
+  getReusableFileContent,
   markFileFailed,
   markFileGenerating,
   persistGeneratedFile,
   reconcileUnplannedFile,
+  reconstructFilesFromManifest,
 } from '~/lib/generated-files/generatedFilesRepository';
 import { runBuildRepairLoop, runStaticReviewLoop } from '~/lib/code-review/repairEngine';
 import type { OnRepairLoopEvent } from '~/lib/code-review/codeReviewTypes';
@@ -128,27 +130,20 @@ function createPlanReadyHandler(
   productPackage: ProductPackage,
   createdBy: string | null,
   context: ManifestGenerationContext,
+  options: { forceRestart?: boolean } = {},
 ) {
-  return async (plan: Parameters<typeof buildApplicationManifest>[0]['plan']) => {
+  return async (plan: Parameters<typeof prepareManifestForGeneration>[0]['plan']) => {
     updateProjectWorkspaceState(project.id, { manifestStatus: 'creating' });
 
-    const built = buildApplicationManifest({
+    const result = await prepareManifestForGeneration({
       projectId: project.id,
       plan,
       sourcePackageAssembledAt: productPackage.assembledAt,
+      createdBy: createdBy ?? undefined,
+      forceRestart: options.forceRestart,
     });
 
-    if (!built.ok || !built.manifest) {
-      const message = built.issues.find((issue) => issue.severity === 'error')?.message ?? 'Manifest build failed.';
-      updateProjectWorkspaceState(project.id, { manifestStatus: 'failed', manifestPersistenceError: message });
-      logActivity(project.id, 'manifest_build_failed', `Application Manifest could not be built: ${message}`);
-
-      return;
-    }
-
-    const result = await saveApplicationManifest(built.manifest, built.files, { createdBy: createdBy ?? undefined });
-
-    if (!result.ok || !result.manifest) {
+    if (!result.ok || !result.manifest || !result.files) {
       updateProjectWorkspaceState(project.id, {
         manifestStatus: 'failed',
         manifestPersistenceError: result.error ?? 'Unknown persistence error',
@@ -156,28 +151,75 @@ function createPlanReadyHandler(
       logActivity(
         project.id,
         'manifest_persistence_failed',
-        `Application Manifest persistence failed: ${result.error}`,
+        `Application Manifest could not be prepared: ${result.error}`,
       );
 
       return;
     }
 
-    // Phase 2 reads this back — every file-lifecycle hook below resolves a generated path against these entries.
+    // Every file-lifecycle/resume hook below resolves a generated path against these entries.
     context.manifestId = result.manifest.id;
-    context.files = result.files ?? [];
+    context.files = result.files;
 
     updateProjectWorkspaceState(project.id, {
       manifestStatus: 'persisted',
       manifestVersion: result.manifest.version,
       manifestPersistenceError: undefined,
     });
-    logActivity(
-      project.id,
-      result.created ? 'manifest_created' : 'manifest_unchanged',
-      result.created
-        ? `Application Manifest v${result.manifest.version} persisted (${result.manifest.totalFiles} planned file(s))`
-        : `Application Manifest unchanged — reused v${result.manifest.version}`,
-    );
+
+    if (result.resumed) {
+      logActivity(
+        project.id,
+        'manifest_resumed',
+        `Resuming Application Manifest v${result.manifest.version} — reusing already-generated files by status`,
+      );
+    } else if (result.versionCreated) {
+      /*
+       * Sprint 44.2, Phase 3 — a new manifest version means the Product Package changed
+       * (structurally, content-wise, or both) since the previous version — the previous
+       * version was just flipped to 'superseded' by saveApplicationManifest(). Grouped
+       * into ONE activity entry (not one per carried-forward file) per this phase's own
+       * "avoid flooding timeline" instruction.
+       */
+      logActivity(
+        project.id,
+        'manifest_superseded',
+        `Application Manifest v${result.manifest.version - 1} superseded by v${result.manifest.version} — ` +
+          `${result.carriedForwardCount} file(s) carried forward, ${result.manifest.totalFiles - result.carriedForwardCount} to (re)generate`,
+      );
+    } else {
+      logActivity(
+        project.id,
+        'manifest_created',
+        `Application Manifest v${result.manifest.version} persisted (${result.manifest.totalFiles} planned file(s))`,
+      );
+    }
+  };
+}
+
+/**
+ * Sprint 44.2, Phase 3 — implements generationPipeline.ts's `ResumeHooks`: for a planned
+ * path already in `context.files`, returns its content ONLY when its current status is
+ * one resume trusts (`isReusableGeneratedStatus` — 'generated'/'validated'/'complete'),
+ * skipping the AI call entirely. Returns `undefined` for anything else (pending, failed,
+ * interrupted mid-generation/repair, or no manifest at all), which the pipeline treats
+ * as "generate it."
+ */
+function createResumeHooks(context: ManifestGenerationContext): ResumeHooks {
+  return {
+    async getReusableContent(path) {
+      if (!context.manifestId) {
+        return undefined;
+      }
+
+      const planned = context.files.find((file) => file.path === path);
+
+      if (!planned) {
+        return undefined;
+      }
+
+      return getReusableFileContent(planned.id);
+    },
   };
 }
 
@@ -286,6 +328,23 @@ function createFileLifecycleHooks(
           updatedAt: new Date().toISOString(),
         };
         context.files = [...context.files, planned];
+      }
+
+      /*
+       * Sprint 44.2, Phase 3 — a "-reused" role means generationPipeline.ts's
+       * `resumeHooks.getReusableContent` supplied this exact content instead of calling
+       * the AI (see generationPipeline.ts's `getReusable` helper) — the file's row is
+       * already correctly stated (that's precisely WHY it was reusable). Re-running
+       * `persistGeneratedFile` here would be redundant at best and, at worst, would
+       * overwrite a 'complete'/'validated' status back down to 'generated' (that
+       * function always sets 'generated' on success) — regressing a file resume is
+       * supposed to leave untouched. Only the identical-checksum branch of
+       * `persistGeneratedFile` would apply here anyway, so skipping it changes no
+       * content, just avoids that status regression.
+       */
+      if (role.endsWith('-reused')) {
+        logActivity(project.id, 'generated_file_reused', `${file.path} reused from a previous generation (unchanged)`);
+        return;
       }
 
       const result = await persistGeneratedFile({
@@ -434,7 +493,7 @@ export function useCodeGeneration() {
   const [state, setState] = useState<CodeGenerationState>(IDLE_STATE);
 
   const runGeneration = useCallback(
-    async (project: Project, productPackage: ProductPackage) => {
+    async (project: Project, productPackage: ProductPackage, options: { forceRestart?: boolean } = {}) => {
       setState({ isRunning: true, stage: 'planning', stageLabel: STAGE_GROUP_LABELS.planning });
       logActivity(project.id, 'generation_started', `Code generation started for "${project.name}"`);
       updateProjectWorkspaceState(project.id, {
@@ -489,8 +548,11 @@ export function useCodeGeneration() {
             detail: progress.detail,
           });
         },
-        createPlanReadyHandler(project, productPackage, currentUserId, manifestContext),
+        createPlanReadyHandler(project, productPackage, currentUserId, manifestContext, {
+          forceRestart: options.forceRestart,
+        }),
         createFileLifecycleHooks(project, currentUserId, manifestContext),
+        createResumeHooks(manifestContext),
       );
 
       if (!result.ok || !result.project) {
@@ -738,7 +800,18 @@ export function useCodeGeneration() {
     updateProjectWorkspaceState(project.id, { currentStage: 'writing-files', lastError: undefined });
 
     try {
-      const files = await getWorkspaceSnapshotProvider().getSnapshot(project.id);
+      /*
+       * Sprint 44.2, Phase 3 — "WebContainer Restart"/"Workspace Restore" requirement:
+       * reconstruct from the Application Manifest's own per-file COMPLETE/validated/
+       * generated versions when one exists — more granular and source-of-truth-accurate
+       * than the Phase 38.5 whole-project snapshot below, which stays the fallback for
+       * projects that predate the manifest (backward compatibility: "old projects with
+       * no manifest behave exactly as today").
+       */
+      const activeManifest = await getActiveApplicationManifest(project.id);
+      const manifestFiles = activeManifest ? await reconstructFilesFromManifest(activeManifest.id) : [];
+      const usingManifest = manifestFiles.length > 0;
+      const files = usingManifest ? manifestFiles : await getWorkspaceSnapshotProvider().getSnapshot(project.id);
 
       if (files.length === 0) {
         const message = 'No previously generated files were found for this project.';
@@ -747,6 +820,14 @@ export function useCodeGeneration() {
         updateProjectWorkspaceState(project.id, { lastGenerationStatus: 'failed', lastError: message });
 
         return;
+      }
+
+      if (usingManifest) {
+        logActivity(
+          project.id,
+          'workspace_reconstructed',
+          `Workspace reconstructed from Application Manifest v${activeManifest?.version} (${files.length} file(s), no AI call)`,
+        );
       }
 
       isProjectDashboardOpenStore.set(false);

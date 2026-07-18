@@ -25,6 +25,12 @@ function makePlan(overrides: Partial<GenerationPlan> = {}): GenerationPlan {
     sharedComponents: ['Navbar', 'Footer'],
     entities: ['Product'],
     apiEndpoints: ['/api/products'],
+    fingerprints: {
+      types: 'fnv1a:types0000',
+      services: 'fnv1a:svc00000',
+      pages: 'fnv1a:pages0000',
+      components: 'fnv1a:comp0000',
+    },
     ...overrides,
   };
 }

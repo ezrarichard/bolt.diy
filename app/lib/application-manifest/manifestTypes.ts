@@ -16,6 +16,13 @@
  * resume (Phase 3) land.
  */
 
+/**
+ * Sprint 44.2, Phase 3 adds `complete` (fully validated, available for preview — the
+ * resume algorithm's strongest "skip" signal) to Phase 1/2's original set. `skipped` is
+ * kept distinct from `superseded`: `skipped` means "intentionally not generated this
+ * run" (not used before Phase 3 either, reserved for a future optional-file feature),
+ * `superseded` means "this row belongs to a manifest version that's no longer active."
+ */
 export type ManifestFileStatus =
   | 'pending'
   | 'generating'
@@ -23,8 +30,8 @@ export type ManifestFileStatus =
   | 'validating'
   | 'repairing'
   | 'validated'
-  | 'failed'
   | 'complete'
+  | 'failed'
   | 'skipped'
   | 'superseded';
 
@@ -73,6 +80,14 @@ export interface ApplicationManifestFile extends ApplicationManifestFileDraft {
   updatedAt: string;
 }
 
+/** Sprint 44.2, Phase 3 — one checksum per generation category, over exactly the draft fields that category's own prompt reads (see codeGenerationTypes.ts's `GenerationPlanFingerprints`, which this is copied from at manifest-build time). Stored in `builders_application_manifests.metadata` (small, supplementary — never large content). */
+export interface ManifestFingerprints {
+  types: string;
+  services: string;
+  pages: string;
+  components: string;
+}
+
 /** The manifest itself, before it's ever been persisted. */
 export interface ApplicationManifestDraft {
   projectId: string;
@@ -81,6 +96,19 @@ export interface ApplicationManifestDraft {
   entryFile: string;
   sourcePackageAssembledAt?: string;
   planChecksum: string;
+
+  /**
+   * Sprint 44.2, Phase 3 — a checksum over the Product Package's CONTENT (business
+   * vision, core features, page names, entities, API endpoints, layout notes — see
+   * `GenerationPlanFingerprints`), independent of `planChecksum` (which only fingerprints
+   * the FILE STRUCTURE: paths/categories/dependencies). A project can have identical
+   * `planChecksum` (same pages/files) but a different `sourceContentChecksum` (the
+   * requirements behind those same pages changed) — that's exactly the case the resume
+   * algorithm's "manifest checksum vs Product Package checksum" comparison exists to
+   * catch (see applicationManifestRepository.ts's `saveApplicationManifest`).
+   */
+  sourceContentChecksum: string;
+  fingerprints: ManifestFingerprints;
 }
 
 export interface ApplicationManifest extends ApplicationManifestDraft {
