@@ -8,8 +8,16 @@ import {
   writeGeneratedProjectToWebContainer,
 } from '~/lib/code-generation/webcontainerWriter';
 import type { GenerateFn, GenerationResult, GenerationStage } from '~/lib/code-generation/codeGenerationTypes';
+import type { FileLifecycleHooks } from '~/lib/code-generation/generationPipeline';
 import { buildApplicationManifest } from '~/lib/application-manifest/manifestBuilder';
 import { saveApplicationManifest } from '~/lib/application-manifest/applicationManifestRepository';
+import type { ApplicationManifestFile } from '~/lib/application-manifest/manifestTypes';
+import {
+  markFileFailed,
+  markFileGenerating,
+  persistGeneratedFile,
+  reconcileUnplannedFile,
+} from '~/lib/generated-files/generatedFilesRepository';
 import { runBuildRepairLoop, runStaticReviewLoop } from '~/lib/code-review/repairEngine';
 import type { OnRepairLoopEvent } from '~/lib/code-review/codeReviewTypes';
 import { getRoleGenerateOptions } from '~/lib/generation-profiles/generationProfileRepository';
@@ -94,6 +102,19 @@ function logActivity(projectId: string, activityType: string, description: strin
 }
 
 /**
+ * Sprint 44.2, Phase 2 — the manifest built/persisted by `createPlanReadyHandler` below,
+ * shared (via a mutable ref, populated once planning finishes) with
+ * `createFileLifecycleHooks` so it can resolve an AI-returned file's path back to a
+ * `manifest_file_id` without either function needing to know about the other's
+ * internals — same decoupling generationPipeline.ts's own `FileLifecycleHooks` type
+ * comment describes.
+ */
+interface ManifestGenerationContext {
+  manifestId?: string;
+  files: ApplicationManifestFile[];
+}
+
+/**
  * Sprint 44.2 — builds the Application Manifest from the pipeline's own deterministic
  * plan (see generationPipeline.ts's `OnPlanReady`) and persists it BEFORE any AI
  * file-generation call runs. Phase 1 is purely observational: a persistence failure is
@@ -102,7 +123,12 @@ function logActivity(projectId: string, activityType: string, description: strin
  * applicationManifestRepository.ts's own header comment on why Phase 3, not this one, is
  * where that becomes a hard precondition.
  */
-function createPlanReadyHandler(project: Project, productPackage: ProductPackage, createdBy: string | null) {
+function createPlanReadyHandler(
+  project: Project,
+  productPackage: ProductPackage,
+  createdBy: string | null,
+  context: ManifestGenerationContext,
+) {
   return async (plan: Parameters<typeof buildApplicationManifest>[0]['plan']) => {
     updateProjectWorkspaceState(project.id, { manifestStatus: 'creating' });
 
@@ -136,6 +162,10 @@ function createPlanReadyHandler(project: Project, productPackage: ProductPackage
       return;
     }
 
+    // Phase 2 reads this back — every file-lifecycle hook below resolves a generated path against these entries.
+    context.manifestId = result.manifest.id;
+    context.files = result.files ?? [];
+
     updateProjectWorkspaceState(project.id, {
       manifestStatus: 'persisted',
       manifestVersion: result.manifest.version,
@@ -148,6 +178,153 @@ function createPlanReadyHandler(project: Project, productPackage: ProductPackage
         ? `Application Manifest v${result.manifest.version} persisted (${result.manifest.totalFiles} planned file(s))`
         : `Application Manifest unchanged — reused v${result.manifest.version}`,
     );
+  };
+}
+
+/** role (e.g. "code-gen-page:HomePage", "code-gen-components", "scaffold") -> the manifest file category an UNPLANNED file returned under that role most likely belongs to — only used by the reconciliation path (requirement G), never for matching an already-planned file (that's a straight path lookup). */
+function categoryForRole(role: string): string {
+  if (role.startsWith('code-gen-page')) {
+    return 'pages';
+  }
+
+  if (role === 'code-gen-components') {
+    return 'components';
+  }
+
+  if (role === 'code-gen-types') {
+    return 'types';
+  }
+
+  if (role === 'code-gen-services') {
+    return 'services';
+  }
+
+  return 'other';
+}
+
+/**
+ * Sprint 44.2, Phase 2 — implements generationPipeline.ts's `FileLifecycleHooks` against
+ * the manifest `createPlanReadyHandler` just persisted: marks a file 'generating' right
+ * before its AI call, persists its content (as a new version only if the checksum
+ * changed) immediately after, and marks it 'failed' with its error otherwise — never
+ * waiting for the whole run to finish (requirement D). A file the AI returned that isn't
+ * in `context.files` is reconciled into the manifest rather than silently dropped
+ * (requirement G). Every step here is best-effort/non-blocking, matching
+ * generatedFilesRepository.ts's own non-blocking-in-Phase-2 contract — a persistence
+ * failure is recorded (workspace state + activity) but never stops generation.
+ */
+function createFileLifecycleHooks(
+  project: Project,
+  createdBy: string | null,
+  context: ManifestGenerationContext,
+): FileLifecycleHooks {
+  function findPlannedFile(path: string): ApplicationManifestFile | undefined {
+    return context.files.find((file) => file.path === path);
+  }
+
+  return {
+    async onFilesStarting(role, path) {
+      if (!context.manifestId) {
+        return;
+      }
+
+      const targets = path
+        ? [findPlannedFile(path)].filter((file): file is ApplicationManifestFile => Boolean(file))
+        : context.files.filter((file) => file.category === categoryForRole(role) && file.status !== 'complete');
+
+      for (const target of targets) {
+        await markFileGenerating({
+          projectId: project.id,
+          manifestId: context.manifestId,
+          manifestFileId: target.id,
+          path: target.path,
+          role,
+        });
+      }
+    },
+
+    async onFileReady(file, role) {
+      if (!context.manifestId) {
+        return;
+      }
+
+      let planned = findPlannedFile(file.path);
+
+      if (!planned) {
+        const reconciled = await reconcileUnplannedFile({
+          projectId: project.id,
+          manifestId: context.manifestId,
+          path: file.path,
+          sourceKind: role === 'scaffold' ? 'derived' : 'ai_generated',
+          category: categoryForRole(role),
+        });
+
+        if (!reconciled.ok || !reconciled.manifestFileId) {
+          logActivity(
+            project.id,
+            'unplanned_file_rejected',
+            `Generated file at an unsafe/unplanned path was not persisted: ${file.path}`,
+          );
+
+          return;
+        }
+
+        planned = {
+          id: reconciled.manifestFileId,
+          manifestId: context.manifestId,
+          projectId: project.id,
+          path: file.path,
+          fileType: file.path.split('.').pop() ?? 'unknown',
+          category: categoryForRole(role) as ApplicationManifestFile['category'],
+          generationOrder: context.files.length,
+          dependencies: [],
+          required: false,
+          sourceKind: role === 'scaffold' ? 'derived' : 'ai_generated',
+          status: 'pending',
+          generationAttempts: 0,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        context.files = [...context.files, planned];
+      }
+
+      const result = await persistGeneratedFile({
+        projectId: project.id,
+        manifestId: context.manifestId,
+        manifestFileId: planned.id,
+        path: file.path,
+        content: file.content,
+        generationSource: role,
+        changeReason: `Generated by ${role}`,
+        createdBy: createdBy ?? undefined,
+      });
+
+      if (!result.ok) {
+        updateProjectWorkspaceState(project.id, {
+          manifestPersistenceError: `Failed to persist ${file.path}: ${result.error}`,
+        });
+      }
+    },
+
+    async onStageFailed(role, error, path) {
+      if (!context.manifestId) {
+        return;
+      }
+
+      const targets = path
+        ? [findPlannedFile(path)].filter((file): file is ApplicationManifestFile => Boolean(file))
+        : context.files.filter((file) => file.category === categoryForRole(role));
+
+      for (const target of targets) {
+        await markFileFailed({
+          projectId: project.id,
+          manifestId: context.manifestId,
+          manifestFileId: target.id,
+          path: target.path,
+          error,
+        });
+      }
+    },
   };
 }
 
@@ -287,6 +464,9 @@ export function useCodeGeneration() {
       const codeGenGenerate: GenerateFn = (system, prompt, opts) =>
         generate(system, prompt, { ...opts, ...getRoleGenerateOptions(project, 'frontend-draft') });
 
+      const manifestContext: ManifestGenerationContext = { files: [] };
+      const currentUserId = user?.id ?? null;
+
       const result = await generateProject(
         project,
         productPackage,
@@ -309,7 +489,8 @@ export function useCodeGeneration() {
             detail: progress.detail,
           });
         },
-        createPlanReadyHandler(project, productPackage, user?.id ?? null),
+        createPlanReadyHandler(project, productPackage, currentUserId, manifestContext),
+        createFileLifecycleHooks(project, currentUserId, manifestContext),
       );
 
       if (!result.ok || !result.project) {

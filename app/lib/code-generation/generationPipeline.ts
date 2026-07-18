@@ -24,6 +24,7 @@ import type {
   GenerationPlan,
   GenerationPlanPage,
   GenerationResult,
+  GenerationStage,
   OnGenerationProgress,
 } from './codeGenerationTypes';
 
@@ -422,6 +423,38 @@ function prefixSrc(files: GeneratedFile[], folder: string): GeneratedFile[] {
 export type OnPlanReady = (plan: GenerationPlan) => Promise<void> | void;
 
 /**
+ * Sprint 44.2, Phase 2 — the pipeline's cue for incremental persistence, deliberately
+ * role/path-scoped rather than manifest-aware: this module stays ignorant of
+ * app/lib/application-manifest/ entirely (same decoupling `OnPlanReady` already
+ * established), the CALLER (useCodeGeneration.ts) is the one that resolves a `role`/
+ * `path` back to a `manifest_file_id` using the manifest it already built via
+ * `OnPlanReady`.
+ *
+ *  - `onFilesStarting`: fired once right before the AI call for a stage begins — for
+ *    types/services/one page, `path` is the single exact planned path; for the shared
+ *    components batch, `path` is omitted (the caller marks every planned component still
+ *    pending as 'generating' by role/category instead, since which of N possible names
+ *    the AI will actually return isn't known yet).
+ *  - `onFileReady`: fired once per file the AI ACTUALLY returned, immediately after that
+ *    file passes the stage's existing basic checks — may be a path the caller doesn't
+ *    recognize as planned (an extra file beyond what a prompt asked for), which is
+ *    exactly requirement G's "unplanned file" case; the caller reconciles it rather than
+ *    silently discarding it.
+ *  - `onStageFailed`: fired when an entire stage's AI call fails outright (not
+ *    per-file) — the caller marks every path that stage's own `onFilesStarting` covered
+ *    as 'failed'.
+ *
+ * All three are optional and every call is wrapped the same way `onPlanReady` already
+ * is: a thrown/rejected hook becomes a warning issue, never a pipeline failure — Phase 2
+ * stays purely additive to the existing "never throws" contract.
+ */
+export interface FileLifecycleHooks {
+  onFilesStarting?: (role: string, path?: string) => Promise<void> | void;
+  onFileReady?: (file: GeneratedFile, role: string) => Promise<void> | void;
+  onStageFailed?: (role: string, error: string, path?: string) => Promise<void> | void;
+}
+
+/**
  * Runs the full pipeline for one project against its already-assembled Product
  * Package, reporting progress via `onProgress` as each stage starts. Always resolves
  * (never throws) — a stage failure becomes `{ ok: false, failedStage, issues }` rather
@@ -434,8 +467,29 @@ export async function runGenerationPipeline(
   generate: GenerateFn,
   onProgress: OnGenerationProgress,
   onPlanReady?: OnPlanReady,
+  fileHooks?: FileLifecycleHooks,
 ): Promise<GenerationResult> {
   const issues: GenerationIssue[] = [];
+
+  async function safeInvoke<T extends unknown[]>(
+    hook: ((...args: T) => Promise<void> | void) | undefined,
+    stage: GenerationStage,
+    ...args: T
+  ): Promise<void> {
+    if (!hook) {
+      return;
+    }
+
+    try {
+      await hook(...args);
+    } catch (error) {
+      issues.push({
+        severity: 'warning',
+        stage,
+        message: `File lifecycle hook failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
 
   onProgress({ stage: 'planning' });
 
@@ -471,6 +525,7 @@ export async function runGenerationPipeline(
   const generatedFiles: GeneratedFile[] = [];
 
   onProgress({ stage: 'generating-types' });
+  await safeInvoke(fileHooks?.onFilesStarting, 'generating-types', 'code-gen-types', 'src/types/index.ts');
 
   const typesResult = await callForFiles(
     buildSharedTypesPrompt({
@@ -484,6 +539,14 @@ export async function runGenerationPipeline(
   );
 
   if (!typesResult.ok) {
+    await safeInvoke(
+      fileHooks?.onStageFailed,
+      'generating-types',
+      'code-gen-types',
+      typesResult.error,
+      'src/types/index.ts',
+    );
+
     return {
       ok: false,
       issues: [...issues, { severity: 'error', stage: 'generating-types', message: typesResult.error }],
@@ -493,7 +556,12 @@ export async function runGenerationPipeline(
 
   generatedFiles.push(...typesResult.files);
 
+  for (const file of typesResult.files) {
+    await safeInvoke(fileHooks?.onFileReady, 'generating-types', file, 'code-gen-types');
+  }
+
   onProgress({ stage: 'generating-services' });
+  await safeInvoke(fileHooks?.onFilesStarting, 'generating-services', 'code-gen-services', 'src/services/api.ts');
 
   const servicesResult = await callForFiles(
     buildServicesPrompt({
@@ -507,6 +575,14 @@ export async function runGenerationPipeline(
   );
 
   if (!servicesResult.ok) {
+    await safeInvoke(
+      fileHooks?.onStageFailed,
+      'generating-services',
+      'code-gen-services',
+      servicesResult.error,
+      'src/services/api.ts',
+    );
+
     return {
       ok: false,
       issues: [...issues, { severity: 'error', stage: 'generating-services', message: servicesResult.error }],
@@ -516,8 +592,16 @@ export async function runGenerationPipeline(
 
   generatedFiles.push(...servicesResult.files);
 
+  for (const file of servicesResult.files) {
+    await safeInvoke(fileHooks?.onFileReady, 'generating-services', file, 'code-gen-services');
+  }
+
   for (const [index, page] of plan.pages.entries()) {
     onProgress({ stage: 'generating-pages', detail: `${page.name} (${index + 1}/${plan.pages.length})` });
+
+    const pageRole = `code-gen-page:${page.componentName}`;
+    const pagePath = `src/pages/${page.fileName}`;
+    await safeInvoke(fileHooks?.onFilesStarting, 'generating-pages', pageRole, pagePath);
 
     const pageResult = await callForFiles(
       buildPagePrompt({
@@ -531,7 +615,7 @@ export async function runGenerationPipeline(
       }),
       generate,
       project.id,
-      `code-gen-page:${page.componentName}`,
+      pageRole,
     );
 
     if (!pageResult.ok) {
@@ -542,6 +626,7 @@ export async function runGenerationPipeline(
         message: `${page.name}: ${pageResult.error}`,
         filePath: page.fileName,
       });
+      await safeInvoke(fileHooks?.onStageFailed, 'generating-pages', pageRole, pageResult.error, pagePath);
       continue;
     }
 
@@ -554,12 +639,21 @@ export async function runGenerationPipeline(
      * are kept as extra page-scoped files under their own (prefixed) path.
      */
     const [primaryFile, ...extraFiles] = pageResult.files;
-    generatedFiles.push({ path: `src/pages/${page.fileName}`, content: primaryFile.content });
-    generatedFiles.push(...prefixSrc(extraFiles, 'pages'));
+    const primaryPageFile = { path: pagePath, content: primaryFile.content };
+    const extraPageFiles = prefixSrc(extraFiles, 'pages');
+    generatedFiles.push(primaryPageFile, ...extraPageFiles);
+
+    await safeInvoke(fileHooks?.onFileReady, 'generating-pages', primaryPageFile, pageRole);
+
+    // Extra files beyond the one planned page path are exactly requirement G's "unplanned file" case — the caller reconciles them, this pipeline just reports them.
+    for (const extraFile of extraPageFiles) {
+      await safeInvoke(fileHooks?.onFileReady, 'generating-pages', extraFile, pageRole);
+    }
   }
 
   if (plan.sharedComponents.length > 0) {
     onProgress({ stage: 'generating-components' });
+    await safeInvoke(fileHooks?.onFilesStarting, 'generating-components', 'code-gen-components');
 
     const componentsResult = await callForFiles(
       buildSharedComponentsPrompt({
@@ -573,9 +667,20 @@ export async function runGenerationPipeline(
     );
 
     if (componentsResult.ok) {
-      generatedFiles.push(...prefixSrc(componentsResult.files, 'components'));
+      const componentFiles = prefixSrc(componentsResult.files, 'components');
+      generatedFiles.push(...componentFiles);
+
+      for (const file of componentFiles) {
+        await safeInvoke(fileHooks?.onFileReady, 'generating-components', file, 'code-gen-components');
+      }
     } else {
       issues.push({ severity: 'warning', stage: 'generating-components', message: componentsResult.error });
+      await safeInvoke(
+        fileHooks?.onStageFailed,
+        'generating-components',
+        'code-gen-components',
+        componentsResult.error,
+      );
     }
   }
 
@@ -599,6 +704,16 @@ export async function runGenerationPipeline(
     template,
     pages: plan.pages,
   });
+
+  /*
+   * Requirement F — deterministic scaffold files must be persisted too, not just
+   * AI-generated ones. No `onFilesStarting` here: unlike the AI stages above, there's no
+   * async gap where a 'generating' interim status would ever be observed — the content
+   * already exists synchronously — so this goes straight to `onFileReady`.
+   */
+  for (const file of scaffoldFiles) {
+    await safeInvoke(fileHooks?.onFileReady, 'assembling', file, 'scaffold');
+  }
 
   const filesByPath = new Map<string, GeneratedFile>();
 

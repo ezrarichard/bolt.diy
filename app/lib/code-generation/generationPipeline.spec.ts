@@ -164,3 +164,160 @@ describe('runGenerationPipeline — onPlanReady (Sprint 44.2 Application Manifes
     expect(result.ok).toBe(true);
   });
 });
+
+describe('runGenerationPipeline — file lifecycle hooks (Sprint 44.2 Phase 2, incremental persistence)', () => {
+  it('persists each file incrementally: onFilesStarting then onFileReady fire per file, before the whole run finishes', async () => {
+    const events: string[] = [];
+
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      stubGenerate,
+      () => {},
+      undefined,
+      {
+        onFilesStarting: (role, path) => {
+          events.push(`starting:${role}:${path ?? '(batch)'}`);
+        },
+        onFileReady: (file, role) => {
+          events.push(`ready:${role}:${file.path}`);
+        },
+        onStageFailed: (role) => {
+          events.push(`failed:${role}`);
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+
+    /*
+     * types and services each get a starting/ready pair before pages ever begin.
+     * `onFilesStarting`'s path is the canonical EXPECTED path (known before the AI call);
+     * `onFileReady`'s path is whatever the stub actually returned — deliberately not
+     * asserted to be identical, since a real model isn't guaranteed to match its own
+     * prompt's requested path either (see manifestBuilder.ts's own header comment on
+     * this — reconciliation, not equality, is Phase 2's answer to that gap).
+     */
+    expect(events[0]).toBe('starting:code-gen-types:src/types/index.ts');
+    expect(events[1]).toBe('ready:code-gen-types:src/stub.ts');
+    expect(events[2]).toBe('starting:code-gen-services:src/services/api.ts');
+    expect(events[3]).toBe('ready:code-gen-services:src/stub.ts');
+
+    // Every 'starting' has a corresponding 'ready' later in the same run — nothing is generated without a lifecycle event.
+    const startingCount = events.filter((e) => e.startsWith('starting:')).length;
+    const readyCount = events.filter((e) => e.startsWith('ready:')).length;
+    expect(readyCount).toBeGreaterThan(0);
+    expect(startingCount).toBeGreaterThan(0);
+  });
+
+  it('persists deterministic scaffold files too, not just AI-generated ones (requirement F)', async () => {
+    const readyFiles: { path: string; role: string }[] = [];
+
+    await runGenerationPipeline(makeProject(), makeEmptyProductPackage(), stubGenerate, () => {}, undefined, {
+      onFileReady: (file, role) => {
+        readyFiles.push({ path: file.path, role });
+      },
+    });
+
+    const scaffoldReady = readyFiles.filter((entry) => entry.role === 'scaffold');
+    const scaffoldPaths = scaffoldReady.map((entry) => entry.path);
+
+    expect(scaffoldPaths).toEqual(
+      expect.arrayContaining(['package.json', 'src/App.tsx', 'src/main.tsx', 'index.html']),
+    );
+  });
+
+  it('a page failure preserves already-persisted files — onStageFailed fires only for the failed page, prior onFileReady calls stand', async () => {
+    let callCount = 0;
+    const generate: GenerateFn = async (...args) => {
+      callCount += 1;
+
+      /*
+       * The default (empty Product Package) plan calls generate() in order: types,
+       * services, then the one page. callForFiles() retries a failure up to 2 more times
+       * (generateRoleWithRecovery's bounded retry) before giving up, so every call from
+       * the page's first attempt onward must fail for the page to actually exhaust
+       * retries and report failed — a single failed call would just get silently
+       * retried-and-succeed, which is not what this test is checking.
+       */
+      if (callCount >= 3) {
+        return { ok: false, error: 'model quota exceeded' };
+      }
+
+      return stubGenerate(...args);
+    };
+
+    const readyPaths: string[] = [];
+    const failedPaths: string[] = [];
+
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      generate,
+      () => {},
+      undefined,
+      {
+        onFileReady: (file) => {
+          readyPaths.push(file.path);
+        },
+        onStageFailed: (_role, _error, path) => {
+          if (path) {
+            failedPaths.push(path);
+          }
+        },
+      },
+    );
+
+    // types/services succeeded and were persisted before the page exhausted its retries — that prior work is untouched, even though the overall run still fails validation (its only page never materialized).
+    expect(readyPaths.filter((path) => path === 'src/stub.ts')).toHaveLength(2);
+    expect(failedPaths).toContain('src/pages/HomePage.tsx');
+    expect(result.failedStage).toBe('validating');
+  });
+
+  it('reports an extra file returned beyond the one planned page path via onFileReady (surfacing an unplanned file for reconciliation)', async () => {
+    const generate: GenerateFn = async () => ({
+      ok: true,
+      text: JSON.stringify({
+        files: [
+          { path: 'src/pages/HomePage.tsx', content: 'export default function HomePage() { return null; }' },
+          { path: 'src/pages/BonusWidget.tsx', content: 'export default function BonusWidget() { return null; }' },
+        ],
+      }),
+    });
+
+    const readyPaths: string[] = [];
+
+    await runGenerationPipeline(makeProject(), makeEmptyProductPackage(), generate, () => {}, undefined, {
+      onFileReady: (file) => {
+        readyPaths.push(file.path);
+      },
+    });
+
+    expect(readyPaths).toContain('src/pages/BonusWidget.tsx');
+  });
+
+  it('a thrown file-lifecycle hook is recorded as a warning issue, never a pipeline failure', async () => {
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      stubGenerate,
+      () => {},
+      undefined,
+      {
+        onFileReady: () => {
+          throw new Error('persistence boom');
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(
+      result.issues.some((issue) => issue.severity === 'warning' && issue.message.includes('persistence boom')),
+    ).toBe(true);
+  });
+
+  it('runs correctly with no fileHooks provided at all (backward compatible)', async () => {
+    const result = await runGenerationPipeline(makeProject(), makeEmptyProductPackage(), stubGenerate, () => {});
+    expect(result.ok).toBe(true);
+  });
+});

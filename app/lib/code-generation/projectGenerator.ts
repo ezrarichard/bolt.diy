@@ -1,6 +1,6 @@
 import type { Project } from '~/lib/stores/projects';
 import type { ProductPackage } from '~/lib/product-assembly/assemblyTypes';
-import { runGenerationPipeline, type OnPlanReady } from './generationPipeline';
+import { runGenerationPipeline, type FileLifecycleHooks, type OnPlanReady } from './generationPipeline';
 import type { GenerateFn, GenerationResult, OnGenerationProgress } from './codeGenerationTypes';
 
 /**
@@ -18,6 +18,7 @@ export async function generateProject(
   generate: GenerateFn,
   onProgress: OnGenerationProgress,
   onPlanReady?: OnPlanReady,
+  fileHooks?: FileLifecycleHooks,
 ): Promise<GenerationResult> {
   const hasAnySection = productPackage.sections.some(
     (section) => section.id !== 'documentation' && section.files.length > 0,
@@ -37,7 +38,7 @@ export async function generateProject(
     };
   }
 
-  return runGenerationPipeline(project, productPackage, generate, onProgress, onPlanReady);
+  return runGenerationPipeline(project, productPackage, generate, onProgress, onPlanReady, fileHooks);
 }
 
 export const projectGenerator = {

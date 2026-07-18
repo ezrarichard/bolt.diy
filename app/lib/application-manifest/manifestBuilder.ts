@@ -181,6 +181,31 @@ function buildFileDrafts(plan: GenerationPlan): ApplicationManifestFileDraft[] {
  * established "never block on validation, report it" convention (see
  * generationPipeline.ts's validateGeneratedFiles()).
  */
+/**
+ * Single-path safety check — empty/traversal/absolute/oversized — shared with
+ * app/lib/generated-files/generatedFilesRepository.ts's unplanned-file reconciliation
+ * (Phase 2, requirement G: "validate the path before persistence" for a file the AI
+ * returned that wasn't itself in the manifest). Returns the trimmed path plus a reason
+ * string when the path is rejected, `undefined` when it's safe.
+ */
+export function checkPathSafety(rawPath: string): { safe: true; path: string } | { safe: false; reason: string } {
+  const path = rawPath.trim();
+
+  if (path.length === 0) {
+    return { safe: false, reason: 'Empty file path.' };
+  }
+
+  if (path.startsWith('/') || path.includes('..') || path.includes('\\')) {
+    return { safe: false, reason: `Unsafe/traversal path: ${path}` };
+  }
+
+  if (path.length > MAX_PATH_LENGTH || path.split('/').some((segment) => segment.length > MAX_SEGMENT_LENGTH)) {
+    return { safe: false, reason: `Excessively long path: ${path}` };
+  }
+
+  return { safe: true, path };
+}
+
 /** Exported for direct testing of the rejection rules (duplicate/invalid/oversized paths, dangling dependency references, missing mandatory entry files) independent of plan construction — see manifestBuilder.spec.ts. */
 export function validateManifestFileDrafts(files: ApplicationManifestFileDraft[]): {
   files: ApplicationManifestFileDraft[];
@@ -191,22 +216,14 @@ export function validateManifestFileDrafts(files: ApplicationManifestFileDraft[]
   const kept: ApplicationManifestFileDraft[] = [];
 
   for (const file of files) {
-    const path = file.path.trim();
+    const safety = checkPathSafety(file.path);
 
-    if (path.length === 0) {
-      issues.push({ severity: 'error', message: 'Empty file path was dropped.' });
+    if (!safety.safe) {
+      issues.push({ severity: 'error', message: `${safety.reason} was dropped.`, path: file.path.trim() || undefined });
       continue;
     }
 
-    if (path.startsWith('/') || path.includes('..') || path.includes('\\')) {
-      issues.push({ severity: 'error', message: `Unsafe/traversal path was dropped: ${path}`, path });
-      continue;
-    }
-
-    if (path.length > MAX_PATH_LENGTH || path.split('/').some((segment) => segment.length > MAX_SEGMENT_LENGTH)) {
-      issues.push({ severity: 'error', message: `Excessively long path was dropped: ${path}`, path });
-      continue;
-    }
+    const path = safety.path;
 
     if (seenPaths.has(path)) {
       issues.push({ severity: 'error', message: `Duplicate path was dropped: ${path}`, path });
