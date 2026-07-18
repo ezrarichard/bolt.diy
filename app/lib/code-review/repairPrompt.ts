@@ -25,6 +25,8 @@ Rules:
 - Only touch files that are actually necessary to fix the reported error(s). Do not regenerate the whole app.
 - Never delete "package.json". Never delete every file under "src/".
 - Every path is relative to the project root (e.g. "src/pages/AboutPage.tsx"), matching the file tree given below exactly.
+- If the error is a missing/incorrect import: check the full generated file tree below first. If the symbol is already defined and exported somewhere else in the project, fix the import (correct path, correct symbol name, or re-export it from the barrel file it's missing from) rather than inventing a new, possibly-inconsistent definition.
+- Never weaken TypeScript safety just to make an error go away — do not add placeholder types like "type X = any" or "as any" casts, and do not delete a type that's genuinely needed elsewhere. A real, correctly-typed fix is required even if it takes touching one more file.
 - "filesToUpdate" entries must contain the file's COMPLETE new content, not a diff/snippet.
 - "confidence" is a number from 0 to 1 — your own estimate that this patch actually fixes the error.
 - "remainingRisks" is a short list of anything you're not fully sure about after this patch (can be empty).`;

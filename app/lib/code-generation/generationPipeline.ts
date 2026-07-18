@@ -135,17 +135,43 @@ function slugify(name: string): string {
 const MAX_COMPONENT_NAME_WORDS = 6;
 const MAX_COMPONENT_NAME_LENGTH = 60;
 
+/**
+ * Assembly Auto-Repair — the previous version capped word count first (max 6), then took a
+ * raw character slice of the joined PascalCase string (max 60 chars) as a second pass. That
+ * character slice cuts mid-word whenever 6 words' worth of PascalCase text exceeds 60
+ * characters — this is exactly how a real generation produced "...ProductGPage" (truncated
+ * out of "...ProductGridPage"): a syntactically valid but unreadable, collision-prone
+ * identifier fragment. Building the name word-by-word and stopping BEFORE the word that would
+ * cross the character budget guarantees every generated name ends on a whole word.
+ */
 function toComponentName(name: string): string {
   const words = name
     .replace(/[^a-zA-Z0-9]+/g, ' ')
     .trim()
     .split(/\s+/)
     .filter(Boolean)
-    .slice(0, MAX_COMPONENT_NAME_WORDS);
-  const pascal = words
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join('')
-    .slice(0, MAX_COMPONENT_NAME_LENGTH);
+    .slice(0, MAX_COMPONENT_NAME_WORDS)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1));
+
+  const suffixBudget = MAX_COMPONENT_NAME_LENGTH - 'Page'.length;
+  let pascal = '';
+
+  for (const word of words) {
+    if (pascal.length + word.length > suffixBudget) {
+      /*
+       * A whole extra word won't fit — for the very first word (nothing accumulated yet),
+       * still take as much of it as fits rather than falling all the way back to "Home",
+       * which would otherwise collapse every over-long single-word name to the same fallback.
+       */
+      if (pascal.length === 0) {
+        pascal = word.slice(0, suffixBudget);
+      }
+
+      break;
+    }
+
+    pascal += word;
+  }
 
   return `${pascal || 'Home'}Page`;
 }

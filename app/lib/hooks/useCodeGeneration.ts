@@ -115,7 +115,10 @@ function createRepairEventHandler(projectId: string, onAttempt: (attemptNumber: 
         upsertEngineeringTimelineEvent('code-review', {
           label: 'Code Reviewer: issues found',
           status: 'failed',
-          detail: `${event.issues.length} issue(s) found`,
+          detail:
+            event.issues.length > 0
+              ? `${event.issues.length} issue(s) found — e.g. ${event.issues[0].message}`
+              : `${event.issues.length} issue(s) found`,
         });
         break;
       case 'repair-attempt-started':
@@ -301,9 +304,28 @@ export function useCodeGeneration() {
         });
 
         if (!reviewResult.ok) {
+          /*
+           * Assembly Auto-Repair — ERROR REPORTING spec: the customer-facing message on final
+           * failure names the remaining issue(s), which files they're in, and how many repair
+           * attempts were made — never a raw stack trace. The "previous application ... left
+           * untouched" confirmation is appended separately by ProductPackagePanel.tsx's own
+           * fixed footer (so it isn't duplicated here) — true unconditionally on this path,
+           * since nothing is written to the WebContainer until AFTER this loop returns ok.
+           */
+          const blockingIssues = reviewResult.issues.filter((issue) => issue.severity === 'error');
+          const affectedFiles = Array.from(
+            new Set(blockingIssues.map((issue) => issue.filePath).filter((path): path is string => Boolean(path))),
+          );
           const message =
-            reviewResult.issues.find((issue) => issue.severity === 'error')?.message ??
-            'Code review found issues that could not be automatically repaired.';
+            blockingIssues.length > 0
+              ? [
+                  `${blockingIssues.length} issue(s) remained after ${totalRepairAttempts} repair attempt(s):`,
+                  ...blockingIssues.slice(0, 5).map((issue) => `- ${issue.message}`),
+                  ...(blockingIssues.length > 5 ? [`- (${blockingIssues.length - 5} more not shown)`] : []),
+                  '',
+                  `Affected file(s): ${affectedFiles.join(', ') || 'none identified'}`,
+                ].join('\n')
+              : 'Code review found issues that could not be automatically repaired.';
           setState({ isRunning: false, stage: 'failed', stageLabel: 'Failed', result, error: message });
           logActivity(project.id, 'generation_failed', `Code review failed after repair attempts: ${message}`);
           updateProjectWorkspaceState(project.id, {

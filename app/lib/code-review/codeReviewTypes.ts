@@ -52,6 +52,22 @@ export interface CodeReviewIssue {
 
   /** Human-readable description of the mechanical fix, e.g. "Move StrictMode import to react". */
   suggestedAction?: string;
+
+  /**
+   * Assembly Auto-Repair — the file that SHOULD have exported `importedSymbol` (the barrel/
+   * target file an import resolved to) for a `missing-export` issue, e.g. "src/types/index.ts".
+   * Lets assemblyRepair.ts's barrel-export repair go straight to the right file without
+   * re-deriving it from `message` text.
+   */
+  targetPath?: string;
+
+  /**
+   * Assembly Auto-Repair — for a `wrong-import-path` issue, the project-relative path of a
+   * generated file assemblyRepair.ts found that actually exports every symbol the failing
+   * import statement asked for (named + default, as applicable). Absent when no single file
+   * in the project satisfies the whole import.
+   */
+  correctPath?: string;
 }
 
 /**
@@ -178,7 +194,17 @@ export type RepairLoopEvent =
   | { type: 'build-validation-started' }
   | { type: 'preview-validation-passed' }
   | { type: 'preview-validation-failed'; error: BuildErrorInfo }
-  | { type: 'manual-attention-required'; stage: CodeReviewStage; detail: string };
+  | {
+      type: 'manual-attention-required';
+      stage: CodeReviewStage;
+      detail: string;
+
+      /** Assembly Auto-Repair — every distinct file the remaining issue(s) point at, for the final diagnostic report (spec's "Affected files"). Empty/absent when no issue carried a filePath (e.g. a build-stage error with no resolved location). */
+      affectedFiles?: string[];
+
+      /** Assembly Auto-Repair — how many LLM repair attempts actually ran before giving up (spec's "Repair attempts performed"). */
+      attemptsPerformed?: number;
+    };
 
 export type OnRepairLoopEvent = (event: RepairLoopEvent) => void;
 

@@ -2,8 +2,9 @@ import { extractJsonPayload } from '~/lib/projects/draftParsing';
 import type { GenerateFn, GeneratedFile, GeneratedProject } from '~/lib/code-generation/codeGenerationTypes';
 import type { InstallAndStartResult } from '~/lib/code-generation/webcontainerWriter';
 import { buildRepairPrompt } from './repairPrompt';
-import { runStaticValidators, NPM_INSTALL_AND_BOOT_VALIDATOR } from './codeValidator';
+import { runStaticValidators, NPM_INSTALL_AND_BOOT_VALIDATOR, hasBlockingIssues } from './codeValidator';
 import { applyDeterministicReactImportRepairs, DETERMINISTIC_REACT_IMPORT_REPAIR_SOURCE } from './reactImportRepair';
+import { applyAssemblyDeterministicRepairs, DETERMINISTIC_ASSEMBLY_REPAIR_SOURCE } from './assemblyRepair';
 import { runBuildValidation } from './errorCollector';
 import { computePatchSignature, recordRepairAttempt, recordValidationRun } from './repairHistoryRepository';
 import type {
@@ -205,11 +206,14 @@ export async function runStaticReviewLoop(params: StaticReviewLoopParams): Promi
   let attempt = 0;
 
   /*
-   * Sprint 43A — deterministic repairs never spend an LLM attempt and never loop: this rule
-   * is only ever allowed to run once per call (i.e. once per generation's static review
-   * cycle), regardless of how many validation/LLM-repair iterations follow. Without this gate
-   * it would re-fire every iteration whenever its own fix still left OTHER static issues
-   * unresolved (a real possibility — the LLM repair loop below can still touch the same file).
+   * Sprint 43A / Assembly Auto-Repair — deterministic repairs never spend an LLM attempt and
+   * never loop: this rule is only ever allowed to run once per call (i.e. once per
+   * generation's static review cycle), regardless of how many validation/LLM-repair
+   * iterations follow. Without this gate it would re-fire every iteration whenever its own
+   * fix still left OTHER static issues unresolved (a real possibility — the LLM repair loop
+   * below can still touch the same file). React-runtime-import repairs (Sprint 43A) and
+   * assembly repairs (missing barrel exports / wrong import paths) run together in this same
+   * single pass — see reactImportRepair.ts and assemblyRepair.ts respectively.
    */
   let deterministicRepairAttempted = false;
   let lastAppliedPatchSignature: string | undefined;
@@ -226,9 +230,9 @@ export async function runStaticReviewLoop(params: StaticReviewLoopParams): Promi
       );
     }
 
-    if (issues.length === 0) {
+    if (!hasBlockingIssues(issues)) {
       params.onEvent({ type: 'static-validation-passed' });
-      return { ok: true, project, issues: [], deterministicRepairedFiles };
+      return { ok: true, project, issues, deterministicRepairedFiles };
     }
 
     params.onEvent({ type: 'static-validation-failed', issues });
@@ -237,14 +241,23 @@ export async function runStaticReviewLoop(params: StaticReviewLoopParams): Promi
     if (!deterministicRepairAttempted) {
       deterministicRepairAttempted = true;
 
-      const { project: deterministicProject, repairedFiles } = applyDeterministicReactImportRepairs(project, issues);
+      const reactImportResult = applyDeterministicReactImportRepairs(project, issues);
+      const assemblyResult = applyAssemblyDeterministicRepairs(reactImportResult.project, issues);
+
+      const repairedFiles = Array.from(new Set([...reactImportResult.repairedFiles, ...assemblyResult.repairedFiles]));
 
       if (repairedFiles.length > 0) {
-        project = deterministicProject;
+        project = assemblyResult.project;
         deterministicRepairedFiles.push(...repairedFiles);
 
+        const summaries = [
+          ...(reactImportResult.repairedFiles.length > 0
+            ? [`moved React runtime import(s) to "react" in ${reactImportResult.repairedFiles.join(', ')}`]
+            : []),
+          ...assemblyResult.summaries,
+        ];
         const errorMessage = issues
-          .filter((issue) => issue.category === 'react-runtime-import')
+          .filter((issue) => repairedFiles.includes(issue.filePath ?? ''))
           .map((issue) => issue.message)
           .join('; ');
 
@@ -257,13 +270,16 @@ export async function runStaticReviewLoop(params: StaticReviewLoopParams): Promi
           errorMessage,
           affectedFiles: repairedFiles,
           status: 'applied',
-          modelUsed: DETERMINISTIC_REACT_IMPORT_REPAIR_SOURCE,
+          modelUsed:
+            assemblyResult.repairedFiles.length > 0
+              ? DETERMINISTIC_ASSEMBLY_REPAIR_SOURCE
+              : DETERMINISTIC_REACT_IMPORT_REPAIR_SOURCE,
         });
         params.onEvent({
           type: 'repair-patch-applied',
           stage: 'static',
           attemptNumber: attempt,
-          summary: `Deterministic repair: moved React runtime import(s) to "react" in ${repairedFiles.join(', ')}`,
+          summary: `Deterministic repair: ${summaries.join('; ')}`,
         });
 
         // Re-validate immediately — this repair didn't consume an LLM attempt.
@@ -272,10 +288,16 @@ export async function runStaticReviewLoop(params: StaticReviewLoopParams): Promi
     }
 
     if (attempt >= maxAttempts) {
+      const affectedFiles = Array.from(
+        new Set(issues.map((issue) => issue.filePath).filter((path): path is string => Boolean(path))),
+      );
+
       params.onEvent({
         type: 'manual-attention-required',
         stage: 'static',
         detail: issues.map((issue) => issue.message).join('; '),
+        affectedFiles,
+        attemptsPerformed: attempt,
       });
 
       return { ok: false, project, issues, deterministicRepairedFiles };
@@ -432,7 +454,13 @@ export async function runBuildRepairLoop(params: BuildRepairLoopParams): Promise
     params.onEvent({ type: 'preview-validation-failed', error: buildError });
 
     if (attempt >= maxAttempts) {
-      params.onEvent({ type: 'manual-attention-required', stage: 'build', detail: buildError.message });
+      params.onEvent({
+        type: 'manual-attention-required',
+        stage: 'build',
+        detail: buildError.message,
+        affectedFiles: buildError.filePath ? [buildError.filePath] : [],
+        attemptsPerformed: attempt,
+      });
       return { ok: false, error: buildError.message, project };
     }
 
