@@ -92,6 +92,8 @@ interface ManifestFileRow {
   completed_at: string | null;
   created_at: string;
   updated_at: string;
+  priority: number | null;
+  queue_position: number | null;
 }
 
 function fromManifestRow(row: ManifestRow): ApplicationManifest {
@@ -142,6 +144,8 @@ function fromFileRow(row: ManifestFileRow): ApplicationManifestFile {
     completedAt: row.completed_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    priority: row.priority ?? undefined,
+    queuePosition: row.queue_position ?? undefined,
   };
 }
 
@@ -159,6 +163,8 @@ function toFileInsertRow(manifestId: string, projectId: string, file: Applicatio
     required: file.required,
     source_kind: file.sourceKind,
     status: 'pending',
+    priority: file.priority ?? null,
+    queue_position: file.queuePosition ?? null,
   };
 }
 
@@ -332,9 +338,44 @@ export async function saveApplicationManifest(
   }
 }
 
+/**
+ * Sprint 44.2, Phase 4 — every manifest version ever created for a project (active AND
+ * superseded), newest-first. The Generation Dashboard's "Manifest Versions" section
+ * reads this directly rather than reconstructing version history from anywhere else —
+ * `builders_application_manifests` already keeps every version as its own row (see
+ * saveApplicationManifest's supersede-then-insert pattern), so there's nothing new to
+ * store for this.
+ */
+export async function listManifestVersions(projectId: string): Promise<ApplicationManifest[]> {
+  const client = getBuildersDbClient();
+
+  if (!isAvailable() || !client) {
+    unavailable('listManifestVersions');
+    return [];
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_application_manifests')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('version', { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    return ((data ?? []) as ManifestRow[]).map(fromManifestRow);
+  } catch (error) {
+    logError('listManifestVersions', error);
+    return [];
+  }
+}
+
 export const applicationManifestRepository = {
   isAvailable,
   getActiveApplicationManifest,
   listApplicationManifestFiles,
   saveApplicationManifest,
+  listManifestVersions,
 };

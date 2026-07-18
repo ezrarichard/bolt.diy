@@ -22,9 +22,17 @@
  * kept distinct from `superseded`: `skipped` means "intentionally not generated this
  * run" (not used before Phase 3 either, reserved for a future optional-file feature),
  * `superseded` means "this row belongs to a manifest version that's no longer active."
+ *
+ * Sprint 44.2, Phase 4 adds `queued` — a file that's been scheduled but generation
+ * hasn't started yet. Distinct from `pending` ("not scheduled at all"): today's
+ * single-worker pipeline never actually sets this (see generationPipeline.ts, which goes
+ * straight `pending` → `generating`), but the value exists now so a future
+ * parallel/queued-worker scheduler (see this phase's own "design for it, don't build it"
+ * instruction) needs no schema or type-union change to start using it.
  */
 export type ManifestFileStatus =
   | 'pending'
+  | 'queued'
   | 'generating'
   | 'generated'
   | 'validating'
@@ -59,9 +67,15 @@ export interface ApplicationManifestFileDraft {
   componentName?: string;
   displayName?: string;
   generationOrder: number;
+
+  /** The dependency graph's "depends_on" edges — paths this file needs. `used_by` (the inverse) is deliberately NOT a stored field — see dependencyGraph.ts's own header comment on why duplicating it would risk drift. */
   dependencies: string[];
   required: boolean;
   sourceKind: ManifestFileSourceKind;
+
+  /** Sprint 44.2, Phase 4 — reserved for a future queue-aware scheduler (see this file's ManifestFileStatus comment on `'queued'`). Undefined/null today; no code assigns these yet. */
+  priority?: number;
+  queuePosition?: number;
 }
 
 /** A planned file once persisted. */

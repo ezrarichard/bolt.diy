@@ -7,7 +7,7 @@ import type { ProductPackage, ProductPackageFile } from '~/lib/product-assembly/
 import { formatArtifactTimestamp } from '~/lib/projects/artifacts';
 import { getWorkspaceSnapshotProvider } from '~/lib/workspace-snapshot';
 import { useCodeGeneration } from '~/lib/hooks/useCodeGeneration';
-import { ApplicationManifestPanel } from './ApplicationManifestPanel';
+import { GenerationDashboard } from './GenerationDashboard';
 
 interface ProductPackagePanelProps {
   project: Project;
@@ -184,28 +184,34 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
                 : 'Continue Development'}
             </button>
             {pkg && (
-              <button
-                type="button"
-                onClick={handleGenerate}
-                disabled={codeGeneration.isRunning}
-                title="Continues from wherever generation left off — already-complete files are skipped, not regenerated."
-                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium border border-bolt-elements-borderColor/50 text-bolt-elements-textSecondary hover:bg-bolt-elements-background-depth-2 transition-colors disabled:opacity-50"
-              >
-                <span className="i-ph:arrow-clockwise w-3.5 h-3.5" />
-                Resume Generation
-              </button>
+              <div className="flex flex-col items-start gap-0.5">
+                <button
+                  type="button"
+                  onClick={handleGenerate}
+                  disabled={codeGeneration.isRunning}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium border border-bolt-elements-borderColor/50 text-bolt-elements-textSecondary hover:bg-bolt-elements-background-depth-2 transition-colors disabled:opacity-50"
+                >
+                  <span className="i-ph:arrow-clockwise w-3.5 h-3.5" />
+                  Resume Generation
+                </button>
+                <span className="text-[10px] text-bolt-elements-textTertiary pl-1">Continues current manifest</span>
+              </div>
             )}
             {pkg && (
-              <button
-                type="button"
-                onClick={handleRestart}
-                disabled={codeGeneration.isRunning}
-                title="Creates a new manifest version and regenerates every file from scratch — nothing is carried forward."
-                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium border border-bolt-elements-borderColor/50 text-bolt-elements-textSecondary hover:bg-bolt-elements-background-depth-2 transition-colors disabled:opacity-50"
-              >
-                <span className="i-ph:arrow-counter-clockwise w-3.5 h-3.5" />
-                Restart Generation
-              </button>
+              <div className="flex flex-col items-start gap-0.5">
+                <button
+                  type="button"
+                  onClick={handleRestart}
+                  disabled={codeGeneration.isRunning}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium border border-bolt-elements-borderColor/50 text-bolt-elements-textSecondary hover:bg-bolt-elements-background-depth-2 transition-colors disabled:opacity-50"
+                >
+                  <span className="i-ph:arrow-counter-clockwise w-3.5 h-3.5" />
+                  Restart Generation
+                </button>
+                <span className="text-[10px] text-bolt-elements-textTertiary pl-1">
+                  Creates Manifest Version +1 — nothing carried forward
+                </span>
+              </div>
             )}
           </div>
         </div>
@@ -253,7 +259,16 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
         </div>
       )}
 
-      <ApplicationManifestPanel projectId={project.id} refreshKey={manifestRefreshKey} />
+      <GenerationDashboard
+        projectId={project.id}
+        refreshKey={manifestRefreshKey}
+        liveState={{
+          isRunning: codeGeneration.isRunning,
+          stage: codeGeneration.stage,
+          stageLabel: codeGeneration.stageLabel,
+          detail: codeGeneration.detail,
+        }}
+      />
 
       {!pkg && !isLoadingPackage && (
         <div className="text-xs text-bolt-elements-textTertiary px-1">

@@ -10,7 +10,9 @@ vi.mock('~/lib/builders-db/client', () => ({
   isBuildersDbConfigured: () => true,
 }));
 
-const { saveApplicationManifest, getActiveApplicationManifest } = await import('./applicationManifestRepository');
+const { saveApplicationManifest, getActiveApplicationManifest, listManifestVersions } = await import(
+  './applicationManifestRepository'
+);
 
 function makeDraft(overrides: Partial<ApplicationManifestDraft> = {}): ApplicationManifestDraft {
   return {
@@ -389,5 +391,76 @@ describe('saveApplicationManifest', () => {
     const result = await getActiveApplicationManifest('proj-1');
 
     expect(result).toBeNull();
+  });
+});
+
+describe('listManifestVersions', () => {
+  beforeEach(() => {
+    getBuildersDbClientMock.mockReset();
+  });
+
+  it('returns every version for a project, newest-first', async () => {
+    const rows = [
+      {
+        id: 'm-2',
+        project_id: 'proj-1',
+        version: 2,
+        status: 'active',
+        plan_checksum: 'a',
+        source_content_checksum: 'a',
+        metadata: {},
+        total_files: 1,
+        completed_files: 0,
+        failed_files: 0,
+        framework: 'react-vite-ts',
+        package_manager: 'npm',
+        entry_file: 'src/main.tsx',
+        persisted_at: '2026-07-19T00:00:00.000Z',
+        created_at: '2026-07-19T00:00:00.000Z',
+        updated_at: '2026-07-19T00:00:00.000Z',
+        created_by: null,
+        completed_at: null,
+        source_package_version: null,
+        source_package_assembled_at: null,
+      },
+      {
+        id: 'm-1',
+        project_id: 'proj-1',
+        version: 1,
+        status: 'superseded',
+        plan_checksum: 'a',
+        source_content_checksum: 'a',
+        metadata: {},
+        total_files: 1,
+        completed_files: 0,
+        failed_files: 0,
+        framework: 'react-vite-ts',
+        package_manager: 'npm',
+        entry_file: 'src/main.tsx',
+        persisted_at: '2026-07-18T00:00:00.000Z',
+        created_at: '2026-07-18T00:00:00.000Z',
+        updated_at: '2026-07-18T00:00:00.000Z',
+        created_by: null,
+        completed_at: null,
+        source_package_version: null,
+        source_package_assembled_at: null,
+      },
+    ];
+
+    const from = vi.fn(() => ({
+      select: () => ({ eq: () => ({ order: () => Promise.resolve({ data: rows, error: null }) }) }),
+    }));
+
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const versions = await listManifestVersions('proj-1');
+
+    expect(versions.map((v) => v.version)).toEqual([2, 1]);
+    expect(versions.map((v) => v.status)).toEqual(['active', 'superseded']);
+  });
+
+  it('returns an empty array when BuildersDB is unavailable', async () => {
+    getBuildersDbClientMock.mockReturnValue(null);
+    expect(await listManifestVersions('proj-1')).toEqual([]);
   });
 });
