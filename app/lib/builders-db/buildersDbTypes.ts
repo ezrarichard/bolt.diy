@@ -72,6 +72,10 @@ const METADATA_FIELDS = [
 
   /** Sprint 39.7 — the quick_build project's IndexedDB chat id/urlId; see linkProjectChat(). */
   'linkedChatId',
+
+  /** Project Definition workflow — see app/lib/projects/projectDefinition.ts. */
+  'projectDefinitionApproval',
+  'projectDefinitionChat',
 ] as const;
 
 /**

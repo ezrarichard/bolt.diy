@@ -169,6 +169,30 @@ export function isAutoEngineeringComplete(project: Project): boolean {
 }
 
 /**
+ * Project Definition approval gate — the pipeline's real starting condition (checked
+ * alongside `isRequirementsCaptured` in useAutoEngineeringPipeline.ts). True once the user
+ * has explicitly clicked "Approve Project Definition & Start Engineering" in the Project
+ * Definition workspace (`project.projectDefinitionApproval.status === 'approved'`).
+ *
+ * Backward compatibility: a project that already has at least one downstream engineering
+ * artifact predates this gate entirely (it was created and progressed under the old
+ * "Requirements approved -> pipeline starts immediately" flow) — treated as already
+ * approved so this change never retroactively blocks or re-freezes an existing customer
+ * project. This is a derived read, not a stored backfill: no migration/script needed, and a
+ * project that later regenerates every stage from scratch would still correctly read as
+ * approved the moment any one stage is approved again.
+ */
+export function isProjectDefinitionApproved(project: Project): boolean {
+  if (project.projectDefinitionApproval?.status === 'approved') {
+    return true;
+  }
+
+  const artifacts = getProjectArtifacts(project);
+
+  return AUTO_ENGINEERING_ROLES.some((role) => getLatestApprovedArtifact(artifacts, role.artifactType) !== undefined);
+}
+
+/**
  * Sprint 44 — the stage the pipeline should resume from after a role failed and was retried
  * (manually or automatically). Deliberately derived ONLY from which artifacts are actually
  * approved in the store (via getNextAutoRole), never from a UI-held "current role" — so once
@@ -190,5 +214,6 @@ export const autoEngineeringEngine = {
   roles: AUTO_ENGINEERING_ROLES,
   getNextAutoRole,
   isAutoEngineeringComplete,
+  isProjectDefinitionApproved,
   resumePipelineFromRole,
 };

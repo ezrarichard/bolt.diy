@@ -9,6 +9,7 @@ import {
 import type { RoadmapItemStatus } from '~/lib/blueprints';
 import type { ProjectKnowledge } from '~/lib/projects/knowledge';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
+import type { ProjectDefinitionApproval, ProjectDefinitionChatMessage } from '~/lib/projects/projectDefinition';
 import type { ProjectTaskStatus } from '~/lib/projects/executionEngine';
 import { ARTIFACT_TYPES, getLatestArtifact, type ProjectArtifact } from '~/lib/projects/artifacts';
 import { createSyncedRequirementsArtifact, isSyncedRequirementsArtifact } from '~/lib/projects/requirementsSync';
@@ -98,6 +99,24 @@ export interface Project {
    * user saves the Requirements dialog at least once.
    */
   projectKnowledge?: ProjectKnowledge;
+
+  /**
+   * Project Definition workflow — whether the user has approved the Project Definition
+   * (the AI Project Manager-authored PRD) and, in doing so, unlocked the AI Engineering
+   * Team's automatic pipeline (see autoEngineeringEngine.ts's `isProjectDefinitionApproved`,
+   * the only reader). Undefined for a project that hasn't reached this stage, or one that
+   * predates this feature (see that function's backward-compatibility comment). Persisted
+   * via BuildersDB's `builders_projects.metadata` (see buildersDbTypes.ts's
+   * `METADATA_FIELDS`) — same convention as `projectKnowledge` above.
+   */
+  projectDefinitionApproval?: ProjectDefinitionApproval;
+
+  /**
+   * Project Definition workflow — the AI Project Manager chat transcript for this project's
+   * Project Definition workspace (see ProjectDefinitionWorkspace.tsx). Same
+   * `builders_projects.metadata` persistence as `projectDefinitionApproval` above.
+   */
+  projectDefinitionChat?: ProjectDefinitionChatMessage[];
 
   /**
    * Sprint 11 — manual execution stage per task id (see
@@ -577,6 +596,8 @@ export async function hydrateProjectData(projectId: string): Promise<void> {
       projectKnowledge: remoteProject?.projectKnowledge ?? local.projectKnowledge,
       roadmapStatus: remoteProject?.roadmapStatus ?? local.roadmapStatus,
       workspaceState: remoteWorkspaceState ?? local.workspaceState,
+      projectDefinitionApproval: remoteProject?.projectDefinitionApproval ?? local.projectDefinitionApproval,
+      projectDefinitionChat: remoteProject?.projectDefinitionChat ?? local.projectDefinitionChat,
     };
 
     const nextProjects = projectsStore.get().map((project) => (project.id === projectId ? merged : project));
@@ -1264,6 +1285,79 @@ export function updateProjectKnowledge(projectId: string, partialKnowledge: Part
     mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
     syncRequirementsArtifact(projectId, updated);
   }
+}
+
+/**
+ * Project Definition workflow — appends one AI Project Manager chat message (user or
+ * assistant) and persists it. Same in-memory + BuildersDB-mirror pattern as
+ * updateProjectKnowledge above; local storage first (instant, works offline), BuildersDB
+ * mirror fire-and-forget so a configured deployment also survives a refresh on a different
+ * device/session.
+ */
+export function appendProjectDefinitionChatMessage(projectId: string, message: ProjectDefinitionChatMessage): void {
+  const next = projectsStore
+    .get()
+    .map((project) =>
+      project.id === projectId
+        ? { ...project, projectDefinitionChat: [...(project.projectDefinitionChat ?? []), message] }
+        : project,
+    );
+  projectsStore.set(next);
+  projectRepository.saveProjects(next);
+
+  const updated = next.find((project) => project.id === projectId);
+
+  if (updated) {
+    mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
+  }
+}
+
+/**
+ * Project Definition workflow — the formal handover from Project Management to
+ * Engineering: marks the Project Definition approved, which is the only thing
+ * useAutoEngineeringPipeline.ts's gate checks before starting Architecture (see
+ * autoEngineeringEngine.ts's `isProjectDefinitionApproved`). `approver` is resolved by the
+ * caller (useAuth(), synchronously available in the component) rather than looked up here,
+ * so this stays a plain synchronous mutator like every other one in this file.
+ */
+export function approveProjectDefinition(
+  projectId: string,
+  approver: { id: string; displayName: string } | null,
+): void {
+  const approvedAt = new Date().toISOString();
+
+  const next = projectsStore.get().map((project) =>
+    project.id === projectId
+      ? {
+          ...project,
+          projectDefinitionApproval: {
+            status: 'approved' as const,
+            approvedAt,
+            approvedBy: approver?.id,
+            approvedByName: approver?.displayName,
+          },
+        }
+      : project,
+  );
+  projectsStore.set(next);
+  projectRepository.saveProjects(next);
+
+  const updated = next.find((project) => project.id === projectId);
+
+  if (!updated) {
+    return;
+  }
+
+  mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated, approver?.id ?? null));
+  mirrorToBuildersDb(() =>
+    buildersDbRepository.addProjectActivity({
+      projectId,
+      activityType: 'project_definition_approved',
+      description: 'Project Definition approved — AI Engineering Team started.',
+      actorId: approver?.id ?? null,
+      actorDisplayName: approver?.displayName ?? null,
+    }),
+  );
 }
 
 /**

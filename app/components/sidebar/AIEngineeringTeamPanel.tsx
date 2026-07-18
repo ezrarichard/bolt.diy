@@ -113,7 +113,7 @@ export function AiEngineeringTeamPanel({
 
   const rows: RowMeta[] = [
     {
-      label: 'Business Analyst',
+      label: 'AI Project Manager',
       status: requirementsCaptured ? 'done' : 'pending',
       version: requirementsArtifact?.version,
       generatedAt: requirementsArtifact?.updatedAt,
@@ -150,8 +150,8 @@ export function AiEngineeringTeamPanel({
             AI Engineering Team
           </h3>
           <p className="text-[11px] text-bolt-elements-textTertiary mt-0.5">
-            Once Requirements is approved, every stage below generates, reviews, and approves itself automatically — no
-            manual approval required.
+            Once your Project Definition is approved, every stage below generates, reviews, and approves itself
+            automatically — no manual approval required.
           </p>
         </div>
         <span
@@ -164,7 +164,13 @@ export function AiEngineeringTeamPanel({
                 : 'text-bolt-elements-textTertiary border-bolt-elements-borderColor/50',
           )}
         >
-          {complete ? 'Complete' : isRunning ? 'Running' : requirementsCaptured ? 'Idle' : 'Waiting on Requirements'}
+          {complete
+            ? 'Complete'
+            : isRunning
+              ? 'Running'
+              : requirementsCaptured
+                ? 'Idle'
+                : 'Waiting on Project Definition'}
         </span>
       </div>
 

@@ -109,7 +109,7 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
     const knowledgeUpdate = businessAnalystEngine.summarizeRequirements(latestDraft, getProjectKnowledge(project));
     updateProjectKnowledge(project.id, knowledgeUpdate);
     updateProjectArtifact(project.id, latest.id, { status: 'approved' });
-    toast.success('Requirements Draft approved — Project Knowledge updated');
+    toast.success('Project Definition saved — continue refining it with the AI Project Manager below');
   };
 
   const handleDiscard = () => {
@@ -118,7 +118,7 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
     }
 
     updateProjectArtifact(project.id, latest.id, { status: 'discarded' });
-    toast.info('Requirements Draft discarded — Project Knowledge unchanged');
+    toast.info('Project Definition draft discarded — Project Knowledge unchanged');
   };
 
   const statusMeta = latest ? ARTIFACT_STATUS_META[latest.status as keyof typeof ARTIFACT_STATUS_META] : undefined;
@@ -134,7 +134,7 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
         >
           <div className="flex items-center justify-between mb-3">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-purple-600 dark:text-purple-300">
-              Requirements Draft Preview
+              Project Definition Draft
             </div>
             <span className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-purple-500/30 text-purple-600 dark:text-purple-300">
               v{latest?.version ?? 1}
@@ -211,7 +211,7 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
               onClick={handleApprove}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-purple-500 text-white hover:bg-purple-600 transition-colors"
             >
-              Approve
+              Save
             </button>
             <button
               type="button"
@@ -233,8 +233,8 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
       ) : phase === 'confirm' ? (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-bolt-elements-borderColor/60 p-3">
           <span className="text-xs text-bolt-elements-textTertiary">
-            The AI Business Analyst will draft a requirements document from your current project context. Nothing is
-            saved until you approve it.
+            The AI Project Manager will draft the Project Definition from your current project context. Nothing is saved
+            until you save it.
           </span>
           <div className="flex gap-2 ml-auto shrink-0">
             <button
@@ -256,7 +256,7 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
       ) : phase === 'generating' || isGenerating ? (
         <div className="flex items-center gap-2 text-xs text-bolt-elements-textTertiary px-1">
           <span className="i-svg-spinners:90-ring-with-bg w-3.5 h-3.5 text-purple-500" />
-          The AI Business Analyst is drafting requirements…
+          The AI Project Manager is drafting the Project Definition…
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-3">
@@ -266,7 +266,7 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
             className="flex gap-2 items-center bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-500/20 rounded-lg px-4 py-2 transition-colors"
           >
             <span className="inline-block i-ph:sparkle h-4 w-4" />
-            <span className="text-sm font-medium">Generate Draft Requirements</span>
+            <span className="text-sm font-medium">Generate Project Definition</span>
           </button>
           {phase === 'error' && (
             <span className="text-xs text-red-500">{errorMessage || 'Draft generation failed.'}</span>
@@ -276,7 +276,7 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
 
       {latest && !isPreviewing && statusMeta && (
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-bolt-elements-textTertiary px-1">
-          <span className="font-medium text-bolt-elements-textSecondary">Requirements Draft</span>
+          <span className="font-medium text-bolt-elements-textSecondary">Project Definition</span>
           <span
             className={classNames(
               'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0',

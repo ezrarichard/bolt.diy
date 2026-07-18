@@ -12,7 +12,11 @@ import {
 } from '~/lib/stores/projects';
 import { getLatestArtifact } from '~/lib/projects/artifacts';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
-import { getNextAutoRole, type AutoEngineeringRoleId } from '~/lib/projects/autoEngineeringEngine';
+import {
+  getNextAutoRole,
+  isProjectDefinitionApproved,
+  type AutoEngineeringRoleId,
+} from '~/lib/projects/autoEngineeringEngine';
 import { generateRoleWithRecovery, type RoleGenerationFailureKind } from '~/lib/projects/roleGenerationRecovery';
 import { buildRoleContextBlock } from '~/lib/ai/context/buildersDbContextProvider';
 import { getRoleGenerateOptions } from '~/lib/generation-profiles/generationProfileRepository';
@@ -25,14 +29,14 @@ import { useGenerateText } from './useGenerateText';
 const logger = createScopedLogger('autoEngineeringPipeline');
 
 /**
- * Sprint 31 — Autonomous AI Engineering Pipeline.
- *
- * Requirements & Knowledge stays the only manual stage (unchanged —
- * RequirementsDraftPanel/ProjectRequirementsDialog still do exactly what
- * they did before). The moment Requirements is captured, this hook chains
- * every remaining role (Solution Architect -> ... -> DevOps Engineer)
- * automatically: generate, parse, persist the artifact, and immediately
- * approve it — no human click between stages. Mirrors
+ * Sprint 31 — Autonomous AI Engineering Pipeline. Gated by the Project Definition
+ * workflow: Requirements & Knowledge (RequirementsDraftPanel/ProjectRequirementsDialog,
+ * unchanged) still produces the initial Project Definition draft, but this hook no longer
+ * starts the moment that draft exists — it waits for `isProjectDefinitionApproved(project)`,
+ * set only by the user's explicit "Approve Project Definition & Start Engineering" click in
+ * ProjectDefinitionWorkspace.tsx. Once approved, this hook chains every remaining role
+ * (Solution Architect -> ... -> DevOps Engineer) automatically: generate, parse, persist the
+ * artifact, and immediately approve it — no human click between stages. Mirrors
  * app/lib/hooks/useDraftPanel.ts's own generate/parse/persist sequence for
  * a single stage, just looped across app/lib/projects/autoEngineeringEngine.ts's
  * ordered role registry instead of one engine at a time.
@@ -119,6 +123,18 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
     const knowledge = getProjectKnowledge(project);
 
     if (!isRequirementsCaptured(knowledge)) {
+      return;
+    }
+
+    /*
+     * Project Definition workflow — the pipeline must never start automatically anymore.
+     * Requirements being captured only means a Project Definition draft exists to review;
+     * Architecture (and everything after it) waits for the user's explicit "Approve Project
+     * Definition & Start Engineering" click (see autoEngineeringEngine.ts's
+     * `isProjectDefinitionApproved` for the backward-compatibility rule covering projects
+     * that predate this gate).
+     */
+    if (!isProjectDefinitionApproved(project)) {
       return;
     }
 

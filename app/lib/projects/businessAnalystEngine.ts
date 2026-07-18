@@ -11,6 +11,11 @@ import {
   REQUIREMENTS_DRAFT_FIELDS,
   type RequirementsDraft,
 } from './prompts/requirements';
+import {
+  buildProjectManagerRevisionPrompt,
+  parseProjectManagerRevisionResponse,
+  type ProjectManagerChatTurn,
+} from './prompts/projectManagerRevision';
 
 /**
  * Business Analyst Engine — Sprint 13 (first AI capability, reference
@@ -55,7 +60,13 @@ export interface RequirementsContext {
 
 export type ParsedDraft = ParsedDraftResult<RequirementsDraft>;
 
-const GENERATOR_NAME = 'AI Business Analyst';
+/**
+ * User-facing identity for this engine's output — "AI Project Manager", not "AI Business
+ * Analyst" (the engine/file name stays as-is to avoid a sweeping, risky rename of an
+ * already-working engine; see projectDefinition.ts's header comment). Shown as
+ * `artifact.generatedBy` everywhere a Project Definition version is displayed.
+ */
+const GENERATOR_NAME = 'AI Project Manager';
 const ARTIFACT_TYPE = ARTIFACT_TYPES.REQUIREMENTS_DRAFT;
 const ARTIFACT_TASK_ID = 'requirements';
 
@@ -223,6 +234,61 @@ function summarizeRequirements(
   return partial;
 }
 
+/**
+ * Project Definition chat — builds the AI Project Manager's revision prompt from the
+ * current draft + recent chat + the customer's new message. Delegates all prompt text to
+ * prompts/projectManagerRevision.ts, same separation as buildBusinessPrompt above.
+ */
+function buildRevisionPrompt(
+  currentDraft: RequirementsDraft,
+  chatHistory: ProjectManagerChatTurn[],
+  userMessage: string,
+): { system: string; prompt: string } {
+  return buildProjectManagerRevisionPrompt(currentDraft, chatHistory, userMessage);
+}
+
+export type ParsedRevision = ReturnType<typeof parseProjectManagerRevisionResponse>;
+
+/** Parses the AI Project Manager's raw chat response — see prompts/projectManagerRevision.ts. */
+function parseRevisionResponse(rawText: string): ParsedRevision {
+  return parseProjectManagerRevisionResponse(rawText);
+}
+
+/**
+ * Merges `updatedFields` onto `previousDraft` (only the fields the AI actually changed
+ * overwrite; every other field is carried forward untouched — the "intelligent update,
+ * preserve unaffected sections" behavior) and builds the next artifact version, stamping
+ * `versionMeta` with the revision request/change summary/model used for the Version History
+ * panel to read directly off the artifact's own content (see prompts/requirements.ts's
+ * `RequirementsDraft.versionMeta` comment for why no schema change was needed for this).
+ */
+function createRevisedDraftArtifact(
+  previousDraft: RequirementsDraft,
+  updatedFields: Partial<RequirementsDraft>,
+  version: number,
+  revisionRequest: string,
+  changeSummary: string,
+  modelUsed: string | undefined,
+): { artifact: ProjectArtifact; mergedDraft: RequirementsDraft } {
+  const mergedDraft: RequirementsDraft = {
+    ...previousDraft,
+    ...updatedFields,
+    versionMeta: { revisionRequest, changeSummary, modelUsed },
+  };
+
+  const artifact = createArtifact({
+    taskId: ARTIFACT_TASK_ID,
+    title: `Project Definition v${version}`,
+    type: ARTIFACT_TYPE,
+    content: JSON.stringify(mergedDraft, null, 2),
+    status: 'approved',
+    generatedBy: GENERATOR_NAME,
+    version,
+  });
+
+  return { artifact, mergedDraft };
+}
+
 export const businessAnalystEngine = {
   buildRequirementsContext,
   buildBusinessPrompt,
@@ -230,4 +296,7 @@ export const businessAnalystEngine = {
   createDraftArtifact,
   summarizeRequirements,
   getMissingBusinessInformation,
+  buildRevisionPrompt,
+  parseRevisionResponse,
+  createRevisedDraftArtifact,
 };

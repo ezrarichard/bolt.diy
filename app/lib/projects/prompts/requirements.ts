@@ -20,15 +20,20 @@ import { formatJsonShapeField, formatList, formatProjectKnowledge } from './shar
 
 export interface RequirementsDraft {
   businessVision?: string;
+  businessGoals?: string[];
   targetAudience?: string;
   businessModel?: string;
   personas?: string[];
   coreFeatures?: string[];
   pages?: string[];
+  userFlows?: string[];
   userRoles?: string[];
   businessRules?: string[];
   functionalRequirements?: string[];
   nonFunctionalRequirements?: string[];
+  technicalConstraints?: string[];
+  assumptions?: string[];
+  outOfScope?: string[];
   acceptanceCriteria?: string[];
   compliance?: string[];
   payments?: string[];
@@ -45,6 +50,20 @@ export interface RequirementsDraft {
 
   /** Sprint 32 — structured decision log (see draftParsing.ts's `AIDecision`), carried forward to every later role via collaborationContext.ts. */
   aiDecisions?: AIDecision[];
+
+  /**
+   * Project Definition workflow — set programmatically by businessAnalystEngine.ts's
+   * `createRevisedDraftArtifact`, never populated by the AI itself (deliberately absent
+   * from `REQUIREMENTS_DRAFT_FIELDS` below, so it's never part of the JSON contract the AI
+   * is asked to fill in). Carries per-version bookkeeping the Project Definition workspace's
+   * Version History reads directly off the artifact's own content — no schema change needed
+   * to store "revision request"/"change summary"/"model used" per version.
+   */
+  versionMeta?: {
+    revisionRequest?: string;
+    changeSummary?: string;
+    modelUsed?: string;
+  };
 }
 
 export interface RequirementsDraftFieldConfig {
@@ -60,16 +79,21 @@ export interface RequirementsDraftFieldConfig {
  * field here once and every consumer picks it up automatically.
  */
 export const REQUIREMENTS_DRAFT_FIELDS: RequirementsDraftFieldConfig[] = [
-  { key: 'businessVision', label: 'Business Vision', kind: 'text' },
-  { key: 'targetAudience', label: 'Target Audience', kind: 'text' },
+  { key: 'businessVision', label: 'Business Overview', kind: 'text' },
+  { key: 'businessGoals', label: 'Business Goals', kind: 'list' },
+  { key: 'targetAudience', label: 'Target Users', kind: 'text' },
   { key: 'businessModel', label: 'Business Model', kind: 'text' },
   { key: 'personas', label: 'Personas', kind: 'list' },
-  { key: 'coreFeatures', label: 'Core Features', kind: 'list' },
+  { key: 'coreFeatures', label: 'Modules', kind: 'list' },
   { key: 'pages', label: 'Pages', kind: 'list' },
+  { key: 'userFlows', label: 'User Flows', kind: 'list' },
   { key: 'userRoles', label: 'User Roles', kind: 'list' },
   { key: 'businessRules', label: 'Business Rules', kind: 'list' },
   { key: 'functionalRequirements', label: 'Functional Requirements', kind: 'list' },
   { key: 'nonFunctionalRequirements', label: 'Non-Functional Requirements', kind: 'list' },
+  { key: 'technicalConstraints', label: 'Technical Constraints', kind: 'list' },
+  { key: 'assumptions', label: 'Assumptions', kind: 'list' },
+  { key: 'outOfScope', label: 'Out of Scope', kind: 'list' },
   { key: 'acceptanceCriteria', label: 'Acceptance Criteria', kind: 'list' },
   { key: 'compliance', label: 'Compliance', kind: 'list' },
   { key: 'payments', label: 'Payments', kind: 'list' },
