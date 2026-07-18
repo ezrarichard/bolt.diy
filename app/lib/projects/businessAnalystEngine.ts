@@ -269,11 +269,12 @@ function createRevisedDraftArtifact(
   revisionRequest: string,
   changeSummary: string,
   modelUsed: string | undefined,
+  affectedSections: string[] = [],
 ): { artifact: ProjectArtifact; mergedDraft: RequirementsDraft } {
   const mergedDraft: RequirementsDraft = {
     ...previousDraft,
     ...updatedFields,
-    versionMeta: { revisionRequest, changeSummary, modelUsed },
+    versionMeta: { revisionRequest, changeSummary, modelUsed, affectedSections },
   };
 
   const artifact = createArtifact({

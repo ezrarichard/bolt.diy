@@ -63,6 +63,9 @@ export interface RequirementsDraft {
     revisionRequest?: string;
     changeSummary?: string;
     modelUsed?: string;
+
+    /** Field keys the AI Project Manager determined were affected by this revision (see prompts/projectManagerRevision.ts) — drives the "N sections updated" hint in Version History / the Summary panel. */
+    affectedSections?: string[];
   };
 }
 

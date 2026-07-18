@@ -3,7 +3,6 @@ import { toast } from 'react-toastify';
 import { classNames } from '~/utils/classNames';
 import {
   addProjectArtifact,
-  appendProjectDefinitionChatMessage,
   approveProjectDefinition,
   getProjectArtifacts,
   getProjectKnowledge,
@@ -21,6 +20,9 @@ import { businessAnalystEngine } from '~/lib/projects/businessAnalystEngine';
 import { REQUIREMENTS_DRAFT_FIELDS, type RequirementsDraft } from '~/lib/projects/prompts/requirements';
 import type { ProjectManagerChatTurn } from '~/lib/projects/prompts/projectManagerRevision';
 import type { ProjectDefinitionChatMessage } from '~/lib/projects/projectDefinition';
+import { projectDefinitionChatRepository } from '~/lib/projects/projectDefinitionChatRepository';
+import { countProjectDefinitionSections, estimateEngineeringDuration } from '~/lib/projects/projectDefinitionSummary';
+import { AUTO_ENGINEERING_ROLES } from '~/lib/projects/autoEngineeringEngine';
 import { getRoleGenerateOptions } from '~/lib/generation-profiles/generationProfileRepository';
 import { useGenerateText } from '~/lib/hooks/useGenerateText';
 import { useAuth } from '~/lib/auth/AuthProvider';
@@ -95,7 +97,7 @@ function ProjectManagerChatSection({
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const { generate } = useGenerateText();
-  const messages = project.projectDefinitionChat ?? [];
+  const messages = projectDefinitionChatRepository.getMessages(project);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -118,7 +120,7 @@ function ProjectManagerChatSection({
       content: trimmed,
       createdAt: new Date().toISOString(),
     };
-    appendProjectDefinitionChatMessage(project.id, userMessage);
+    projectDefinitionChatRepository.appendMessage(project.id, userMessage);
 
     const chatHistory: ProjectManagerChatTurn[] = messages.map((entry) => ({
       role: entry.role,
@@ -135,7 +137,7 @@ function ProjectManagerChatSection({
     });
 
     if (!result.ok) {
-      appendProjectDefinitionChatMessage(project.id, {
+      projectDefinitionChatRepository.appendMessage(project.id, {
         id: `pm-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         role: 'assistant',
         content: `I couldn't process that request: ${result.error}`,
@@ -149,7 +151,7 @@ function ProjectManagerChatSection({
     const parsed = businessAnalystEngine.parseRevisionResponse(result.text);
 
     if (!parsed.ok) {
-      appendProjectDefinitionChatMessage(project.id, {
+      projectDefinitionChatRepository.appendMessage(project.id, {
         id: `pm-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         role: 'assistant',
         content: `I couldn't process that request: ${parsed.error}`,
@@ -160,7 +162,7 @@ function ProjectManagerChatSection({
       return;
     }
 
-    appendProjectDefinitionChatMessage(project.id, {
+    projectDefinitionChatRepository.appendMessage(project.id, {
       id: `pm-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role: 'assistant',
       content: parsed.reply,
@@ -179,6 +181,7 @@ function ProjectManagerChatSection({
         trimmed,
         parsed.changeSummary,
         generateOptions.model,
+        parsed.affectedSections,
       );
 
       addProjectArtifact(project.id, artifact, 'manual');
@@ -186,7 +189,10 @@ function ProjectManagerChatSection({
       const knowledgeUpdate = businessAnalystEngine.summarizeRequirements(mergedDraft, getProjectKnowledge(project));
       updateProjectKnowledge(project.id, knowledgeUpdate);
 
-      toast.success(`Project Definition updated to v${nextVersion}`);
+      const sectionCount = parsed.affectedSections.length;
+      toast.success(
+        `Project Definition updated to v${nextVersion}${sectionCount > 0 ? ` (${sectionCount} section${sectionCount === 1 ? '' : 's'} updated)` : ''}`,
+      );
       onRevised();
     }
 
@@ -306,11 +312,98 @@ function VersionHistorySection({ versions }: { versions: ProjectArtifact[] }) {
               <div className="text-[11px] text-bolt-elements-textTertiary mt-1">
                 {version.generatedBy ?? 'AI Project Manager'}
                 {draft?.versionMeta?.modelUsed ? ` · ${draft.versionMeta.modelUsed}` : ''}
+                {draft?.versionMeta?.affectedSections?.length
+                  ? ` · ${draft.versionMeta.affectedSections.length} section${draft.versionMeta.affectedSections.length === 1 ? '' : 's'} updated`
+                  : ''}
               </div>
             </li>
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+interface SummaryStatProps {
+  label: string;
+  value: string | number;
+}
+
+function SummaryStat({ label, value }: SummaryStatProps) {
+  return (
+    <div className="rounded-lg border border-bolt-elements-borderColor/30 px-3.5 py-3">
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1">
+        {label}
+      </div>
+      <div className="text-lg font-semibold text-bolt-elements-textPrimary">{value}</div>
+    </div>
+  );
+}
+
+/**
+ * Project Definition Summary — the final customer approval screen before Engineering starts.
+ * Purely a read-only summary of the latest draft + version history; the actual approval
+ * action lives in the sibling CTA block right below it in ProjectDefinitionWorkspace's
+ * render, keeping this component presentational-only (counts/estimate/pipeline list are all
+ * pure derivations, computed in projectDefinitionSummary.ts / read from AUTO_ENGINEERING_ROLES
+ * — nothing here re-implements that logic).
+ */
+function ProjectDefinitionSummaryPanel({ draft, versions }: { draft: RequirementsDraft; versions: ProjectArtifact[] }) {
+  const { moduleCount, pageCount, userFlowCount } = countProjectDefinitionSections(draft);
+  const duration = estimateEngineeringDuration(draft);
+  const hasPriorVersion = versions.length > 1;
+  const affectedSectionCount = draft.versionMeta?.affectedSections?.length ?? 0;
+
+  return (
+    <div
+      className={classNames(
+        'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+        'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+      )}
+    >
+      <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
+        Project Definition Summary
+      </h3>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <SummaryStat label="Modules" value={moduleCount} />
+        <SummaryStat label="Pages" value={pageCount} />
+        <SummaryStat label="User Flows" value={userFlowCount} />
+        <SummaryStat label="Est. Engineering Duration" value={duration} />
+      </div>
+
+      <div className="mb-4">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1.5">
+          Major Changes Since Previous Version
+        </div>
+        <div className="text-sm text-bolt-elements-textSecondary">
+          {hasPriorVersion ? (
+            <>
+              {draft.versionMeta?.changeSummary ?? 'Updated since the previous version.'}
+              {affectedSectionCount > 0 &&
+                ` (${affectedSectionCount} section${affectedSectionCount === 1 ? '' : 's'} affected)`}
+            </>
+          ) : (
+            'This is the initial Project Definition — no revisions yet.'
+          )}
+        </div>
+      </div>
+
+      <div>
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1.5">
+          Engineering Pipeline That Will Run
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {[...AUTO_ENGINEERING_ROLES.map((role) => role.label), 'Product Package'].map((label, index, all) => (
+            <div key={label} className="flex items-center gap-1.5">
+              <span className="text-xs px-2 py-1 rounded-md bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/40 text-bolt-elements-textSecondary">
+                {label}
+              </span>
+              {index < all.length - 1 && <span className="i-ph:arrow-right w-3 h-3 text-bolt-elements-textTertiary" />}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -359,6 +452,8 @@ export function ProjectDefinitionWorkspace({ project }: ProjectDefinitionWorkspa
       />
 
       <VersionHistorySection versions={versions} />
+
+      <ProjectDefinitionSummaryPanel draft={latestDraft} versions={versions} />
 
       <div
         className={classNames(

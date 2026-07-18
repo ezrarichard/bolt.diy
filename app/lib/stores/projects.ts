@@ -113,8 +113,11 @@ export interface Project {
 
   /**
    * Project Definition workflow — the AI Project Manager chat transcript for this project's
-   * Project Definition workspace (see ProjectDefinitionWorkspace.tsx). Same
-   * `builders_projects.metadata` persistence as `projectDefinitionApproval` above.
+   * Project Definition workspace. Same `builders_projects.metadata` persistence as
+   * `projectDefinitionApproval` above, but treat this field as an implementation detail:
+   * read/write it only through `projectDefinitionChatRepository.ts`'s
+   * `getMessages`/`appendMessage`, never directly, so persistence can move to its own
+   * BuildersDB table later without touching the workspace UI or business logic.
    */
   projectDefinitionChat?: ProjectDefinitionChatMessage[];
 
@@ -1293,6 +1296,13 @@ export function updateProjectKnowledge(projectId: string, partialKnowledge: Part
  * updateProjectKnowledge above; local storage first (instant, works offline), BuildersDB
  * mirror fire-and-forget so a configured deployment also survives a refresh on a different
  * device/session.
+ *
+ * Implementation detail only — this is today's storage for
+ * projectDefinitionChatRepository.ts's `metadataProjectDefinitionChatRepository`. UI and
+ * business logic should call that repository, never this function directly, so persistence
+ * can move to its own BuildersDB table later without touching them. Kept exported (rather
+ * than made private to that file) only because it lives in this module alongside the
+ * `projectsStore`/`mirrorToBuildersDb` machinery every other mutator here already uses.
  */
 export function appendProjectDefinitionChatMessage(projectId: string, message: ProjectDefinitionChatMessage): void {
   const next = projectsStore
