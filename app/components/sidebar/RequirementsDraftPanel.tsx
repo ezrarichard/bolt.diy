@@ -22,6 +22,7 @@ import { REQUIREMENTS_DRAFT_FIELDS, type RequirementsDraft } from '~/lib/project
 import type { AIDecision } from '~/lib/projects/draftParsing';
 import { buildRoleContextBlock } from '~/lib/ai/context/buildersDbContextProvider';
 import { getRoleGenerateOptions } from '~/lib/generation-profiles/generationProfileRepository';
+import { generateRoleWithRecovery } from '~/lib/projects/roleGenerationRecovery';
 import { useGenerateText } from '~/lib/hooks/useGenerateText';
 
 interface RequirementsDraftPanelProps {
@@ -31,6 +32,22 @@ interface RequirementsDraftPanelProps {
 type Phase = 'idle' | 'confirm' | 'generating' | 'error';
 
 const ARTIFACT_TYPE = ARTIFACT_TYPES.REQUIREMENTS_DRAFT;
+
+/**
+ * Base output-token budget for the FIRST attempt — matches every other "*DraftPanel"'s
+ * MAX_OUTPUT_TOKENS (see ArchitectureDraftPanel.tsx/useDraftPanel.ts). This panel predates
+ * that shared hook (Sprint 13) and never set an explicit budget or used the Sprint 44
+ * truncation-recovery mechanism, relying on the provider's own default and a single attempt.
+ * That was fine while `RequirementsDraft` was small, but the Project Definition workflow's
+ * expanded schema (Business Goals, User Flows, Technical Constraints, Assumptions, Out of
+ * Scope — see prompts/requirements.ts) is now this codebase's single largest per-role JSON
+ * contract (20+ fields) and reliably exceeds even 8192 tokens on the first attempt.
+ * Acceptance-test-verified: wiring in `generateRoleWithRecovery` (same mechanism
+ * useAutoEngineeringPipeline.ts already uses) rather than only raising this constant, since a
+ * bigger static number just moves the same failure mode further out — the recovery retry
+ * raises the budget further (up to 16000) AND asks the model to be more concise.
+ */
+const MAX_OUTPUT_TOKENS = 8192;
 
 /**
  * Sprint 13 — the Requirements Draft feature end to end: a "Generate Draft
@@ -64,22 +81,27 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
       ARTIFACT_TYPE,
       project.description ?? project.name,
     );
-    const fullPrompt = buildersDbContext ? `${prompt}\n\n${buildersDbContext}` : prompt;
 
-    // Sprint 39.5 — routes this call through the project's selected Generation Profile (falls back to the user's own model selection if unresolved).
-    const result = await generate(system, fullPrompt, getRoleGenerateOptions(project, ARTIFACT_TYPE));
+    // Sprint 39.5 — routes this call through the project's selected Generation Profile (falls back to the user's own model selection if unresolved). Sprint 44 recovery — bounded retries with a raised budget + JSON-only reinforcement on truncation (see roleGenerationRecovery.ts); only a fully-parsed, non-truncated draft is ever returned ok.
+    const outcome = await generateRoleWithRecovery({
+      projectId: project.id,
+      roleKey: ARTIFACT_TYPE,
+      system,
+      prompt,
+      contextBlock: buildersDbContext,
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      parseDraft: businessAnalystEngine.parseDraft,
+      generate,
+      baseOptions: {
+        ...getRoleGenerateOptions(project, ARTIFACT_TYPE),
+        projectId: project.id,
+        roleKey: ARTIFACT_TYPE,
+        requestType: 'manual_role_generation',
+      },
+    });
 
-    if (!result.ok) {
-      setErrorMessage(result.error);
-      setPhase('error');
-
-      return;
-    }
-
-    const parsed = businessAnalystEngine.parseDraft(result.text);
-
-    if (!parsed.ok) {
-      setErrorMessage(parsed.error);
+    if (!outcome.ok) {
+      setErrorMessage(outcome.message);
       setPhase('error');
 
       return;
@@ -89,13 +111,13 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
       const nextVersion = (regenerateArtifact.version ?? 1) + 1;
       updateProjectArtifact(project.id, regenerateArtifact.id, {
         title: `Requirements Draft v${nextVersion}`,
-        content: JSON.stringify(parsed.draft, null, 2),
+        content: JSON.stringify(outcome.draft, null, 2),
         version: nextVersion,
         status: 'draft',
       });
     } else {
       const nextVersion = (latest?.version ?? 0) + 1;
-      addProjectArtifact(project.id, businessAnalystEngine.createDraftArtifact(parsed.draft, nextVersion));
+      addProjectArtifact(project.id, businessAnalystEngine.createDraftArtifact(outcome.draft, nextVersion));
     }
 
     setPhase('idle');

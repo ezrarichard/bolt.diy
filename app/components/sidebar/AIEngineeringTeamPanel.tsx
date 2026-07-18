@@ -34,21 +34,30 @@ const ROW_STATUS_META: Record<RowStatus, { icon: string; className: string }> = 
   pending: { icon: 'i-ph:circle-dashed', className: 'text-bolt-elements-textTertiary' },
 };
 
-/** Ticks once a second while `active` is true, resetting to 0 whenever `active` flips from false to true — drives the "Generating… Ns elapsed" live-progress line below, purely presentational. */
-function useElapsedSeconds(active: boolean): number {
+/**
+ * Ticks once a second while `activeKey` is defined, resetting to 0 every time `activeKey`
+ * itself changes — not just when it flips between defined/undefined. Acceptance-test-verified
+ * bugfix: the caller used to pass `currentRoleId !== undefined` (a boolean), which only
+ * toggles false->true once at the very start of the whole pipeline and stays `true` across
+ * every later role transition — so the "Ns elapsed" line kept counting cumulatively across
+ * the entire run (e.g. showing "1130s elapsed" moments after a later stage had only just
+ * started) instead of resetting per stage. Passing the role id itself means the effect's
+ * dependency changes on every stage transition, giving each stage its own elapsed count.
+ */
+function useElapsedSeconds(activeKey: string | undefined): number {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
     setElapsed(0);
 
-    if (!active) {
+    if (activeKey === undefined) {
       return undefined;
     }
 
     const intervalId = setInterval(() => setElapsed((value) => value + 1), 1000);
 
     return () => clearInterval(intervalId);
-  }, [active]);
+  }, [activeKey]);
 
   return elapsed;
 }
@@ -102,7 +111,7 @@ export function AiEngineeringTeamPanel({
   children,
 }: AiEngineeringTeamPanelProps) {
   const { isRunning, currentRoleId, failure, retry } = useAutoEngineeringPipeline(project);
-  const elapsedSeconds = useElapsedSeconds(currentRoleId !== undefined);
+  const elapsedSeconds = useElapsedSeconds(currentRoleId);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
   const artifacts = getProjectArtifacts(project);
   const complete = isAutoEngineeringComplete(project);

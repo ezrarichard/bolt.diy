@@ -13,6 +13,7 @@ import {
   ARTIFACT_TYPES,
   formatArtifactTimestamp,
   getLatestArtifact,
+  getResumableArtifact,
   parseArtifactContent,
   type ProjectArtifact,
 } from '~/lib/projects/artifacts';
@@ -427,7 +428,17 @@ export function ProjectDefinitionWorkspace({ project }: ProjectDefinitionWorkspa
     .filter((artifact) => artifact.type === ARTIFACT_TYPE)
     .sort((a, b) => (b.version ?? 0) - (a.version ?? 0));
 
-  const latest = versions[0];
+  /*
+   * Sprint 46.1's `getResumableArtifact` (not just "highest version"): the current Project
+   * Definition must never resolve to a version the user has explicitly discarded via
+   * RequirementsDraftPanel's Discard button (still available in the collapsed Requirements &
+   * Knowledge section above this workspace) — falls back to the latest APPROVED version
+   * instead, matching how every other stage panel in this codebase already resolves "current".
+   * `versions` (used for the Version History list below) intentionally stays the full,
+   * unfiltered list — a discarded attempt should still be visible in history, just never
+   * treated as "the" definition to chat about or approve.
+   */
+  const latest = getResumableArtifact(artifacts, ARTIFACT_TYPE);
   const latestDraft = latest ? parseArtifactContent<RequirementsDraft>(latest.content) : undefined;
 
   if (!latest || !latestDraft) {

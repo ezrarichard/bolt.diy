@@ -87,7 +87,16 @@ export type GenerateFn = (
   system: string | undefined,
   prompt: string,
   options?: { maxTokens?: number; model?: string; provider?: string; temperature?: number },
-) => Promise<{ ok: true; text: string } | { ok: false; error: string }>;
+) => Promise<
+  | {
+      ok: true;
+      text: string;
+
+      /** Acceptance-test-verified addition — needed so generationPipeline.ts's callForFiles() can use the same truncation-recovery mechanism (roleGenerationRecovery.ts) every AI-role engine uses, rather than a single-shot call with no retry. useGenerateText().generate already returns this; every existing GenerateFn implementation passes it through unchanged. */
+      finishReason?: string;
+    }
+  | { ok: false; error: string }
+>;
 
 /** Reported once per stage as it starts, so the UI can show "Generating page 2 of 4: About" style detail, not just the bare stage name. */
 export interface GenerationProgress {

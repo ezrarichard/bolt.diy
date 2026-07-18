@@ -106,7 +106,7 @@ export function extractJsonPayload(rawText: string): string {
  * refusal/non-JSON response (which never looked like JSON to begin with)
  * as "truncated".
  */
-function looksTruncated(payload: string): boolean {
+export function looksTruncated(payload: string): boolean {
   const trimmed = payload.trim();
   return /^[[{]/.test(trimmed) && !/[}\]]\s*$/.test(trimmed);
 }

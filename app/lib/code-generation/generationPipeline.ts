@@ -1,6 +1,7 @@
 import { getProjectArtifacts, type Project } from '~/lib/stores/projects';
 import { parseArtifactContent } from '~/lib/projects/artifacts';
-import { extractJsonPayload } from '~/lib/projects/draftParsing';
+import { extractJsonPayload, looksTruncated } from '~/lib/projects/draftParsing';
+import { generateRoleWithRecovery } from '~/lib/projects/roleGenerationRecovery';
 import type { RequirementsDraft } from '~/lib/projects/prompts/requirements';
 import type { DatabaseDraft } from '~/lib/projects/prompts/database';
 import type { BackendDraft } from '~/lib/projects/prompts/backend';
@@ -119,13 +120,32 @@ function slugify(name: string): string {
   return slug.length > 0 ? slug : 'page';
 }
 
+/**
+ * Acceptance-test-verified fix: a legitimate page name is a short title ("Home", "Product
+ * Details"), but an AI-produced `pageHierarchy`/`pages` entry can occasionally be a full,
+ * comma-heavy DESCRIPTION instead (e.g. "Search Results: Query display, filter controls,
+ * product grid, no-results state") — every word of which used to get PascalCased into one
+ * giant, unwieldy component/file name (observed live: a 74-character name). That alone isn't
+ * fatal, but if the SAME description also appears as (or overlaps with) another page's name,
+ * the two can resolve to component names divergent from what a later validation/review pass
+ * expects, surfacing as "src/App.tsx imports X but no matching generated file exists." Capping
+ * both word count and character length keeps every generated name short and bounded,
+ * regardless of how verbose the upstream AI role's page name turns out to be.
+ */
+const MAX_COMPONENT_NAME_WORDS = 6;
+const MAX_COMPONENT_NAME_LENGTH = 60;
+
 function toComponentName(name: string): string {
   const words = name
     .replace(/[^a-zA-Z0-9]+/g, ' ')
     .trim()
     .split(/\s+/)
-    .filter(Boolean);
-  const pascal = words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join('');
+    .filter(Boolean)
+    .slice(0, MAX_COMPONENT_NAME_WORDS);
+  const pascal = words
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join('')
+    .slice(0, MAX_COMPONENT_NAME_LENGTH);
 
   return `${pascal || 'Home'}Page`;
 }
@@ -148,8 +168,27 @@ export function buildGenerationPlan(drafts: ResolvedDrafts): GenerationPlan {
   const pageNames = rawPageNames.length > 0 ? rawPageNames : ['Home'];
 
   const usedRoutes = new Set<string>();
+
+  /*
+   * Acceptance-test-verified fix: truncating long/verbose page names in toComponentName()
+   * above means two DIFFERENT page names can now legitimately collapse to the same
+   * (truncated) component name — the exact same class of collision `usedRoutes` below
+   * already guards against for routes, so component names get the identical numeric-suffix
+   * treatment, keeping every generated file path unique regardless of how the plan's page
+   * names were derived.
+   */
+  const usedComponentNames = new Set<string>();
   const pages: GenerationPlanPage[] = pageNames.map((name, index) => {
-    const componentName = toComponentName(name);
+    let componentName = toComponentName(name);
+    let componentSuffix = 2;
+
+    while (usedComponentNames.has(componentName)) {
+      componentName = `${toComponentName(name).replace(/Page$/, '')}${componentSuffix}Page`;
+      componentSuffix += 1;
+    }
+
+    usedComponentNames.add(componentName);
+
     let routePath = index === 0 ? '/' : `/${slugify(name)}`;
     let suffix = 2;
 
@@ -182,6 +221,17 @@ function parseGeneratedFilesResponse(
   try {
     parsed = JSON.parse(payload);
   } catch {
+    /*
+     * Acceptance-test-verified fix: distinguish a truncated response (hit the output-token
+     * ceiling mid-JSON) from a genuinely malformed one, using the exact phrasing
+     * generateRoleWithRecovery's isTruncationError() checks for (see
+     * roleGenerationRecovery.ts) — so callForFiles() below can retry with a raised budget
+     * instead of failing the whole generation on the very first truncated page/section.
+     */
+    if (looksTruncated(payload)) {
+      return { ok: false, error: 'The AI response was cut off before completing valid JSON. Please regenerate.' };
+    }
+
     return { ok: false, error: 'The AI response was not valid JSON.' };
   }
 
@@ -204,19 +254,41 @@ function parseGeneratedFilesResponse(
   return { ok: true, files };
 }
 
+/**
+ * Acceptance-test-verified fix — this used to be a single-shot `generate()` call with no
+ * retry, so any one stage's response landing on the wrong side of an 8192-token ceiling
+ * (easy for a full page component with real UI/UX detail) failed the ENTIRE generation with
+ * "The AI response was not valid JSON.", discarding every already-generated file. Now uses
+ * the same bounded-retry mechanism (roleGenerationRecovery.ts) every AI-role engine already
+ * uses: on a truncated/empty/invalid response it retries with a raised budget (up to 16000)
+ * and a JSON-only + be-concise instruction, up to 2 additional attempts.
+ */
 async function callForFiles(
   prompt: string,
   generate: GenerateFn,
+  projectId: string,
+  roleKey: string,
 ): Promise<{ ok: true; files: GeneratedFile[] } | { ok: false; error: string }> {
-  const result = await generate(CODE_GENERATION_SYSTEM_PROMPT, prompt, {
-    maxTokens: CODE_GENERATION_MAX_OUTPUT_TOKENS,
+  const outcome = await generateRoleWithRecovery({
+    projectId,
+    roleKey,
+    system: CODE_GENERATION_SYSTEM_PROMPT,
+    prompt,
+    contextBlock: '',
+    maxOutputTokens: CODE_GENERATION_MAX_OUTPUT_TOKENS,
+    parseDraft: (rawText) => {
+      const result = parseGeneratedFilesResponse(rawText);
+      return result.ok ? { ok: true, draft: result.files } : { ok: false, error: result.error };
+    },
+    generate,
+    baseOptions: {},
   });
 
-  if (!result.ok) {
-    return { ok: false, error: result.error };
+  if (!outcome.ok) {
+    return { ok: false, error: outcome.message };
   }
 
-  return parseGeneratedFilesResponse(result.text);
+  return { ok: true, files: outcome.draft };
 }
 
 /**
@@ -355,6 +427,8 @@ export async function runGenerationPipeline(
       coreFeatures: drafts.requirements?.coreFeatures ?? [],
     }),
     generate,
+    project.id,
+    'code-gen-types',
   );
 
   if (!typesResult.ok) {
@@ -376,6 +450,8 @@ export async function runGenerationPipeline(
       apiArchitecture: drafts.backend?.apiArchitecture,
     }),
     generate,
+    project.id,
+    'code-gen-services',
   );
 
   if (!servicesResult.ok) {
@@ -402,6 +478,8 @@ export async function runGenerationPipeline(
         uiuxNotes: drafts.frontend?.frontendOverview,
       }),
       generate,
+      project.id,
+      `code-gen-page:${page.componentName}`,
     );
 
     if (!pageResult.ok) {
@@ -438,6 +516,8 @@ export async function runGenerationPipeline(
         designNotes: drafts.frontend?.layoutStrategy,
       }),
       generate,
+      project.id,
+      'code-gen-components',
     );
 
     if (componentsResult.ok) {
