@@ -42,8 +42,6 @@ function readServerEnv(context: AppLoadContext | undefined, name: string): strin
 }
 
 let cachedClient: SupabaseClient | null | undefined;
-let cachedProjectHost: string | null | undefined;
-let cachedAnonKey: string | null | undefined;
 
 /** Memoized like getBuildersDbClient() — `undefined` means "not checked yet", `null` means "confirmed unconfigured". */
 export function getServerAuthClient(context: AppLoadContext | undefined): SupabaseClient | null {
@@ -60,8 +58,6 @@ export function getServerAuthClient(context: AppLoadContext | undefined): Supaba
   }
 
   try {
-    cachedProjectHost = new URL(url).hostname;
-    cachedAnonKey = anonKey;
     cachedClient = createClient(url, anonKey, { auth: { persistSession: false } });
   } catch (error) {
     console.error('[auth] Failed to create server auth client:', error);
@@ -69,36 +65,4 @@ export function getServerAuthClient(context: AppLoadContext | undefined): Supaba
   }
 
   return cachedClient;
-}
-
-/**
- * TEMPORARY DIAGNOSTIC — hostname only (e.g. "wjmgcfoqkptbasmwwulf.supabase.co"), never the
- * anon key or URL path/query. Lets requireUser.ts log which Supabase project the server is
- * actually configured against, for comparing against the browser's own project reference.
- * Remove once the getUser() 401 investigation is closed.
- */
-export function getServerAuthProjectHost(context: AppLoadContext | undefined): string | null {
-  getServerAuthClient(context);
-  return cachedProjectHost ?? null;
-}
-
-/**
- * TEMPORARY DIAGNOSTIC — SHA-256 fingerprint (first 8 hex chars) of the server's own
- * BUILDERS_DB_SUPABASE_ANON_KEY, for comparing against the browser's fingerprint
- * (see getBrowserAnonKeyFingerprintForDiagnostics in authClient.ts) without ever logging
- * the key itself. Remove once the getUser() 401 investigation is closed.
- */
-export async function getServerAuthAnonKeyFingerprint(context: AppLoadContext | undefined): Promise<string | null> {
-  getServerAuthClient(context);
-
-  if (!cachedAnonKey) {
-    return null;
-  }
-
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(cachedAnonKey));
-  const hex = Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
-
-  return hex.slice(0, 8);
 }

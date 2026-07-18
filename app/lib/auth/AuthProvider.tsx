@@ -1,7 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 import {
-  getBrowserAnonKeyFingerprintForDiagnostics,
   getCurrentSession,
   installAuthFetchInterceptor,
   onAuthStateChange,
@@ -66,15 +65,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     installAuthFetchInterceptor();
-
-    /*
-     * TEMPORARY DIAGNOSTIC — see getBrowserAnonKeyFingerprintForDiagnostics's comment in
-     * authClient.ts. Never logs the anon key itself. Remove once the getUser() 401
-     * investigation is closed.
-     */
-    getBrowserAnonKeyFingerprintForDiagnostics().then((fingerprint) => {
-      console.log('[auth-diagnostic] browser anon key fingerprint:', fingerprint);
-    });
 
     let unsubscribe: () => void = () => undefined;
     let cancelled = false;
