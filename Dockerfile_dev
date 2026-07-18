@@ -63,9 +63,15 @@ ENV WRANGLER_SEND_METRICS=false \
 # Note: API keys should be provided at runtime via docker run -e or docker-compose
 # Example: docker run -e OPENAI_API_KEY=your_key_here ...
 
-# Install curl for healthchecks and copy bindings script
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
-  && rm -rf /var/lib/apt/lists/*
+# Install curl for healthchecks and CA certificates so Workerd's TLS calls to Supabase
+# (and any other HTTPS dependency) can verify the peer certificate at runtime — the slim
+# base image does not ship this by default.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # wrangler is a devDependency, so `pnpm prune --prod` (prod-deps stage) removes it —
 # dockerstart needs it at runtime, so install it globally in this final stage instead.
