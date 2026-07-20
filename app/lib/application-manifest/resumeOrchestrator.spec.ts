@@ -34,6 +34,7 @@ function makePlan(fingerprints: ManifestFingerprints) {
     entities: [],
     apiEndpoints: [],
     fingerprints,
+    scope: { inScopeFeatureIds: [], outOfScopeFeatureDescriptions: [] },
   };
 }
 

@@ -12,6 +12,7 @@ function makeFile(overrides: Partial<ApplicationManifestFileDraft> = {}): Applic
     dependencies: [],
     required: true,
     sourceKind: 'scaffold',
+    featureIds: [],
     ...overrides,
   };
 }
@@ -31,6 +32,7 @@ function makePlan(overrides: Partial<GenerationPlan> = {}): GenerationPlan {
       pages: 'fnv1a:pages0000',
       components: 'fnv1a:comp0000',
     },
+    scope: { inScopeFeatureIds: [], outOfScopeFeatureDescriptions: [] },
     ...overrides,
   };
 }

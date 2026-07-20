@@ -18,6 +18,7 @@ import {
   type Project,
 } from '~/lib/stores/projects';
 import type { ArchitectureDraft } from './prompts/architecture';
+import type { EngineeringHandoff, ProductOwnerDraft } from './prompts/productOwner';
 import { buildUIUXUserPrompt, UIUX_DESIGNER_SYSTEM_PROMPT, UIUX_DRAFT_FIELDS, type UIUXDraft } from './prompts/uiux';
 
 /**
@@ -64,6 +65,9 @@ export interface UIUXContext {
 
   /** Full content — UX Engineer's directly relevant upstream role per Sprint 32's curated dependency map (Database is deliberately excluded here). */
   architecture: ArchitectureDraft | undefined;
+
+  /** Sprint 47 — the AI Product Owner's structured, MVP-scoped handoff — the boundary for which features this MVP's UI/UX actually needs to cover. Undefined for legacy projects. See docs/05-AI-Product-Owner/04-engineering-handoff.md. */
+  engineeringHandoff: EngineeringHandoff | undefined;
 
   /** Sprint 32 — every upstream role's Engineering Notes gathered so far. See collaborationContext.ts. */
   engineeringNotes: EngineeringNoteEntry[];
@@ -115,6 +119,10 @@ function buildUIUXContext(project: Project): UIUXContext {
   const knowledge = getProjectKnowledge(project);
   const artifacts = getProjectArtifacts(project);
   const architecture = getApprovedArtifactContent<ArchitectureDraft>(artifacts, ARTIFACT_TYPES.ARCHITECTURE_DRAFT);
+  const engineeringHandoff = getApprovedArtifactContent<ProductOwnerDraft>(
+    artifacts,
+    ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT,
+  )?.currentMvp?.engineeringHandoff;
 
   const roadmap = blueprintEngine.getRoadmap(blueprint.id).map((item) => ({
     title: item.title,
@@ -149,6 +157,7 @@ function buildUIUXContext(project: Project): UIUXContext {
     knowledge,
     knowledgeCompletion: projectKnowledgeEngine.getCompletion(knowledge).overall,
     architecture,
+    engineeringHandoff,
     engineeringNotes: gatherEngineeringNotes(artifacts, 'UX Engineer'),
     aiDecisions: gatherAIDecisions(artifacts, 'UX Engineer'),
     roadmap,

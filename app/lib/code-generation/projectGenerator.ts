@@ -6,7 +6,7 @@ import {
   type OnPlanReady,
   type ResumeHooks,
 } from './generationPipeline';
-import type { GenerateFn, GenerationResult, OnGenerationProgress } from './codeGenerationTypes';
+import type { GenerateFn, GenerationPlanScope, GenerationResult, OnGenerationProgress } from './codeGenerationTypes';
 
 /**
  * Project Generator — Sprint 38.
@@ -25,6 +25,7 @@ export async function generateProject(
   onPlanReady?: OnPlanReady,
   fileHooks?: FileLifecycleHooks,
   resumeHooks?: ResumeHooks,
+  mvpScope?: GenerationPlanScope,
 ): Promise<GenerationResult> {
   const hasAnySection = productPackage.sections.some(
     (section) => section.id !== 'documentation' && section.files.length > 0,
@@ -44,7 +45,16 @@ export async function generateProject(
     };
   }
 
-  return runGenerationPipeline(project, productPackage, generate, onProgress, onPlanReady, fileHooks, resumeHooks);
+  return runGenerationPipeline(
+    project,
+    productPackage,
+    generate,
+    onProgress,
+    onPlanReady,
+    fileHooks,
+    resumeHooks,
+    mvpScope,
+  );
 }
 
 export const projectGenerator = {

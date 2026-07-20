@@ -50,6 +50,9 @@ interface DraftWithCollaboration {
  */
 export const ROLE_ARTIFACT_CHAIN: { type: string; role: string }[] = [
   { type: ARTIFACT_TYPES.REQUIREMENTS_DRAFT, role: 'Business Analyst' },
+
+  /** Sprint 46B — Product Planning phase, inserted between Requirements and Engineering. See app/lib/projects/productOwnerEngine.ts. */
+  { type: ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT, role: 'Product Owner' },
   { type: ARTIFACT_TYPES.ARCHITECTURE_DRAFT, role: 'Solution Architect' },
   { type: ARTIFACT_TYPES.DATABASE_DRAFT, role: 'Database Engineer' },
   { type: ARTIFACT_TYPES.UIUX_DRAFT, role: 'UX Engineer' },

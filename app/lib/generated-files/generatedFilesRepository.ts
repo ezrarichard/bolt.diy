@@ -3,6 +3,8 @@ import { addProjectActivity } from '~/lib/builders-db/repositories/buildersDbRep
 import { checkPathSafety } from '~/lib/application-manifest/manifestBuilder';
 import { fnv1aHash } from '~/lib/checksum/fnv1a';
 import type {
+  FileConflictState,
+  FileOwnership,
   GeneratedApplicationFile,
   GeneratedApplicationFileVersion,
   GeneratedFileStatus,
@@ -72,6 +74,12 @@ interface GeneratedFileRow {
   completed_at: string | null;
   created_at: string;
   updated_at: string;
+
+  /** Sprint 49 — see FileOwnership/FileConflictState's own comments (generatedFileTypes.ts). */
+  ownership: FileOwnership | null;
+  current_hash: string | null;
+  user_modified_at: string | null;
+  conflict_state: FileConflictState | null;
 }
 
 interface GeneratedFileVersionRow {
@@ -111,6 +119,10 @@ function fromFileRow(row: GeneratedFileRow): GeneratedApplicationFile {
     completedAt: row.completed_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ownership: row.ownership ?? undefined,
+    currentHash: row.current_hash ?? undefined,
+    userModifiedAt: row.user_modified_at ?? undefined,
+    conflictState: row.conflict_state ?? undefined,
   };
 }
 
@@ -172,6 +184,10 @@ async function upsertFileRow(
     generated_at: string | null;
     validated_at: string | null;
     completed_at: string | null;
+    ownership: FileOwnership | null;
+    current_hash: string | null;
+    user_modified_at: string | null;
+    conflict_state: FileConflictState | null;
   }>,
 ): Promise<GeneratedFileRow> {
   const client = getBuildersDbClient();
@@ -202,6 +218,10 @@ async function upsertFileRow(
         generated_at: patch.generated_at ?? null,
         validated_at: patch.validated_at ?? null,
         completed_at: patch.completed_at ?? null,
+        ownership: patch.ownership ?? null,
+        current_hash: patch.current_hash ?? null,
+        user_modified_at: patch.user_modified_at ?? null,
+        conflict_state: patch.conflict_state ?? null,
       })
       .select('*')
       .single();
@@ -317,6 +337,50 @@ export async function markFileFailed(input: {
     return true;
   } catch (error) {
     logError('markFileFailed', error);
+    return false;
+  }
+}
+
+/**
+ * Sprint 49 — persists the outcome of an ownership/edit-detection check (see
+ * fileOwnership.ts's `resolveOwnershipAfterEditCheck`) onto the existing
+ * `builders_generated_application_files` row for this manifest file. Never creates a new
+ * content VERSION (this is metadata about the relationship between content states, not
+ * content itself) — if no row exists yet for this manifest file (a file that has never
+ * been generated), this is a no-op returning `false`, since there is nothing to classify.
+ */
+export async function updateFileOwnership(input: {
+  projectId: string;
+  manifestId: string;
+  manifestFileId: string;
+  path: string;
+  ownership: FileOwnership;
+  currentHash?: string;
+  userModifiedAt?: string;
+  conflictState?: FileConflictState;
+}): Promise<boolean> {
+  if (!isAvailable()) {
+    unavailable('updateFileOwnership');
+    return false;
+  }
+
+  try {
+    const existing = await getFileByManifestFileId(input.manifestFileId);
+
+    if (!existing) {
+      return false;
+    }
+
+    await upsertFileRow(input, {
+      ownership: input.ownership,
+      current_hash: input.currentHash ?? null,
+      user_modified_at: input.userModifiedAt ?? null,
+      conflict_state: input.conflictState ?? null,
+    });
+
+    return true;
+  } catch (error) {
+    logError('updateFileOwnership', error);
     return false;
   }
 }
@@ -705,6 +769,23 @@ export async function carryForwardFile(input: {
         latest_checksum: source.latest_checksum,
         generated_by_role: source.generated_by_role,
         generated_at: source.generated_at,
+
+        /*
+         * Sprint 49 — ownership/edit-detection state carries forward with the content it
+         * describes. A file classified `protected`/`user_owned`/`user_modified` in MVP
+         * N's manifest must stay that way in MVP N+1's manifest for the same path — a
+         * cross-MVP transition (Sprint 48) must never reset a customer's protection back
+         * to an unclassified state (Part 10: "cross-MVP generation respects ownership").
+         * `current_hash`/`user_modified_at` carry forward too since they describe THIS
+         * content, which hasn't changed — only `conflict_state` resets to null: a
+         * conflict recorded against the PREVIOUS manifest's generation run is that run's
+         * concern, not automatically re-opened against a new one that hasn't attempted
+         * to touch this file yet.
+         */
+        ownership: source.ownership,
+        current_hash: source.current_hash,
+        user_modified_at: source.user_modified_at,
+        conflict_state: null,
       })
       .select('id')
       .single();
@@ -753,4 +834,5 @@ export const generatedFilesRepository = {
   listFileVersions,
   reconcileUnplannedFile,
   reconstructFilesFromManifest,
+  updateFileOwnership,
 };

@@ -24,6 +24,7 @@ const {
   carryForwardFile,
   reconstructFilesFromManifest,
   isReusableGeneratedStatus,
+  updateFileOwnership,
 } = await import('./generatedFilesRepository');
 
 const BASE_INPUT = {
@@ -54,6 +55,10 @@ function fileRow(overrides: Partial<Record<string, unknown>> = {}) {
     completed_at: null,
     created_at: '2026-07-18T00:00:00.000Z',
     updated_at: '2026-07-18T00:00:00.000Z',
+    ownership: null as string | null,
+    current_hash: null as string | null,
+    user_modified_at: null as string | null,
+    conflict_state: null as string | null,
     ...overrides,
   };
 }
@@ -522,6 +527,78 @@ describe('carryForwardFile', () => {
     expect(insertedVersions[0].version).toBe(1);
   });
 
+  it('Sprint 49 — carries ownership/edit-detection state forward with the content it describes, resetting only conflict_state', async () => {
+    const sourceFileRow = {
+      id: 'old-gen-1',
+      manifest_id: 'old-manifest',
+      status: 'complete',
+      latest_version: 1,
+      latest_checksum: 'fnv1a:abc',
+      generated_by_role: 'code-gen-types',
+      generated_at: '2026-07-18T00:00:00.000Z',
+      ownership: 'protected',
+      current_hash: 'fnv1a:abc',
+      user_modified_at: null,
+      conflict_state: 'pending_review',
+    };
+
+    const insertedFiles: any[] = [];
+
+    const from = vi.fn((table: string) => {
+      if (table === 'builders_generated_application_files') {
+        return {
+          select: () => ({
+            eq: () => ({ maybeSingle: () => Promise.resolve({ data: sourceFileRow, error: null }) }),
+          }),
+          insert: (row: any) => ({
+            select: () => ({
+              single: () => {
+                const inserted = { id: 'new-gen-1', ...row };
+                insertedFiles.push(inserted);
+
+                return Promise.resolve({ data: inserted, error: null });
+              },
+            }),
+          }),
+        };
+      }
+
+      if (table === 'builders_generated_application_file_versions') {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: () => Promise.resolve({ data: { content: 'export interface X {}' }, error: null }),
+              }),
+            }),
+          }),
+          insert: () => Promise.resolve({ error: null }),
+        };
+      }
+
+      if (table === 'builders_application_manifest_files') {
+        return { update: () => ({ eq: () => Promise.resolve({ error: null }) }) };
+      }
+
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    await carryForwardFile({
+      projectId: 'proj-1',
+      newManifestId: 'new-manifest',
+      newManifestFileId: 'new-manifest-file-1',
+      path: 'src/lib/custom.ts',
+      sourceManifestFileId: 'old-manifest-file-1',
+      downgradeToGenerated: false,
+    });
+
+    expect(insertedFiles[0].ownership).toBe('protected');
+    expect(insertedFiles[0].current_hash).toBe('fnv1a:abc');
+    expect(insertedFiles[0].conflict_state).toBeNull();
+  });
+
   it('downgrades to "generated" instead of the source status when downgradeToGenerated is true', async () => {
     const sourceFileRow = {
       id: 'old-gen-2',
@@ -702,5 +779,45 @@ describe('reconstructFilesFromManifest — Workspace Restore / WebContainer Rest
 
     const files = await reconstructFilesFromManifest('manifest-1');
     expect(files).toEqual([]);
+  });
+});
+
+describe('updateFileOwnership', () => {
+  beforeEach(() => {
+    getBuildersDbClientMock.mockReset();
+  });
+
+  it('persists ownership/current_hash/user_modified_at/conflict_state onto the existing row', async () => {
+    const client = makeClient({ existingFile: fileRow({ ownership: null }) });
+    getBuildersDbClientMock.mockReturnValue(client);
+
+    const ok = await updateFileOwnership({
+      ...BASE_INPUT,
+      ownership: 'user_modified',
+      currentHash: 'fnv1a:new',
+      userModifiedAt: '2026-07-26T00:00:00.000Z',
+      conflictState: 'pending_review',
+    });
+
+    expect(ok).toBe(true);
+    expect(client.getCurrentFileRow()?.ownership).toBe('user_modified');
+    expect(client.getCurrentFileRow()?.current_hash).toBe('fnv1a:new');
+    expect(client.getCurrentFileRow()?.conflict_state).toBe('pending_review');
+  });
+
+  it('is a no-op when no generated-file row exists yet for this manifest file', async () => {
+    const client = makeClient({ existingFile: null });
+    getBuildersDbClientMock.mockReturnValue(client);
+
+    const ok = await updateFileOwnership({ ...BASE_INPUT, ownership: 'builders_generated' });
+
+    expect(ok).toBe(false);
+  });
+
+  it('returns false (never throws) when BuildersDB is unavailable', async () => {
+    getBuildersDbClientMock.mockReturnValue(null);
+
+    const ok = await updateFileOwnership({ ...BASE_INPUT, ownership: 'builders_generated' });
+    expect(ok).toBe(false);
   });
 });

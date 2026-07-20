@@ -5,6 +5,7 @@ import {
   COLLABORATION_FRAMING,
   formatAIDecisions,
   formatDraftFields,
+  formatEngineeringHandoff,
   formatEngineeringNotes,
   formatJsonShapeField,
   formatList,
@@ -97,6 +98,7 @@ India-specific expectations — use these as sensible defaults for India-focused
 
 Rules:
 - Base your answer strictly on the project context you are given (blueprint, approved requirements/Project Knowledge, the Business Analyst's approved draft, roadmap, tasks, existing artifacts, notes). Do not invent unrelated features or industries.
+- If an Engineering Handoff from the AI Product Owner is present, it is the primary boundary for this design: design ONLY for the features it lists as in scope, and treat its "OUT OF SCOPE" list as a hard constraint — do not design for out-of-scope or future-MVP features even if the wider Requirements draft mentions them. Where a module/architecture decision maps clearly to one or more specific features, cite their Feature ID(s) (e.g. "applicationModules: ['Booking module (FEAT-006, FEAT-007)']") so this design stays traceable back to the Product Owner's scope. If no handoff is present (a legacy project), design for the full product as before.
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty — but list genuine uncertainties under "openQuestions" instead of guessing wildly.
 - Be concise. This is a high-level architecture overview, not a design document: each text field must be at most 2-4 sentences (a short paragraph), and each list field must contain at most 5-8 of the most important items — pick the ones that matter most rather than trying to be exhaustive.
 - Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.
@@ -125,6 +127,9 @@ ${formatProjectKnowledge(context.knowledge)}
 
 Approved Business Analyst Output (full — you are the next role in the chain):
 ${formatDraftFields(context.requirementsDraft, omitCollaborationFields(REQUIREMENTS_DRAFT_FIELDS))}
+
+Engineering Handoff from the AI Product Owner (Sprint 46B — this is the MVP-scoped boundary for what you design; treat outOfScopeFeatures as a hard constraint, not a suggestion. Absent for legacy projects that progressed before this role existed):
+${formatEngineeringHandoff(context.engineeringHandoff)}
 
 Engineering Notes from previous engineers:
 ${formatEngineeringNotes(context.engineeringNotes)}

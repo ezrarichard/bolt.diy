@@ -16,6 +16,7 @@ import type { DatabaseDraft } from './prompts/database';
 import type { UIUXDraft } from './prompts/uiux';
 import type { BackendDraft } from './prompts/backend';
 import type { FrontendDraft } from './prompts/frontend';
+import type { EngineeringHandoff, ProductOwnerDraft } from './prompts/productOwner';
 import {
   gatherAIDecisions,
   gatherEngineeringNotes,
@@ -66,6 +67,9 @@ export interface QAContext {
   uiux: UIUXDraft | undefined;
   backend: BackendDraft | undefined;
   frontend: FrontendDraft | undefined;
+
+  /** Sprint 47 — the AI Product Owner's structured, MVP-scoped handoff — the boundary for which features this MVP's QA strategy actually needs to validate. Undefined for legacy projects. See docs/05-AI-Product-Owner/04-engineering-handoff.md. */
+  engineeringHandoff: EngineeringHandoff | undefined;
 
   /** Sprint 32 — every upstream role's Engineering Notes gathered so far. */
   engineeringNotes: EngineeringNoteEntry[];
@@ -119,6 +123,10 @@ function buildQAContext(project: Project): QAContext {
   const uiux = getApprovedArtifactContent<UIUXDraft>(artifacts, ARTIFACT_TYPES.UIUX_DRAFT);
   const backend = getApprovedArtifactContent<BackendDraft>(artifacts, ARTIFACT_TYPES.BACKEND_DRAFT);
   const frontend = getApprovedArtifactContent<FrontendDraft>(artifacts, ARTIFACT_TYPES.FRONTEND_DRAFT);
+  const engineeringHandoff = getApprovedArtifactContent<ProductOwnerDraft>(
+    artifacts,
+    ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT,
+  )?.currentMvp?.engineeringHandoff;
 
   const roadmap = blueprintEngine.getRoadmap(blueprint.id).map((item) => ({
     title: item.title,
@@ -157,6 +165,7 @@ function buildQAContext(project: Project): QAContext {
     uiux,
     backend,
     frontend,
+    engineeringHandoff,
     engineeringNotes: gatherEngineeringNotes(artifacts, 'QA Engineer'),
     aiDecisions: gatherAIDecisions(artifacts, 'QA Engineer'),
     roadmap,

@@ -18,6 +18,7 @@ import {
   type Project,
 } from '~/lib/stores/projects';
 import type { ArchitectureDraft } from './prompts/architecture';
+import type { EngineeringHandoff, ProductOwnerDraft } from './prompts/productOwner';
 import {
   buildDatabaseUserPrompt,
   DATABASE_DESIGNER_SYSTEM_PROMPT,
@@ -60,6 +61,15 @@ export interface DatabaseContext {
 
   /** Full content — Database Engineer is the immediately-next role after Solution Architect, so this is directly relevant rather than summarized. */
   architecture: ArchitectureDraft | undefined;
+
+  /**
+   * Sprint 47 — the AI Product Owner's structured, MVP-scoped handoff (scope, constraints,
+   * feature IDs, out-of-scope boundary, dependencies) — the single source of truth for which
+   * features this MVP actually needs a database schema for. Undefined for legacy projects
+   * that progressed before the Product Owner role existed. See
+   * docs/05-AI-Product-Owner/04-engineering-handoff.md.
+   */
+  engineeringHandoff: EngineeringHandoff | undefined;
 
   /** Sprint 32 — every upstream role's Engineering Notes gathered so far (Business Analyst, Solution Architect). See collaborationContext.ts. */
   engineeringNotes: EngineeringNoteEntry[];
@@ -110,6 +120,10 @@ function buildDatabaseContext(project: Project): DatabaseContext {
   const knowledge = getProjectKnowledge(project);
   const architecture = getApprovedArchitecture(project);
   const artifacts = getProjectArtifacts(project);
+  const engineeringHandoff = getApprovedArtifactContent<ProductOwnerDraft>(
+    artifacts,
+    ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT,
+  )?.currentMvp?.engineeringHandoff;
 
   const roadmap = blueprintEngine.getRoadmap(blueprint.id).map((item) => ({
     title: item.title,
@@ -144,6 +158,7 @@ function buildDatabaseContext(project: Project): DatabaseContext {
     knowledge,
     knowledgeCompletion: projectKnowledgeEngine.getCompletion(knowledge).overall,
     architecture,
+    engineeringHandoff,
     engineeringNotes: gatherEngineeringNotes(artifacts, 'Database Engineer'),
     aiDecisions: gatherAIDecisions(artifacts, 'Database Engineer'),
     roadmap,

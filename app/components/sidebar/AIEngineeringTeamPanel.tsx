@@ -159,8 +159,9 @@ export function AiEngineeringTeamPanel({
             AI Engineering Team
           </h3>
           <p className="text-[11px] text-bolt-elements-textTertiary mt-0.5">
-            Once your Project Definition is approved, every stage below generates, reviews, and approves itself
-            automatically — no manual approval required.
+            Once your Project Definition is approved, the AI Product Owner plans your first MVP and waits for your
+            approval (Gate A) — every engineering stage after it then generates, reviews, and approves itself
+            automatically.
           </p>
         </div>
         <span

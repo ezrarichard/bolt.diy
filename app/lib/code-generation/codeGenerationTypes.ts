@@ -143,6 +143,26 @@ export interface GenerationPlanFingerprints {
   components: string;
 }
 
+/**
+ * Sprint 48 — which MVP this plan was built for, and that MVP's Engineering Handoff scope
+ * boundary, threaded straight from the approved Product Owner artifact (see
+ * generationPipeline.ts's `buildGenerationPlan`). Undefined for a legacy project or one
+ * generating before Gate A — the deliberate backward-compatible default (see
+ * docs/05-AI-Product-Owner/11-sprint-48-mvp-scoped-generation.md).
+ *
+ * `inScopeFeatureIds` is real, stable identity (`EngineeringHandoff.features[].id`).
+ * `outOfScopeFeatureDescriptions` is NOT — the Product Owner's `outOfScopeFeatures` field
+ * is free-text descriptions, not IDs (deferred/future-MVP features never get a Feature ID
+ * minted for them), so this is carried as text for traceability/logging only, never for
+ * structural matching against generated files.
+ */
+export interface GenerationPlanScope {
+  mvpId?: string;
+  mvpCode?: string;
+  inScopeFeatureIds: string[];
+  outOfScopeFeatureDescriptions: string[];
+}
+
 /** The full deterministic plan — every AI call stage after "planning" reads from this rather than re-deriving it. */
 export interface GenerationPlan {
   pages: GenerationPlanPage[];
@@ -150,4 +170,7 @@ export interface GenerationPlan {
   entities: string[];
   apiEndpoints: string[];
   fingerprints: GenerationPlanFingerprints;
+
+  /** Sprint 48 — see `GenerationPlanScope`'s own comment. Always present (never undefined) — empty/undefined-valued for a legacy project, so every consumer can destructure it without an extra undefined check. */
+  scope: GenerationPlanScope;
 }

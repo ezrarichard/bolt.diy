@@ -1,6 +1,7 @@
 import { getProjectArtifacts, type Project } from '~/lib/stores/projects';
 import { ARTIFACT_TYPES, getLatestApprovedArtifact, type ProjectArtifact } from './artifacts';
 import type { ParsedDraftResult } from './draftParsing';
+import { productOwnerEngine } from './productOwnerEngine';
 import { solutionArchitectEngine } from './solutionArchitectEngine';
 import { databaseDesignerEngine } from './databaseDesignerEngine';
 import { uiuxDesignerEngine } from './uiuxDesignerEngine';
@@ -33,7 +34,20 @@ import { devopsEngineerEngine } from './devopsEngineerEngine';
  * exactly the same boundary every other engine in this codebase keeps.
  */
 
-export type AutoEngineeringRoleId = 'architecture' | 'database' | 'uiux' | 'backend' | 'frontend' | 'qa' | 'devops';
+/**
+ * Sprint 46B — 'productowner' is Product Planning, not Engineering; it's included in this
+ * same registry/type (rather than a second orchestrator) purely for orchestration reuse — see
+ * docs/02-Architecture/02-ai-product-owner.md and this sprint's implementation report for why.
+ */
+export type AutoEngineeringRoleId =
+  | 'productowner'
+  | 'architecture'
+  | 'database'
+  | 'uiux'
+  | 'backend'
+  | 'frontend'
+  | 'qa'
+  | 'devops';
 
 export interface AutoEngineeringRole {
   id: AutoEngineeringRoleId;
@@ -60,6 +74,22 @@ export const AUTO_ENGINEERING_ESTIMATED_SECONDS = 20;
  * that gating, it only walks the list in this order.
  */
 export const AUTO_ENGINEERING_ROLES: AutoEngineeringRole[] = [
+  /**
+   * Sprint 46B — Product Planning phase, not Engineering. Deliberately does NOT auto-approve
+   * like every role below it — see useAutoEngineeringPipeline.ts's productowner special case
+   * (Gate A: Roadmap/Scope Approval must be an explicit human decision).
+   */
+  {
+    id: 'productowner',
+    label: 'Product Owner',
+    artifactType: ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT,
+    maxOutputTokens: AUTO_ENGINEERING_MAX_OUTPUT_TOKENS,
+    canGenerate: productOwnerEngine.canGenerateProductOwner,
+    buildContext: productOwnerEngine.buildProductOwnerContext,
+    buildPrompt: productOwnerEngine.buildProductOwnerPrompt,
+    parseDraft: productOwnerEngine.parseDraft,
+    createDraftArtifact: productOwnerEngine.createDraftArtifact,
+  },
   {
     id: 'architecture',
     label: 'Solution Architect',
@@ -162,10 +192,28 @@ export function getNextAutoRole(project: Project): AutoEngineeringRole | undefin
   );
 }
 
-/** True once every role in the pipeline has an approved artifact. See getNextAutoRole's comment for why this checks `getLatestApprovedArtifact`, not the numerically-latest version's status. */
+/**
+ * True once every role in the pipeline has an approved artifact. See getNextAutoRole's
+ * comment for why this checks `getLatestApprovedArtifact`, not the numerically-latest
+ * version's status.
+ *
+ * Sprint 46B — the Product Owner role is exempted for legacy projects
+ * (productOwnerEngine.hasLegacyEngineeringProgress): a project that already completed every
+ * real engineering role before this role existed must still read as complete, even though it
+ * will never produce a Product Owner artifact (canGenerateProductOwner also returns false for
+ * it, so nothing would ever generate one). Without this exemption, every pre-Sprint-46B
+ * project that had already finished its engineering pipeline would regress to "incomplete".
+ */
 export function isAutoEngineeringComplete(project: Project): boolean {
   const artifacts = getProjectArtifacts(project);
-  return AUTO_ENGINEERING_ROLES.every((role) => getLatestApprovedArtifact(artifacts, role.artifactType) !== undefined);
+
+  return AUTO_ENGINEERING_ROLES.every((role) => {
+    if (getLatestApprovedArtifact(artifacts, role.artifactType) !== undefined) {
+      return true;
+    }
+
+    return role.id === 'productowner' && productOwnerEngine.hasLegacyEngineeringProgress(project);
+  });
 }
 
 /**

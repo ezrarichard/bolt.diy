@@ -261,6 +261,23 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
 
             // Sprint 36 — 'automatic' output metadata, so version history can tell this run apart from a human clicking Generate/Regenerate.
             addProjectArtifact(projectId, artifact, 'automatic');
+
+            /*
+             * Sprint 46B — Gate A (Roadmap/Scope Approval). Unlike every other role, the
+             * Product Owner's draft must never auto-approve: it's a business decision (what
+             * ships first, what the customer waits for), not a technical execution of
+             * already-approved intent. Persist the draft and stop the loop here — Solution
+             * Architect's own gate (canGenerateArchitecture) already requires this artifact to
+             * be approved, so the loop naturally has nothing else it could do until a human
+             * approves it via ProductOwnerDraftPanel. See docs/03-Development/
+             * 01-human-approval-philosophy.md and docs/05-AI-Product-Owner/
+             * 05-customer-review-workflow.md.
+             */
+            if (role.id === 'productowner') {
+              toast.success(`${role.label} draft ready for your review`);
+              break;
+            }
+
             updateProjectArtifact(projectId, artifact.id, { status: 'approved' }, 'automatic');
             toast.success(`${role.label} completed`);
           } catch (error) {

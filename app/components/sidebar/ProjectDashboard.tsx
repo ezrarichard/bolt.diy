@@ -36,6 +36,7 @@ import { ProjectTaskCard } from './ProjectTaskCard';
 import { TaskDetailsDialog } from './TaskDetailsDialog';
 import { ReviewQueueCard } from './ReviewComponents';
 import { RequirementsDraftPanel } from './RequirementsDraftPanel';
+import { ProductOwnerDraftPanel } from './ProductOwnerDraftPanel';
 import { ArchitectureDraftPanel } from './ArchitectureDraftPanel';
 import { DatabaseDraftPanel } from './DatabaseDraftPanel';
 import { UiUxDraftPanel } from './UIUXDraftPanel';
@@ -619,6 +620,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
    */
   const projectArtifacts = getProjectArtifacts(project);
   const requirementsArtifact = getLatestArtifact(projectArtifacts, ARTIFACT_TYPES.REQUIREMENTS_DRAFT);
+  const productOwnerArtifact = getLatestArtifact(projectArtifacts, ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT);
   const architectureArtifact = getLatestArtifact(projectArtifacts, ARTIFACT_TYPES.ARCHITECTURE_DRAFT);
   const databaseArtifact = getLatestArtifact(projectArtifacts, ARTIFACT_TYPES.DATABASE_DRAFT);
   const uiuxArtifact = getLatestArtifact(projectArtifacts, ARTIFACT_TYPES.UIUX_DRAFT);
@@ -906,6 +908,19 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                   requirementsCaptured={requirementsCaptured}
                                   requirementsArtifact={requirementsArtifact}
                                 >
+                                  {/* Product Owner — Sprint 46B. Product Planning phase, not Engineering — see docs/02-Architecture/02-ai-product-owner.md. Gate A (Roadmap/Scope Approval) happens here; Engineering below never begins until this is approved. */}
+                                  <EngineeringStageSection
+                                    title="Product Owner — MVP Roadmap & Scope"
+                                    artifact={productOwnerArtifact}
+                                    footnote="The Product Owner Draft is stored locally for this project only. Approving it (Gate A) creates MVP 1 in BuildersDB and unlocks Solution Architect — nothing is generated or deployed by this approval itself."
+                                    navSectionId="product-owner"
+                                    sectionRef={registerSection('product-owner')}
+                                  >
+                                    <ProductOwnerDraftPanel project={project} />
+                                  </EngineeringStageSection>
+
+                                  <PipelineConnector />
+
                                   {/* Architecture — Sprint 14 */}
                                   <EngineeringStageSection
                                     title="Architecture"

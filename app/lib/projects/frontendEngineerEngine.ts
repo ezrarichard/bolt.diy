@@ -20,6 +20,7 @@ import {
 import type { ArchitectureDraft } from './prompts/architecture';
 import type { UIUXDraft } from './prompts/uiux';
 import type { BackendDraft } from './prompts/backend';
+import type { EngineeringHandoff, ProductOwnerDraft } from './prompts/productOwner';
 import {
   buildFrontendUserPrompt,
   FRONTEND_DRAFT_FIELDS,
@@ -75,6 +76,9 @@ export interface FrontendContext {
   uiux: UIUXDraft | undefined;
   backend: BackendDraft | undefined;
 
+  /** Sprint 47 — the AI Product Owner's structured, MVP-scoped handoff — the boundary for which features this MVP's frontend actually needs to build. Undefined for legacy projects. See docs/05-AI-Product-Owner/04-engineering-handoff.md. */
+  engineeringHandoff: EngineeringHandoff | undefined;
+
   /** Sprint 32 — every upstream role's Engineering Notes gathered so far. */
   engineeringNotes: EngineeringNoteEntry[];
 
@@ -125,6 +129,10 @@ function buildFrontendContext(project: Project): FrontendContext {
   const architecture = getApprovedArtifactContent<ArchitectureDraft>(artifacts, ARTIFACT_TYPES.ARCHITECTURE_DRAFT);
   const uiux = getApprovedArtifactContent<UIUXDraft>(artifacts, ARTIFACT_TYPES.UIUX_DRAFT);
   const backend = getApprovedArtifactContent<BackendDraft>(artifacts, ARTIFACT_TYPES.BACKEND_DRAFT);
+  const engineeringHandoff = getApprovedArtifactContent<ProductOwnerDraft>(
+    artifacts,
+    ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT,
+  )?.currentMvp?.engineeringHandoff;
 
   const roadmap = blueprintEngine.getRoadmap(blueprint.id).map((item) => ({
     title: item.title,
@@ -161,6 +169,7 @@ function buildFrontendContext(project: Project): FrontendContext {
     architecture,
     uiux,
     backend,
+    engineeringHandoff,
     engineeringNotes: gatherEngineeringNotes(artifacts, 'Frontend Engineer'),
     aiDecisions: gatherAIDecisions(artifacts, 'Frontend Engineer'),
     roadmap,

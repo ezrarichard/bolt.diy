@@ -76,6 +76,27 @@ export interface ApplicationManifestFileDraft {
   /** Sprint 44.2, Phase 4 — reserved for a future queue-aware scheduler (see this file's ManifestFileStatus comment on `'queued'`). Undefined/null today; no code assigns these yet. */
   priority?: number;
   queuePosition?: number;
+
+  /**
+   * Sprint 49 — the active MVP's in-scope Feature IDs this file was generated under,
+   * validated against `GenerationPlan.scope.inScopeFeatureIds` (see manifestBuilder.ts's
+   * `validateFeatureIds`) before being stored here — never invented by the AI, never
+   * unvalidated free text. Empty for a deterministic scaffold file (package.json,
+   * vite.config.ts, ...) — those don't implement a feature, they're template plumbing —
+   * and for any file in a legacy project (no active MVP/Product Owner scope at all).
+   *
+   * Deliberately COARSE, not per-feature: every AI-generated file in an MVP-scoped run
+   * gets the WHOLE MVP's `inScopeFeatureIds`, not a specific subset. There is no
+   * structural signal anywhere upstream (Frontend/Database/Backend drafts) saying "this
+   * exact page implements FEAT-003 and not FEAT-004" — inventing that mapping here would
+   * be fabricating precision the underlying data doesn't have, exactly the trap Sprint 48
+   * already flagged and Sprint 49 does not attempt to close (see this sprint's own
+   * documentation for why: it needs a real draft-schema change, not a generation-engine
+   * change). What this DOES give you: "this file was generated in service of these
+   * feature(s)" at MVP granularity, which is genuinely new and useful for traceability
+   * even though it isn't file-to-feature precision.
+   */
+  featureIds: string[];
 }
 
 /** A planned file once persisted. */
@@ -105,6 +126,36 @@ export interface ManifestFingerprints {
 /** The manifest itself, before it's ever been persisted. */
 export interface ApplicationManifestDraft {
   projectId: string;
+
+  /**
+   * Sprint 47 — which MVP this manifest was generated for, resolved from BuildersDB at the
+   * moment generation starts (see mvpRepository.ts's `resolveActiveMvpId`). Undefined for a
+   * project with no MVP yet (a legacy project, or one generating before Gate A exists in its
+   * flow) — that's the deliberate backward-compatible default, not an error state. See
+   * docs/02-Architecture/06-mvp-as-core-object.md for why this is a second FK dimension
+   * rather than a schema restructuring.
+   */
+  mvpId?: string;
+
+  /**
+   * Sprint 48 — the same permanent, human-readable identifier as `Mvp.code` (e.g.
+   * "MVP-001"), denormalized onto the manifest so history/activity views can display it
+   * without a join back to `builders_mvps`. Stored in `metadata` (see
+   * applicationManifestRepository.ts), not a new column — purely a display convenience,
+   * `mvpId` remains the only field anything joins/filters on.
+   */
+  mvpCode?: string;
+
+  /**
+   * Sprint 48 — the active MVP's Engineering Handoff scope boundary at the moment this
+   * manifest was built, for traceability (Part 8: Feature ID -> Manifest lineage) and for
+   * `resumeOrchestrator.ts`'s cross-MVP-transition reporting. `inScopeFeatureIds` are real
+   * stable IDs; `outOfScopeFeatureDescriptions` are free text (see
+   * `GenerationPlanScope`'s own comment on why out-of-scope features have no ID to carry).
+   * Stored in `metadata`, not a new column — see this interface's own header comment on
+   * why `mvp_id` (not this) is the field any future FK/filter should use.
+   */
+  featureScope?: { inScopeFeatureIds: string[]; outOfScopeFeatureDescriptions: string[] };
   framework: string;
   packageManager: string;
   entryFile: string;

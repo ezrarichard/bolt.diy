@@ -57,6 +57,7 @@ function draft(input: {
   displayName?: string;
   dependencies?: string[];
   required?: boolean;
+  featureIds?: string[];
 }): ApplicationManifestFileDraft {
   return {
     path: input.path,
@@ -68,7 +69,47 @@ function draft(input: {
     dependencies: input.dependencies ?? [],
     required: input.required ?? true,
     sourceKind: input.sourceKind,
+    featureIds: input.featureIds ?? [],
   };
+}
+
+/**
+ * Sprint 49, Part 4 — the one real structural guard this sprint adds: given a candidate
+ * list of Feature IDs a file/entity claims to implement, returns only the ones that are
+ * actually members of the active MVP's `inScopeFeatureIds` (see
+ * `GenerationPlanScope`, codeGenerationTypes.ts). Anything else — a typo'd ID, an ID the
+ * AI invented, or a real Feature ID that belongs to a DIFFERENT MVP (past or future) —
+ * is rejected, never persisted. `validFeatureIds` is always the CURRENT active MVP's own
+ * `inScopeFeatureIds`; there is no cross-MVP feature registry to check "future MVP" IDs
+ * against directly, but rejecting everything not in the current MVP's own list has the
+ * identical effect, since a future MVP's features are never members of the current MVP's
+ * `inScopeFeatureIds` by construction (see docs/05-AI-Product-Owner/
+ * 12-sprint-49-traceability-and-ownership.md for why a separate "is this a real Feature ID
+ * from ANY MVP" check would need a cross-MVP registry this codebase doesn't have and
+ * Sprint 49 does not add).
+ *
+ * Legacy/no-scope callers (an empty `validFeatureIds`, meaning no active MVP at all) reject
+ * every candidate — Part 13's "legacy projects... remain supported" is satisfied by never
+ * calling this with a non-empty candidate list for a legacy project in the first place
+ * (see `buildFileDrafts` below), not by this function special-casing emptiness.
+ */
+export function validateFeatureIds(
+  candidateIds: string[],
+  validFeatureIds: string[],
+): { valid: string[]; rejected: string[] } {
+  const validSet = new Set(validFeatureIds);
+  const valid: string[] = [];
+  const rejected: string[] = [];
+
+  for (const id of candidateIds) {
+    if (validSet.has(id)) {
+      valid.push(id);
+    } else {
+      rejected.push(id);
+    }
+  }
+
+  return { valid, rejected };
 }
 
 /**
@@ -83,8 +124,29 @@ function buildFileDrafts(plan: GenerationPlan): ApplicationManifestFileDraft[] {
   let order = 0;
   const files: ApplicationManifestFileDraft[] = [];
 
+  /*
+   * Sprint 49, Part 2 — every AI-generated file gets the WHOLE active MVP's in-scope
+   * Feature IDs (coarse, MVP-wide — see `ApplicationManifestFileDraft.featureIds`'s own
+   * comment on why per-page precision isn't fabricated here). Already trusted, real IDs
+   * (sourced from `EngineeringHandoff.features[].id` via `resolveMvpScope` in
+   * useCodeGeneration.ts) — `validateFeatureIds` is the defensive check applied once, at
+   * the whole-manifest level, in `buildApplicationManifest` below, not re-run per file
+   * here. Empty for a legacy/no-MVP plan (`plan.scope.inScopeFeatureIds` is `[]` in that
+   * case — see `GenerationPlanScope`'s own comment), so a legacy project's files simply
+   * never carry Feature IDs, satisfying Part 13.
+   */
+  const scopedFeatureIds = plan.scope.inScopeFeatureIds;
+
   const typesPath = 'src/types/index.ts';
-  files.push(draft({ path: typesPath, category: 'types', sourceKind: 'ai_generated', generationOrder: order++ }));
+  files.push(
+    draft({
+      path: typesPath,
+      category: 'types',
+      sourceKind: 'ai_generated',
+      generationOrder: order++,
+      featureIds: scopedFeatureIds,
+    }),
+  );
 
   const servicesPath = 'src/services/api.ts';
   files.push(
@@ -94,6 +156,7 @@ function buildFileDrafts(plan: GenerationPlan): ApplicationManifestFileDraft[] {
       sourceKind: 'ai_generated',
       generationOrder: order++,
       dependencies: [typesPath],
+      featureIds: scopedFeatureIds,
     }),
   );
 
@@ -111,6 +174,7 @@ function buildFileDrafts(plan: GenerationPlan): ApplicationManifestFileDraft[] {
         componentName: page.componentName,
         displayName: page.name,
         dependencies: [typesPath, servicesPath],
+        featureIds: scopedFeatureIds,
       }),
     );
   }
@@ -136,6 +200,7 @@ function buildFileDrafts(plan: GenerationPlan): ApplicationManifestFileDraft[] {
         generationOrder: order++,
         componentName,
         displayName: name,
+        featureIds: scopedFeatureIds,
       }),
     );
   }
@@ -207,8 +272,25 @@ export function checkPathSafety(rawPath: string): { safe: true; path: string } |
   return { safe: true, path };
 }
 
-/** Exported for direct testing of the rejection rules (duplicate/invalid/oversized paths, dangling dependency references, missing mandatory entry files) independent of plan construction — see manifestBuilder.spec.ts. */
-export function validateManifestFileDrafts(files: ApplicationManifestFileDraft[]): {
+/**
+ * Exported for direct testing of the rejection rules (duplicate/invalid/oversized paths,
+ * dangling dependency references, missing mandatory entry files) independent of plan
+ * construction — see manifestBuilder.spec.ts.
+ *
+ * Sprint 49, Part 4 — `validFeatureIds` (the active MVP's own `inScopeFeatureIds`, or
+ * `undefined`/empty for a legacy project) is the structural enforcement point: every
+ * file's `featureIds` is filtered through `validateFeatureIds` here, BEFORE persistence,
+ * not merely at tagging time in `buildFileDrafts` — so this catches an out-of-scope ID
+ * regardless of how it got onto a file draft (today, only `buildFileDrafts` itself; in
+ * the future, potentially a reconciled unplanned file or a hand-edited state). Rejected
+ * IDs are stripped (never persisted) and reported as a warning, never a blocking error —
+ * matching this function's own established "never block on validation, report it"
+ * convention for every other check it already performs.
+ */
+export function validateManifestFileDrafts(
+  files: ApplicationManifestFileDraft[],
+  validFeatureIds: string[] = [],
+): {
   files: ApplicationManifestFileDraft[];
   issues: ManifestValidationIssue[];
 } {
@@ -231,8 +313,21 @@ export function validateManifestFileDrafts(files: ApplicationManifestFileDraft[]
       continue;
     }
 
+    const { valid: validatedFeatureIds, rejected: rejectedFeatureIds } = validateFeatureIds(
+      file.featureIds,
+      validFeatureIds,
+    );
+
+    if (rejectedFeatureIds.length > 0) {
+      issues.push({
+        severity: 'warning',
+        message: `${path}: out-of-scope Feature ID(s) rejected before persistence: ${rejectedFeatureIds.join(', ')}`,
+        path,
+      });
+    }
+
     seenPaths.add(path);
-    kept.push({ ...file, path });
+    kept.push({ ...file, path, featureIds: validatedFeatureIds });
   }
 
   for (const file of kept) {
@@ -288,12 +383,19 @@ export interface BuildManifestInput {
   projectId: string;
   plan: GenerationPlan;
   sourcePackageAssembledAt?: string;
+
+  /** Sprint 47 — see ApplicationManifestDraft.mvpId's comment (manifestTypes.ts). Threaded straight through to the built manifest, nothing here resolves or validates it. */
+  mvpId?: string;
+
+  /** Sprint 48 — see ApplicationManifestDraft.mvpCode/featureScope's comments (manifestTypes.ts). Threaded straight through, unvalidated — this module stays pure/deterministic. */
+  mvpCode?: string;
+  featureScope?: { inScopeFeatureIds: string[]; outOfScopeFeatureDescriptions: string[] };
 }
 
 /** Pure, synchronous, never throws — persistence is a separate step (applicationManifestRepository.ts). */
 export function buildApplicationManifest(input: BuildManifestInput): BuildManifestResult {
   const rawFiles = buildFileDrafts(input.plan);
-  const { files, issues } = validateManifestFileDrafts(rawFiles);
+  const { files, issues } = validateManifestFileDrafts(rawFiles, input.plan.scope.inScopeFeatureIds);
   const hasBlockingIssue = issues.some((issue) => issue.severity === 'error');
 
   if (hasBlockingIssue || files.length === 0) {
@@ -306,6 +408,9 @@ export function buildApplicationManifest(input: BuildManifestInput): BuildManife
     issues,
     manifest: {
       projectId: input.projectId,
+      mvpId: input.mvpId,
+      mvpCode: input.mvpCode,
+      featureScope: input.featureScope,
       framework: REACT_VITE_TS_TEMPLATE_ID,
       packageManager: 'npm',
       entryFile: ENTRY_FILE,

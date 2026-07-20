@@ -1,5 +1,6 @@
 import type { GenerationPlan } from '~/lib/code-generation/codeGenerationTypes';
 import { carryForwardFile, isReusableGeneratedStatus } from '~/lib/generated-files/generatedFilesRepository';
+import { mvpRepository } from '~/lib/mvp/mvpRepository';
 import { buildApplicationManifest } from './manifestBuilder';
 import {
   getActiveApplicationManifest,
@@ -138,6 +139,15 @@ export interface PrepareManifestResult {
   versionCreated: boolean;
   carriedForwardCount: number;
   error?: string;
+
+  /** Sprint 48 — true when the manifest this run diffed against (whatever was previously "active" for the project) belonged to a DIFFERENT MVP than this run's own `mvpId` — i.e. this is genuinely MVP N+1 extending MVP N's manifest, not a same-MVP resume/replan. False for a same-MVP replan, a first-ever manifest, or a legacy project with no MVP at all. */
+  crossMvpTransition: boolean;
+
+  /** Sprint 48 — the previous manifest's `mvpId`, when one existed and differed from this run's — see `crossMvpTransition`. Undefined whenever that flag is false. */
+  previousMvpId?: string;
+
+  /** Sprint 49, Part 4/11 — any Feature ID `manifestBuilder.ts`'s `validateFeatureIds` stripped from a file draft before persistence (an out-of-scope or unrecognized ID), deduplicated. Empty when nothing was rejected — including every legacy/no-MVP run, which never has candidate Feature IDs to reject in the first place. */
+  rejectedFeatureIds: string[];
 }
 
 /**
@@ -155,6 +165,27 @@ export interface PrepareManifestResult {
  *     `resolveCarryForwardPlan`) — `forceRestart` explicitly skips carry-forward too
  *     (a deliberate full redo starts every file at `pending`, matching "Restart" being a
  *     distinct user action from the automatic content-change version bump).
+ *
+ * Sprint 48 additions (see docs/05-AI-Product-Owner/11-sprint-48-mvp-scoped-generation.md):
+ *
+ *  - Step 0 (Part 7, out-of-scope protection): when `input.mvpId` is supplied, it is
+ *    RE-RESOLVED against `mvpRepository.resolveActiveMvpId` at the moment of persistence,
+ *    not merely trusted from whenever planning started. Planning and persistence are
+ *    separated by an AI generation run that can take tens of seconds to minutes — if the
+ *    active MVP changed underneath this run (superseded, a different MVP advanced past
+ *    Gate A), persisting a manifest under the now-stale `mvpId` would silently generate
+ *    files "for" an MVP that is no longer the one actually in play. This is a genuine
+ *    code-level block (`{ ok: false, error }`), not a prompt instruction — it cannot by
+ *    itself detect an out-of-scope FEATURE within an otherwise-valid MVP (see
+ *    `GenerationPlanScope`'s own comment on why that remains prompt-level, same
+ *    limitation Sprint 47 documented for the engineering roles).
+ *  - Step 4 continued (Parts 5/8, cross-MVP diff + traceability): `previousManifest` was
+ *    already being fetched as "whatever manifest is currently active for this project" —
+ *    which, once MVP 2 starts generating, IS MVP 1's manifest (manifests are project-
+ *    scoped with an `mvp_id` tag, not re-parented — see docs/02-Architecture/
+ *    06-mvp-as-core-object.md). The carry-forward mechanism itself is unchanged; what's
+ *    new is `crossMvpTransition`/`previousMvpId` on the result, so the caller can log
+ *    "extending MVP N's manifest" distinctly from "replanning within the same MVP."
  */
 export async function prepareManifestForGeneration(input: {
   projectId: string;
@@ -162,20 +193,77 @@ export async function prepareManifestForGeneration(input: {
   sourcePackageAssembledAt?: string;
   createdBy?: string;
   forceRestart?: boolean;
+
+  /** Sprint 47 — see ApplicationManifestDraft.mvpId's comment (manifestTypes.ts). */
+  mvpId?: string;
+
+  /** Sprint 48 — see ApplicationManifestDraft.mvpCode/featureScope's comments (manifestTypes.ts). */
+  mvpCode?: string;
+  featureScope?: { inScopeFeatureIds: string[]; outOfScopeFeatureDescriptions: string[] };
 }): Promise<PrepareManifestResult> {
+  if (input.mvpId) {
+    const currentlyActiveMvpId = await mvpRepository.resolveActiveMvpId(input.projectId);
+
+    if (currentlyActiveMvpId !== input.mvpId) {
+      return {
+        ok: false,
+        resumed: false,
+        versionCreated: false,
+        carriedForwardCount: 0,
+        crossMvpTransition: false,
+        rejectedFeatureIds: [],
+        error:
+          'The MVP this generation was planned for is no longer the active MVP for this project ' +
+          '(it may have been superseded, or a different MVP has since passed Gate A) — refusing to ' +
+          'persist a manifest for a stale MVP scope. Re-open the project to replan against the current MVP.',
+      };
+    }
+  }
+
   const built = buildApplicationManifest({
     projectId: input.projectId,
     plan: input.plan,
     sourcePackageAssembledAt: input.sourcePackageAssembledAt,
+    mvpId: input.mvpId,
+    mvpCode: input.mvpCode,
+    featureScope: input.featureScope,
   });
+
+  /*
+   * Sprint 49, Part 4/11 — `validateFeatureIds` (inside `validateManifestFileDrafts`,
+   * called by `buildApplicationManifest`) stripped these before persistence; parsed back
+   * out of the warning issues' own message text rather than a dedicated result field on
+   * `BuildManifestResult`, since this is the only caller that needs them structured and
+   * `manifestBuilder.ts` otherwise has no reason to grow a second return shape for one
+   * consumer (see manifestBuilder.ts's `validateManifestFileDrafts` for the exact message
+   * format this parses).
+   */
+  const rejectedFeatureIds = Array.from(
+    new Set(
+      built.issues
+        .map((issue) => /out-of-scope Feature ID\(s\) rejected before persistence: (.+)$/.exec(issue.message)?.[1])
+        .filter((match): match is string => Boolean(match))
+        .flatMap((match) => match.split(',').map((id) => id.trim())),
+    ),
+  );
 
   if (!built.ok || !built.manifest) {
     const message = built.issues.find((issue) => issue.severity === 'error')?.message ?? 'Manifest build failed.';
-    return { ok: false, resumed: false, versionCreated: false, carriedForwardCount: 0, error: message };
+    return {
+      ok: false,
+      resumed: false,
+      versionCreated: false,
+      carriedForwardCount: 0,
+      crossMvpTransition: false,
+      rejectedFeatureIds,
+      error: message,
+    };
   }
 
   const previousManifest = await getActiveApplicationManifest(input.projectId);
   const previousFiles = previousManifest ? await listApplicationManifestFiles(previousManifest.id) : [];
+  const crossMvpTransition = Boolean(previousManifest?.mvpId && input.mvpId && previousManifest.mvpId !== input.mvpId);
+  const previousMvpId = crossMvpTransition ? previousManifest?.mvpId : undefined;
 
   const result = await saveApplicationManifest(built.manifest, built.files, {
     createdBy: input.createdBy,
@@ -183,7 +271,15 @@ export async function prepareManifestForGeneration(input: {
   });
 
   if (!result.ok || !result.manifest || !result.files) {
-    return { ok: false, resumed: false, versionCreated: false, carriedForwardCount: 0, error: result.error };
+    return {
+      ok: false,
+      resumed: false,
+      versionCreated: false,
+      carriedForwardCount: 0,
+      crossMvpTransition: false,
+      rejectedFeatureIds,
+      error: result.error,
+    };
   }
 
   if (!result.created) {
@@ -195,6 +291,8 @@ export async function prepareManifestForGeneration(input: {
       resumed: true,
       versionCreated: false,
       carriedForwardCount: 0,
+      crossMvpTransition: false,
+      rejectedFeatureIds,
     };
   }
 
@@ -206,6 +304,9 @@ export async function prepareManifestForGeneration(input: {
       resumed: false,
       versionCreated: true,
       carriedForwardCount: 0,
+      crossMvpTransition,
+      rejectedFeatureIds,
+      previousMvpId,
     };
   }
 
@@ -249,6 +350,9 @@ export async function prepareManifestForGeneration(input: {
     resumed: false,
     versionCreated: true,
     carriedForwardCount,
+    crossMvpTransition,
+    previousMvpId,
+    rejectedFeatureIds,
   };
 }
 

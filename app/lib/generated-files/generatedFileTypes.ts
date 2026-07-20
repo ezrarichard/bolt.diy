@@ -16,6 +16,19 @@ import type { ManifestFileStatus } from '~/lib/application-manifest/manifestType
 
 export type GeneratedFileStatus = ManifestFileStatus;
 
+/**
+ * Sprint 49 — see app/lib/generated-files/fileOwnership.ts's own header comment for the
+ * full model and decision rules. `undefined` (the column's actual nullable state for
+ * every row written before this sprint) is treated as "never classified" by every
+ * consumer of this type — NOT the same as `'unknown_legacy'`, which is a real,
+ * persisted classification `fileOwnership.ts` assigns the first time a pre-Sprint-49 row
+ * is checked and found to have no comparison baseline at all.
+ */
+export type FileOwnership = 'builders_generated' | 'user_modified' | 'user_owned' | 'protected' | 'unknown_legacy';
+
+/** Sprint 49, Part 8 — `'none'` (no open conflict), `'pending_review'` (a conflict was recorded and awaits a customer/user decision), `'resolved'` (a prior conflict was explicitly resolved — see fileOwnership.ts). */
+export type FileConflictState = 'none' | 'pending_review' | 'resolved';
+
 export interface GeneratedApplicationFile {
   id: string;
   projectId: string;
@@ -36,6 +49,16 @@ export interface GeneratedApplicationFile {
   completedAt?: string;
   createdAt: string;
   updatedAt: string;
+
+  /** Sprint 49 — see `FileOwnership`'s own comment. */
+  ownership?: FileOwnership;
+
+  /** Sprint 49 — the checksum of the file's CURRENT live workspace content, as of the last time `fileOwnership.ts`'s edit-detection pass ran (see useCodeGeneration.ts's `detectFileOwnershipConflicts`). Compared against `latestChecksum` (the last content Builders itself generated) to determine `ownership`. Undefined until the first edit-detection pass runs for this file. */
+  currentHash?: string;
+
+  /** Sprint 49 — when this file was last found to have manually-modified content (`currentHash !== latestChecksum` while ownership was/became `'user_modified'`). Undefined if never detected as modified. */
+  userModifiedAt?: string;
+  conflictState?: FileConflictState;
 }
 
 export interface GeneratedApplicationFileVersion {
@@ -83,4 +106,27 @@ export interface PersistGeneratedFileResult {
   file?: GeneratedApplicationFile;
   version?: GeneratedApplicationFileVersion;
   error?: string;
+}
+
+/**
+ * Sprint 49, Part 8 — what Builders recommends doing about a file it wants to change but
+ * isn't allowed to overwrite automatically (see fileOwnership.ts's `resolveOverwritePolicy`).
+ * Only `'preserve'` and `'replace'` are actually IMPLEMENTED as automatic engine behavior
+ * this sprint (see useCodeGeneration.ts) — `'review_diff'`, `'defer'`, and
+ * `'create_alternate'` are recorded as the RECOMMENDED action a future review UI could
+ * offer, per this sprint's own "implement only the minimum UI necessary" instruction; no
+ * UI exists yet to act on them beyond preserving the file and surfacing the conflict.
+ */
+export type RecommendedFileAction = 'preserve' | 'replace' | 'review_diff' | 'defer' | 'create_alternate';
+
+/** Sprint 49, Part 8 — one file Builders wanted to (re)generate but didn't, because its ownership required a decision it can't make automatically. Never causes the rest of a generation run to abort (Part 10) — it's reported alongside whatever else generated normally. */
+export interface FileConflict {
+  path: string;
+  mvpId?: string;
+  featureIds: string[];
+  existingHash?: string;
+  lastGeneratedHash?: string;
+  proposedOperation: 'create' | 'modify';
+  reason: string;
+  recommendedAction: RecommendedFileAction;
 }

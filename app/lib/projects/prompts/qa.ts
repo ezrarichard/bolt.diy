@@ -7,6 +7,7 @@ import {
   COLLABORATION_FRAMING,
   formatAIDecisions,
   formatDraftFields,
+  formatEngineeringHandoff,
   formatEngineeringNotes,
   formatJsonShapeField,
   formatList,
@@ -118,6 +119,7 @@ Your ONLY responsibility is to design the complete testing strategy for the prod
 
 Rules:
 - Base your answer strictly on the project context you are given (blueprint, approved requirements/Project Knowledge, approved architecture, approved database design, approved UI/UX design, approved backend design, approved frontend design, roadmap, tasks, existing artifacts, notes). Do not invent unrelated features or industries.
+- If an Engineering Handoff from the AI Product Owner is present, it is the primary boundary for this strategy: validate ONLY the features it lists as in scope, and treat its "OUT OF SCOPE" list as a hard constraint — do not write test coverage for out-of-scope or future-MVP features even if the wider Requirements draft mentions them. Where a test plan item maps clearly to one or more specific features, cite their Feature ID(s) (e.g. "functionalTestPlan: 'Booking flow end to end (FEAT-006, FEAT-007)'") so this strategy stays traceable back to the Product Owner's scope. If no handoff is present (a legacy project), validate the full product as before.
 - The Architecture Draft, Database Design Draft, UI/UX Draft, Backend Draft, and Frontend Draft have already been approved — treat their module boundaries, data model, user flows, API design, and frontend design as settled constraints your test strategy must cover, not open questions.
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty.
 - Be concise. This is a high-level QA strategy, not a full test suite: each text field must be at most 2-4 sentences (a short paragraph), and each list field must contain at most 5-10 of the most important items — pick the ones that matter most rather than trying to be exhaustive.
@@ -158,6 +160,9 @@ ${formatDraftFields(context.backend, omitCollaborationFields(BACKEND_DRAFT_FIELD
 
 Approved Frontend Draft (full — you are the next role in the chain):
 ${formatDraftFields(context.frontend, omitCollaborationFields(FRONTEND_DRAFT_FIELDS))}
+
+Engineering Handoff from the AI Product Owner (Sprint 47 — this is the MVP-scoped boundary for your test strategy; validate ONLY the features listed, treat outOfScopeFeatures as a hard constraint. Absent for legacy projects that progressed before this role existed):
+${formatEngineeringHandoff(context.engineeringHandoff)}
 
 Engineering Notes from previous engineers:
 ${formatEngineeringNotes(context.engineeringNotes)}

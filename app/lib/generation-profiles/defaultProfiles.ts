@@ -10,8 +10,19 @@ import type { GenerationProfileWithRoles } from './generationProfileTypes';
  * modelRegistry.ts's `MODEL_REGISTRY` — never a raw API model id here.
  *
  * `role_key` values match builders_ai_roles exactly (verified live against BuildersDB):
- * requirements-draft, architecture-draft, database-draft, uiux-draft, backend-draft,
- * frontend-draft, qa-draft, devops-draft, code-reviewer, repair-engineer, build-validator.
+ * requirements-draft, product-owner-draft, architecture-draft, database-draft, uiux-draft,
+ * backend-draft, frontend-draft, qa-draft, devops-draft, code-reviewer, repair-engineer,
+ * build-validator.
+ *
+ * Sprint 46D — live end-to-end validation found `product-owner-draft` (Sprint 46B) was
+ * missing from every tier here entirely. `getRoleGenerateOptions()`
+ * (generationProfileRepository.ts) returns `{}` for an unmapped roleKey, silently falling
+ * back to "whatever model the user's browser cookie last had selected" instead of this
+ * profile's own explicit, tested default — unlike every other pipeline role. In the live
+ * validation run this surfaced as a real, pipeline-blocking failure ("Invalid or missing API
+ * key") the moment the Product Owner tried to generate. Fixed by giving it the same
+ * model tier as `requirements-draft` in each profile (comparable planning complexity, and
+ * the next role after it in the chain).
  */
 
 export const DEFAULT_GENERATION_PROFILE_ID = 'balanced';
@@ -26,16 +37,17 @@ export const DEFAULT_GENERATION_PROFILES: GenerationProfileWithRoles[] = [
     isSystem: true,
     roles: [
       { roleKey: 'requirements-draft', modelKey: 'claude-haiku-4.5', priority: 1 },
-      { roleKey: 'architecture-draft', modelKey: 'claude-haiku-4.5', priority: 2 },
-      { roleKey: 'database-draft', modelKey: 'claude-haiku-4.5', priority: 3 },
-      { roleKey: 'uiux-draft', modelKey: 'claude-haiku-4.5', priority: 4 },
-      { roleKey: 'backend-draft', modelKey: 'claude-sonnet-4.5', priority: 5 },
-      { roleKey: 'frontend-draft', modelKey: 'claude-sonnet-4.5', priority: 6 },
-      { roleKey: 'qa-draft', modelKey: 'claude-haiku-4.5', priority: 7 },
-      { roleKey: 'devops-draft', modelKey: 'claude-haiku-4.5', priority: 8 },
-      { roleKey: 'code-reviewer', modelKey: 'claude-haiku-4.5', priority: 9 },
-      { roleKey: 'repair-engineer', modelKey: 'claude-sonnet-4.5', priority: 10 },
-      { roleKey: 'build-validator', modelKey: 'claude-haiku-4.5', priority: 11 },
+      { roleKey: 'product-owner-draft', modelKey: 'claude-haiku-4.5', priority: 2 },
+      { roleKey: 'architecture-draft', modelKey: 'claude-haiku-4.5', priority: 3 },
+      { roleKey: 'database-draft', modelKey: 'claude-haiku-4.5', priority: 4 },
+      { roleKey: 'uiux-draft', modelKey: 'claude-haiku-4.5', priority: 5 },
+      { roleKey: 'backend-draft', modelKey: 'claude-sonnet-4.5', priority: 6 },
+      { roleKey: 'frontend-draft', modelKey: 'claude-sonnet-4.5', priority: 7 },
+      { roleKey: 'qa-draft', modelKey: 'claude-haiku-4.5', priority: 8 },
+      { roleKey: 'devops-draft', modelKey: 'claude-haiku-4.5', priority: 9 },
+      { roleKey: 'code-reviewer', modelKey: 'claude-haiku-4.5', priority: 10 },
+      { roleKey: 'repair-engineer', modelKey: 'claude-sonnet-4.5', priority: 11 },
+      { roleKey: 'build-validator', modelKey: 'claude-haiku-4.5', priority: 12 },
     ],
   },
   {
@@ -47,16 +59,17 @@ export const DEFAULT_GENERATION_PROFILES: GenerationProfileWithRoles[] = [
     isSystem: true,
     roles: [
       { roleKey: 'requirements-draft', modelKey: 'claude-sonnet-4.5', priority: 1 },
-      { roleKey: 'architecture-draft', modelKey: 'claude-sonnet-4.6', priority: 2 },
-      { roleKey: 'database-draft', modelKey: 'claude-sonnet-4.5', priority: 3 },
-      { roleKey: 'uiux-draft', modelKey: 'claude-sonnet-4.5', priority: 4 },
-      { roleKey: 'backend-draft', modelKey: 'claude-sonnet-4.6', priority: 5 },
-      { roleKey: 'frontend-draft', modelKey: 'claude-sonnet-4.6', priority: 6 },
-      { roleKey: 'qa-draft', modelKey: 'claude-sonnet-4.5', priority: 7 },
-      { roleKey: 'devops-draft', modelKey: 'claude-sonnet-4.5', priority: 8 },
-      { roleKey: 'code-reviewer', modelKey: 'claude-sonnet-4.5', priority: 9 },
-      { roleKey: 'repair-engineer', modelKey: 'claude-sonnet-4.6', priority: 10 },
-      { roleKey: 'build-validator', modelKey: 'claude-haiku-4.5', priority: 11 },
+      { roleKey: 'product-owner-draft', modelKey: 'claude-sonnet-4.5', priority: 2 },
+      { roleKey: 'architecture-draft', modelKey: 'claude-sonnet-4.6', priority: 3 },
+      { roleKey: 'database-draft', modelKey: 'claude-sonnet-4.5', priority: 4 },
+      { roleKey: 'uiux-draft', modelKey: 'claude-sonnet-4.5', priority: 5 },
+      { roleKey: 'backend-draft', modelKey: 'claude-sonnet-4.6', priority: 6 },
+      { roleKey: 'frontend-draft', modelKey: 'claude-sonnet-4.6', priority: 7 },
+      { roleKey: 'qa-draft', modelKey: 'claude-sonnet-4.5', priority: 8 },
+      { roleKey: 'devops-draft', modelKey: 'claude-sonnet-4.5', priority: 9 },
+      { roleKey: 'code-reviewer', modelKey: 'claude-sonnet-4.5', priority: 10 },
+      { roleKey: 'repair-engineer', modelKey: 'claude-sonnet-4.6', priority: 11 },
+      { roleKey: 'build-validator', modelKey: 'claude-haiku-4.5', priority: 12 },
     ],
   },
   {
@@ -68,16 +81,17 @@ export const DEFAULT_GENERATION_PROFILES: GenerationProfileWithRoles[] = [
     isSystem: true,
     roles: [
       { roleKey: 'requirements-draft', modelKey: 'claude-sonnet-4.6', priority: 1 },
-      { roleKey: 'architecture-draft', modelKey: 'claude-sonnet-4.6', priority: 2 },
-      { roleKey: 'database-draft', modelKey: 'claude-sonnet-4.6', priority: 3 },
-      { roleKey: 'uiux-draft', modelKey: 'claude-sonnet-4.6', priority: 4 },
-      { roleKey: 'backend-draft', modelKey: 'claude-sonnet-4.6', priority: 5 },
-      { roleKey: 'frontend-draft', modelKey: 'claude-sonnet-4.6', priority: 6 },
-      { roleKey: 'qa-draft', modelKey: 'claude-sonnet-4.6', priority: 7 },
-      { roleKey: 'devops-draft', modelKey: 'claude-sonnet-4.6', priority: 8 },
-      { roleKey: 'code-reviewer', modelKey: 'claude-sonnet-4.6', priority: 9 },
-      { roleKey: 'repair-engineer', modelKey: 'claude-sonnet-4.6', priority: 10 },
-      { roleKey: 'build-validator', modelKey: 'claude-sonnet-4.6', priority: 11 },
+      { roleKey: 'product-owner-draft', modelKey: 'claude-sonnet-4.6', priority: 2 },
+      { roleKey: 'architecture-draft', modelKey: 'claude-sonnet-4.6', priority: 3 },
+      { roleKey: 'database-draft', modelKey: 'claude-sonnet-4.6', priority: 4 },
+      { roleKey: 'uiux-draft', modelKey: 'claude-sonnet-4.6', priority: 5 },
+      { roleKey: 'backend-draft', modelKey: 'claude-sonnet-4.6', priority: 6 },
+      { roleKey: 'frontend-draft', modelKey: 'claude-sonnet-4.6', priority: 7 },
+      { roleKey: 'qa-draft', modelKey: 'claude-sonnet-4.6', priority: 8 },
+      { roleKey: 'devops-draft', modelKey: 'claude-sonnet-4.6', priority: 9 },
+      { roleKey: 'code-reviewer', modelKey: 'claude-sonnet-4.6', priority: 10 },
+      { roleKey: 'repair-engineer', modelKey: 'claude-sonnet-4.6', priority: 11 },
+      { roleKey: 'build-validator', modelKey: 'claude-sonnet-4.6', priority: 12 },
     ],
   },
 ];

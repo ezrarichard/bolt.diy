@@ -37,6 +37,7 @@ function makeFiles(): ApplicationManifestFileDraft[] {
       dependencies: [],
       required: true,
       sourceKind: 'scaffold',
+      featureIds: [],
     },
   ];
 }

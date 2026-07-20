@@ -91,6 +91,9 @@ export function createArtifact(input: {
  */
 export const ARTIFACT_TYPES = {
   REQUIREMENTS_DRAFT: 'requirements-draft',
+
+  /** Sprint 46B — the AI Product Owner's output. Product Planning phase, not Engineering — sits between Requirements and Architecture. See app/lib/projects/productOwnerEngine.ts. */
+  PRODUCT_OWNER_DRAFT: 'product-owner-draft',
   ARCHITECTURE_DRAFT: 'architecture-draft',
   DATABASE_DRAFT: 'database-draft',
   UIUX_DRAFT: 'uiux-draft',

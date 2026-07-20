@@ -5,6 +5,7 @@ import {
   COLLABORATION_FRAMING,
   formatAIDecisions,
   formatDraftFields,
+  formatEngineeringHandoff,
   formatEngineeringNotes,
   formatJsonShapeField,
   formatList,
@@ -113,6 +114,7 @@ Your ONLY responsibility is to produce a structured, conceptual UI/UX design spe
 
 Rules:
 - Base your answer strictly on the project context you are given (blueprint, approved requirements/Project Knowledge, approved architecture, roadmap, tasks, existing artifacts, notes). Do not invent unrelated features or industries.
+- If an Engineering Handoff from the AI Product Owner is present, it is the primary boundary for this design: design screens/flows ONLY for the features it lists as in scope, and treat its "OUT OF SCOPE" list as a hard constraint — do not design screens for out-of-scope or future-MVP features even if the wider Requirements draft mentions them. Where a screen/flow maps clearly to one or more specific features, cite their Feature ID(s) (e.g. "screenHierarchy: ['Book Appointment screen (FEAT-006, FEAT-007)']") so this design stays traceable back to the Product Owner's scope. If no handoff is present (a legacy project), design for the full product as before.
 - The Architecture Draft has already been approved — treat its module boundaries as a settled constraint your screens and flows must reflect, not an open question. The Database Design happens in parallel with your work and is intentionally not part of your input — design at the product/screen level, not the data-model level.
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty.
 - Be concise. This is a high-level design specification, not a full design system: each text field must be at most 2-4 sentences (a short paragraph), and each list field must contain at most 5-10 of the most important items — pick the ones that matter most rather than trying to be exhaustive.
@@ -141,6 +143,9 @@ ${formatProjectKnowledge(context.knowledge)}
 
 Approved Architecture Draft (full — you are a directly-downstream role):
 ${formatDraftFields(context.architecture, omitCollaborationFields(ARCHITECTURE_DRAFT_FIELDS))}
+
+Engineering Handoff from the AI Product Owner (Sprint 47 — this is the MVP-scoped boundary for your design; design screens/flows ONLY for the features listed, treat outOfScopeFeatures as a hard constraint. Absent for legacy projects that progressed before this role existed):
+${formatEngineeringHandoff(context.engineeringHandoff)}
 
 Engineering Notes from previous engineers:
 ${formatEngineeringNotes(context.engineeringNotes)}

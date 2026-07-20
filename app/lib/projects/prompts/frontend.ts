@@ -7,6 +7,7 @@ import {
   COLLABORATION_FRAMING,
   formatAIDecisions,
   formatDraftFields,
+  formatEngineeringHandoff,
   formatEngineeringNotes,
   formatJsonShapeField,
   formatList,
@@ -125,6 +126,7 @@ Your ONLY responsibility is to design the frontend for the product described in 
 
 Rules:
 - Base your answer strictly on the project context you are given (blueprint, approved requirements/Project Knowledge, approved architecture, approved UI/UX design, approved backend design, roadmap, tasks, existing artifacts, notes). Do not invent unrelated features or industries.
+- If an Engineering Handoff from the AI Product Owner is present, it is the primary boundary for this design: design pages/components ONLY for the features it lists as in scope, and treat its "OUT OF SCOPE" list as a hard constraint — do not design pages for out-of-scope or future-MVP features even if the wider Requirements draft mentions them. Where a page/component maps clearly to one or more specific features, cite their Feature ID(s) (e.g. "pageComponents: ['BookAppointmentForm (FEAT-007)']") so this design stays traceable back to the Product Owner's scope. If no handoff is present (a legacy project), design for the full product as before.
 - The UI/UX Draft and Backend Draft have already been approved — treat their screens/flows and API design as settled constraints your frontend design must support, not open questions. Database design is intentionally not part of your input — you consume the backend's API, not the schema underneath it.
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty.
 - Be concise. This is a high-level frontend design specification, not a full implementation: each text field must be at most 2-4 sentences (a short paragraph), and each list field must contain at most 5-10 of the most important items — pick the ones that matter most rather than trying to be exhaustive.
@@ -160,6 +162,9 @@ ${formatDraftFields(context.uiux, omitCollaborationFields(UIUX_DRAFT_FIELDS))}
 
 Approved Backend Draft (full — you are the next role in the chain):
 ${formatDraftFields(context.backend, omitCollaborationFields(BACKEND_DRAFT_FIELDS))}
+
+Engineering Handoff from the AI Product Owner (Sprint 47 — this is the MVP-scoped boundary for your design; design pages/components ONLY for the features listed, treat outOfScopeFeatures as a hard constraint. Absent for legacy projects that progressed before this role existed):
+${formatEngineeringHandoff(context.engineeringHandoff)}
 
 Engineering Notes from previous engineers:
 ${formatEngineeringNotes(context.engineeringNotes)}

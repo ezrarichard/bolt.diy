@@ -19,6 +19,7 @@ import {
 } from './collaborationContext';
 import type { ArchitectureDraft } from './prompts/architecture';
 import type { DatabaseDraft } from './prompts/database';
+import type { EngineeringHandoff, ProductOwnerDraft } from './prompts/productOwner';
 import {
   BACKEND_DRAFT_FIELDS,
   BACKEND_ENGINEER_SYSTEM_PROMPT,
@@ -71,6 +72,9 @@ export interface BackendContext {
 
   /** Full content — Backend Engineer's directly relevant upstream role (UI/UX is deliberately excluded per Sprint 32's curated dependency map). */
   database: DatabaseDraft | undefined;
+
+  /** Sprint 47 — the AI Product Owner's structured, MVP-scoped handoff — the boundary for which features this MVP's backend actually needs to implement. Undefined for legacy projects. See docs/05-AI-Product-Owner/04-engineering-handoff.md. */
+  engineeringHandoff: EngineeringHandoff | undefined;
 
   /** Sprint 32 — every upstream role's Engineering Notes gathered so far. */
   engineeringNotes: EngineeringNoteEntry[];
@@ -125,6 +129,10 @@ function buildBackendContext(project: Project): BackendContext {
   const artifacts = getProjectArtifacts(project);
   const architecture = getApprovedArtifactContent<ArchitectureDraft>(artifacts, ARTIFACT_TYPES.ARCHITECTURE_DRAFT);
   const database = getApprovedArtifactContent<DatabaseDraft>(artifacts, ARTIFACT_TYPES.DATABASE_DRAFT);
+  const engineeringHandoff = getApprovedArtifactContent<ProductOwnerDraft>(
+    artifacts,
+    ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT,
+  )?.currentMvp?.engineeringHandoff;
 
   const roadmap = blueprintEngine.getRoadmap(blueprint.id).map((item) => ({
     title: item.title,
@@ -160,6 +168,7 @@ function buildBackendContext(project: Project): BackendContext {
     knowledgeCompletion: projectKnowledgeEngine.getCompletion(knowledge).overall,
     architecture,
     database,
+    engineeringHandoff,
     engineeringNotes: gatherEngineeringNotes(artifacts, 'Backend Engineer'),
     aiDecisions: gatherAIDecisions(artifacts, 'Backend Engineer'),
     roadmap,

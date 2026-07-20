@@ -24,6 +24,7 @@ import type {
   GenerationIssue,
   GenerationPlan,
   GenerationPlanPage,
+  GenerationPlanScope,
   GenerationResult,
   GenerationStage,
   OnGenerationProgress,
@@ -187,8 +188,19 @@ function toComponentName(name: string): string {
  * with a numeric suffix on collision (reported as a validation warning — see
  * validateGeneratedFiles below — even though planning itself never produces a
  * collision, per the sprint's explicit "duplicate routes" check).
+ *
+ * Sprint 48 — `scope` (optional) attaches the active MVP's identity and Engineering
+ * Handoff boundary to the resulting plan (see `GenerationPlanScope`'s own comment). This
+ * does NOT filter `pageHierarchy`/`entities`/`apiEndpoints` themselves — those already
+ * come from drafts the Sprint 47 prompt-level scoping asked each engineering role to keep
+ * in-scope, and there is no per-page/per-entity Feature ID tag in those drafts to filter
+ * by structurally (a real limitation, not an oversight — see
+ * docs/05-AI-Product-Owner/11-sprint-48-mvp-scoped-generation.md). What `scope` DOES do is
+ * give every downstream consumer (the manifest, the resume orchestrator, activity
+ * logging) a reliable, structural answer to "which MVP is this generation for" — see
+ * manifestBuilder.ts's `buildApplicationManifest`.
  */
-export function buildGenerationPlan(drafts: ResolvedDrafts): GenerationPlan {
+export function buildGenerationPlan(drafts: ResolvedDrafts, scope?: GenerationPlanScope): GenerationPlan {
   const rawPageNames = dedupePreserveOrder([
     ...(drafts.frontend?.pageHierarchy ?? []),
     ...(drafts.requirements?.pages ?? []),
@@ -240,6 +252,12 @@ export function buildGenerationPlan(drafts: ResolvedDrafts): GenerationPlan {
     sharedComponents: resolvedSharedComponents,
     entities,
     apiEndpoints,
+    scope: {
+      mvpId: scope?.mvpId,
+      mvpCode: scope?.mvpCode,
+      inScopeFeatureIds: scope?.inScopeFeatureIds ?? [],
+      outOfScopeFeatureDescriptions: scope?.outOfScopeFeatureDescriptions ?? [],
+    },
     fingerprints: {
       types: fnv1aHash(JSON.stringify({ entities: [...entities].sort() })),
       services: fnv1aHash(
@@ -514,6 +532,9 @@ export async function runGenerationPipeline(
   onPlanReady?: OnPlanReady,
   fileHooks?: FileLifecycleHooks,
   resumeHooks?: ResumeHooks,
+
+  /** Sprint 48 — resolved by the caller (useCodeGeneration.ts) before this runs, since resolving it requires a BuildersDB call this pipeline deliberately never makes itself (see this file's header on staying provider/DB-agnostic). Omitted entirely for a legacy project — `buildGenerationPlan` degrades to an all-undefined/empty scope, matching pre-Sprint-48 behavior exactly. */
+  mvpScope?: GenerationPlanScope,
 ): Promise<GenerationResult> {
   const issues: GenerationIssue[] = [];
 
@@ -540,7 +561,7 @@ export async function runGenerationPipeline(
   onProgress({ stage: 'planning' });
 
   const drafts = resolveDraftsFromPackage(project, productPackage);
-  const plan = buildGenerationPlan(drafts);
+  const plan = buildGenerationPlan(drafts, mvpScope);
 
   if (plan.pages.length === 0) {
     return {

@@ -170,6 +170,15 @@ export interface BuildersDbRoleOutputRow {
 
   /** Sprint 42 (PART 9) — the authenticated user whose action produced this version, or null for automatic-pipeline runs with no human in the loop. */
   generated_by_user: string | null;
+
+  /**
+   * Sprint 45 — which MVP this role output version belongs to, per
+   * docs/02-Architecture/06-mvp-as-core-object.md. Nullable: project-level artifact types
+   * (Requirements, Product Vision) never set this, and no application code sets it for any
+   * artifact type yet — the AI Product Owner (Sprint 46+) is what starts populating it for
+   * Architecture-or-later role outputs.
+   */
+  mvp_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -188,6 +197,7 @@ export function toRoleOutputRow(
   generationType: RoleOutputGenerationType = 'manual',
   parentVersionId?: string | null,
   generatedByUserId?: string | null,
+  mvpId?: string | null,
 ): Omit<BuildersDbRoleOutputRow, 'id'> {
   return {
     artifact_id: artifact.id,
@@ -202,6 +212,7 @@ export function toRoleOutputRow(
     generation_type: generationType,
     parent_version_id: parentVersionId ?? null,
     generated_by_user: generatedByUserId ?? null,
+    mvp_id: mvpId ?? null,
     created_at: artifact.createdAt,
     updated_at: artifact.updatedAt,
   };
@@ -332,6 +343,9 @@ export interface BuildersDbActivityRow {
   /** Sprint 42 (PART 8) — who performed this action, and their display name at the time (a snapshot, not a live join — see the migration). Null for system-generated entries with no acting user (e.g. automatic pipeline runs). */
   actor_id: string | null;
   actor_display_name: string | null;
+
+  /** Sprint 45 — which MVP this activity entry belongs to, per docs/02-Architecture/06-mvp-as-core-object.md. Nullable: project-level events (e.g. Requirements approval) have no MVP, and no caller sets this yet. */
+  mvp_id: string | null;
   created_at: string;
 }
 
@@ -342,6 +356,9 @@ export interface BuildersDbActivityInput {
   metadata?: Record<string, unknown>;
   actorId?: string | null;
   actorDisplayName?: string | null;
+
+  /** Sprint 45 — optional, unused by any caller yet; see BuildersDbActivityRow.mvp_id. */
+  mvpId?: string | null;
 }
 
 /** builders_project_members row (PART 3 / PART 11). */

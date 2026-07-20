@@ -50,6 +50,9 @@ function safeErrorMessage(error: unknown): string {
 interface ManifestRow {
   id: string;
   project_id: string;
+
+  /** Sprint 47 — see ApplicationManifestDraft.mvpId's comment (manifestTypes.ts). */
+  mvp_id: string | null;
   version: number;
   status: ApplicationManifest['status'];
   source_package_version: number | null;
@@ -62,7 +65,11 @@ interface ManifestRow {
   failed_files: number;
   plan_checksum: string;
   source_content_checksum: string | null;
-  metadata: { fingerprints?: ManifestFingerprints } | null;
+  metadata: {
+    fingerprints?: ManifestFingerprints;
+    mvpCode?: string;
+    featureScope?: { inScopeFeatureIds: string[]; outOfScopeFeatureDescriptions: string[] };
+  } | null;
   persisted_at: string;
   created_by: string | null;
   created_at: string;
@@ -94,12 +101,18 @@ interface ManifestFileRow {
   updated_at: string;
   priority: number | null;
   queue_position: number | null;
+
+  /** Sprint 49 — see ApplicationManifestFileDraft.featureIds's comment (manifestTypes.ts). */
+  feature_ids: string[] | null;
 }
 
 function fromManifestRow(row: ManifestRow): ApplicationManifest {
   return {
     id: row.id,
     projectId: row.project_id,
+    mvpId: row.mvp_id ?? undefined,
+    mvpCode: row.metadata?.mvpCode ?? undefined,
+    featureScope: row.metadata?.featureScope ?? undefined,
     version: row.version,
     status: row.status,
     sourcePackageVersion: row.source_package_version ?? undefined,
@@ -146,6 +159,7 @@ function fromFileRow(row: ManifestFileRow): ApplicationManifestFile {
     updatedAt: row.updated_at,
     priority: row.priority ?? undefined,
     queuePosition: row.queue_position ?? undefined,
+    featureIds: row.feature_ids ?? [],
   };
 }
 
@@ -165,6 +179,7 @@ function toFileInsertRow(manifestId: string, projectId: string, file: Applicatio
     status: 'pending',
     priority: file.priority ?? null,
     queue_position: file.queuePosition ?? null,
+    feature_ids: file.featureIds,
   };
 }
 
@@ -295,6 +310,7 @@ export async function saveApplicationManifest(
       .from('builders_application_manifests')
       .insert({
         project_id: draft.projectId,
+        mvp_id: draft.mvpId ?? null,
         version: nextVersion,
         status: 'active',
         source_package_assembled_at: draft.sourcePackageAssembledAt ?? null,
@@ -306,7 +322,7 @@ export async function saveApplicationManifest(
         failed_files: 0,
         plan_checksum: draft.planChecksum,
         source_content_checksum: draft.sourceContentChecksum,
-        metadata: { fingerprints: draft.fingerprints },
+        metadata: { fingerprints: draft.fingerprints, mvpCode: draft.mvpCode, featureScope: draft.featureScope },
         persisted_at: new Date().toISOString(),
         created_by: options.createdBy ?? null,
       })

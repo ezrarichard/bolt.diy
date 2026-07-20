@@ -1,5 +1,6 @@
 import type { ProjectKnowledge } from '~/lib/projects/knowledge';
 import type { AIDecision } from '~/lib/projects/draftParsing';
+import type { EngineeringHandoff } from './productOwner';
 
 /**
  * Shared prompt-formatting helpers — Sprint 14, extended Sprint 32 for the
@@ -151,6 +152,40 @@ export function formatAIDecisions(entries: { role: string; decisions: AIDecision
   return entries
     .map((entry) => `${entry.role}:\n${formatDecisionList(entry.decisions) ?? 'None recorded.'}`)
     .join('\n\n');
+}
+
+/**
+ * Sprint 46B — formats the Product Owner's structured handoff for a downstream engineering
+ * role's prompt. Undefined (legacy projects, or any project predating the Product Owner role)
+ * renders as a plain fallback line rather than an empty section, so every engineering role's
+ * prompt degrades gracefully to "scope the full product" behavior for those projects.
+ *
+ * Sprint 46C — each feature is shown with its permanent id (e.g. "FEAT-001") ahead of its
+ * name/priority, so a role's own output can cite features unambiguously by ID.
+ *
+ * Sprint 47 — extracted out of prompts/architecture.ts (its original, only caller) so every
+ * engineering role from Architecture through QA can use the exact same formatting instead of
+ * each re-implementing it — this is what makes the Engineering Handoff "the single source of
+ * truth" for MVP/feature scope consistently across the whole pipeline, not just its first
+ * consumer.
+ */
+export function formatEngineeringHandoff(handoff: EngineeringHandoff | undefined): string {
+  if (!handoff) {
+    return 'None — this project predates the AI Product Owner role. Proceed as before, scoping the full product.';
+  }
+
+  const featureLines = handoff.features.map((feature) => `- [${feature.id}] ${feature.name}: ${feature.priority}`);
+
+  return [
+    `In scope for this MVP: ${formatList(handoff.scope)}`,
+    `Constraints: ${formatList(handoff.constraints)}`,
+    `Architecture goals: ${formatList(handoff.architectureGoals)}`,
+    `Success criteria: ${formatList(handoff.successCriteria)}`,
+    `Acceptance criteria: ${formatList(handoff.acceptanceCriteria)}`,
+    `Features (cite by ID in your own output where relevant):\n${featureLines.length > 0 ? featureLines.join('\n') : 'None specified'}`,
+    `OUT OF SCOPE for this MVP — do NOT build, scaffold, or reference functionality for these, even if Requirements mentions them: ${formatList(handoff.outOfScopeFeatures)}`,
+    `Dependencies: ${formatList(handoff.dependencies)}`,
+  ].join('\n');
 }
 
 export function formatProjectKnowledge(knowledge: ProjectKnowledge | undefined): string {

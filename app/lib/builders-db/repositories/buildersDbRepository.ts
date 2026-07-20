@@ -427,11 +427,18 @@ function logRoleOutputVersionCreated(projectId: string, artifact: ProjectArtifac
  * useAutoEngineeringPipeline.ts); `parent_version_id` is computed here by looking up the
  * immediately-prior version's row id, so version history can be walked backwards later.
  */
+/**
+ * Sprint 45 — `mvpId` is optional and unused by every existing caller (undefined ->
+ * null, identical to today's behavior): it exists so the future AI Product Owner
+ * (Sprint 46+) can scope Architecture-or-later role outputs to an MVP without this
+ * function's call shape changing again. See docs/02-Architecture/06-mvp-as-core-object.md.
+ */
 export async function createOrUpdateRoleOutput(
   projectId: string,
   artifact: ProjectArtifact,
   generationType: RoleOutputGenerationType = 'manual',
   generatedByUserId?: string | null,
+  mvpId?: string | null,
 ): Promise<boolean> {
   const client = getBuildersDbClient();
 
@@ -457,7 +464,7 @@ export async function createOrUpdateRoleOutput(
       ? (versions.find((row) => (row.version ?? 0) < (artifact.version ?? 0))?.id ?? null)
       : null;
 
-    const row = toRoleOutputRow(projectId, artifact, generationType, parentVersionId, generatedByUserId);
+    const row = toRoleOutputRow(projectId, artifact, generationType, parentVersionId, generatedByUserId, mvpId);
     const { error } = await client.from('builders_role_outputs').upsert(row, { onConflict: 'artifact_id,version' });
 
     if (error) {
@@ -818,6 +825,7 @@ export async function addProjectActivity(input: BuildersDbActivityInput): Promis
       metadata: input.metadata ?? {},
       actor_id: input.actorId ?? null,
       actor_display_name: input.actorDisplayName ?? null,
+      mvp_id: input.mvpId ?? null,
     });
 
     if (error) {
@@ -866,6 +874,7 @@ export async function getProjectActivity(
       metadata: row.metadata ?? {},
       actorId: row.actor_id ?? null,
       actorDisplayName: row.actor_display_name ?? null,
+      mvpId: row.mvp_id ?? null,
       createdAt: row.created_at,
     }));
   } catch (error) {

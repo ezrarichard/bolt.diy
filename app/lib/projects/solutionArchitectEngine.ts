@@ -2,7 +2,15 @@ import { blueprintEngine } from '~/lib/blueprints';
 import { executionEngine } from './executionEngine';
 import { projectKnowledgeEngine } from './projectKnowledgeEngine';
 import { isRequirementsCaptured, type ProjectKnowledge } from './knowledge';
-import { ARTIFACT_TYPES, createArtifact, getApprovedArtifactContent, type ProjectArtifact } from './artifacts';
+import {
+  ARTIFACT_TYPES,
+  createArtifact,
+  getApprovedArtifactContent,
+  getLatestApprovedArtifact,
+  type ProjectArtifact,
+} from './artifacts';
+import { hasLegacyEngineeringProgress } from './productOwnerEngine';
+import type { EngineeringHandoff, ProductOwnerDraft } from './prompts/productOwner';
 import { parseStructuredDraft, type ParsedDraftResult } from './draftParsing';
 import {
   gatherAIDecisions,
@@ -61,6 +69,17 @@ export interface ArchitectureContext {
   /** Sprint 32 — the approved Business Analyst output in full: the Solution Architect is the immediately-next role, so this is directly relevant rather than summarized. */
   requirementsDraft: RequirementsDraft | undefined;
 
+  /**
+   * Sprint 46B — the AI Product Owner's structured, MVP-scoped handoff (scope, constraints,
+   * architecture goals, success/acceptance criteria, feature priorities, out-of-scope
+   * features, dependencies) — NOT the Product Owner's full narrative artifact (Product
+   * Vision, roadmap, etc.), which Architecture doesn't need. Undefined for legacy projects
+   * that progressed before the Product Owner role existed (see
+   * productOwnerEngine.hasLegacyEngineeringProgress). See
+   * docs/05-AI-Product-Owner/04-engineering-handoff.md.
+   */
+  engineeringHandoff: EngineeringHandoff | undefined;
+
   /** Sprint 32 — every upstream role's "Engineering Notes For Next Engineer" gathered so far (just Business Analyst, at this point in the chain). See collaborationContext.ts. */
   engineeringNotes: EngineeringNoteEntry[];
 
@@ -78,13 +97,29 @@ const GENERATOR_NAME = 'AI Solution Architect';
 const ARTIFACT_TYPE = ARTIFACT_TYPES.ARCHITECTURE_DRAFT;
 
 /**
- * Requirements/Project Knowledge is the only precondition for generating an
- * architecture draft — same check the Project Dashboard already uses to
- * show "Requirements captured"/"Requirements missing" (Sprint 9). No new
- * concept introduced here; the Architecture panel gates on this.
+ * Requirements/Project Knowledge is the substantive precondition for generating an
+ * architecture draft — same check the Project Dashboard already uses to show "Requirements
+ * captured"/"Requirements missing" (Sprint 9).
+ *
+ * Sprint 46B — Engineering must never begin before Gate A (Roadmap/Scope Approval): also
+ * requires an approved Product Owner draft, UNLESS this is a legacy project that already has
+ * engineering progress from before the Product Owner role existed
+ * (productOwnerEngine.hasLegacyEngineeringProgress) — that backward-compatibility rule
+ * mirrors autoEngineeringEngine.ts's identical `isProjectDefinitionApproved` pattern, so an
+ * existing project already past this point is never retroactively blocked.
  */
 function canGenerateArchitecture(project: Project): boolean {
-  return isRequirementsCaptured(getProjectKnowledge(project));
+  if (!isRequirementsCaptured(getProjectKnowledge(project))) {
+    return false;
+  }
+
+  if (hasLegacyEngineeringProgress(project)) {
+    return true;
+  }
+
+  const artifacts = getProjectArtifacts(project);
+
+  return getLatestApprovedArtifact(artifacts, ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT) !== undefined;
 }
 
 /**
@@ -107,6 +142,10 @@ function buildArchitectureContext(project: Project): ArchitectureContext {
   const knowledge = getProjectKnowledge(project);
   const artifacts = getProjectArtifacts(project);
   const requirementsDraft = getApprovedArtifactContent<RequirementsDraft>(artifacts, ARTIFACT_TYPES.REQUIREMENTS_DRAFT);
+  const productOwnerDraft = getApprovedArtifactContent<ProductOwnerDraft>(
+    artifacts,
+    ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT,
+  );
 
   const roadmap = blueprintEngine.getRoadmap(blueprint.id).map((item) => ({
     title: item.title,
@@ -141,6 +180,7 @@ function buildArchitectureContext(project: Project): ArchitectureContext {
     knowledge,
     knowledgeCompletion: projectKnowledgeEngine.getCompletion(knowledge).overall,
     requirementsDraft,
+    engineeringHandoff: productOwnerDraft?.currentMvp?.engineeringHandoff,
     engineeringNotes: gatherEngineeringNotes(artifacts, 'Solution Architect'),
     aiDecisions: gatherAIDecisions(artifacts, 'Solution Architect'),
     roadmap,

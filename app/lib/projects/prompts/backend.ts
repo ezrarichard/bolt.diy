@@ -6,6 +6,7 @@ import {
   COLLABORATION_FRAMING,
   formatAIDecisions,
   formatDraftFields,
+  formatEngineeringHandoff,
   formatEngineeringNotes,
   formatJsonShapeField,
   formatList,
@@ -105,6 +106,7 @@ Your ONLY responsibility is to design the backend for the product described in t
 
 Rules:
 - Base your answer strictly on the project context you are given (blueprint, approved requirements/Project Knowledge, approved architecture, approved database design, roadmap, tasks, existing artifacts, notes). Do not invent unrelated features or industries.
+- If an Engineering Handoff from the AI Product Owner is present, it is the primary boundary for this design: design API endpoints/services ONLY for the features it lists as in scope, and treat its "OUT OF SCOPE" list as a hard constraint — do not design endpoints for out-of-scope or future-MVP features even if the wider Requirements draft mentions them. Where an endpoint maps clearly to one or more specific features, cite their Feature ID(s) (e.g. "apiEndpoints: ['POST /appointments (FEAT-007)']") so this design stays traceable back to the Product Owner's scope. If no handoff is present (a legacy project), design for the full product as before.
 - The Architecture Draft and Database Design Draft have already been approved — treat their module boundaries and data model as settled constraints your API design must support, not open questions. UI/UX design happens in parallel with your work and is intentionally not part of your input — design the API surface from data and business logic, not screen layout.
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty.
 - Be concise. This is a high-level backend design specification, not a full implementation: each text field must be at most 2-4 sentences (a short paragraph), and each list field must contain at most 5-10 of the most important items — pick the ones that matter most rather than trying to be exhaustive.
@@ -137,6 +139,9 @@ ${summarizeArchitecture(context.architecture)}
 
 Approved Database Design Draft (full — you are the next role in the chain):
 ${formatDraftFields(context.database, omitCollaborationFields(DATABASE_DRAFT_FIELDS))}
+
+Engineering Handoff from the AI Product Owner (Sprint 47 — this is the MVP-scoped boundary for your design; design endpoints/services ONLY for the features listed, treat outOfScopeFeatures as a hard constraint. Absent for legacy projects that progressed before this role existed):
+${formatEngineeringHandoff(context.engineeringHandoff)}
 
 Engineering Notes from previous engineers:
 ${formatEngineeringNotes(context.engineeringNotes)}
