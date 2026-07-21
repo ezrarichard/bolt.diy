@@ -1,10 +1,17 @@
 import { buildersDbRepository, isBuildersDbAvailable } from '~/lib/builders-db/repositories/buildersDbRepository';
+import { getLatestRequirementsSession } from '~/lib/builders-db/repositories/requirementsSessionRepository';
+import { getBusinessUnderstandingModel } from '~/lib/builders-db/repositories/businessUnderstandingRepository';
 import type {
   BuildersDbTaskInput,
   BuildersDbTaskReviewInput,
   ContextTraceSource,
 } from '~/lib/builders-db/buildersDbTypes';
-import { formatArtifactTimestamp, parseArtifactContent, type ProjectArtifact } from '~/lib/projects/artifacts';
+import {
+  ARTIFACT_TYPES,
+  formatArtifactTimestamp,
+  parseArtifactContent,
+  type ProjectArtifact,
+} from '~/lib/projects/artifacts';
 import { ROLE_ARTIFACT_CHAIN } from '~/lib/projects/collaborationContext';
 
 /**
@@ -368,27 +375,78 @@ function buildContextTraceSources(
 }
 
 /**
+ * Sprint 52 — the OTHER provenance hop this sprint covers (Business Understanding →
+ * RequirementsDraft), recorded via this same context-trace mechanism rather than a second
+ * one. Only meaningful for the Requirements role itself: every other role already has real
+ * upstream role outputs to trace, and the Business Understanding Model exists specifically to
+ * feed the Business Analyst, not later roles. Only sections with actual content generate an
+ * entry — an always-empty section (nothing has populated it yet) isn't a real "contribution."
+ * Lightweight by design: this points at a section by name, it never copies the section's
+ * content into the trace row.
+ */
+async function buildBusinessUnderstandingSources(projectId: string): Promise<ContextTraceSource[]> {
+  const session = await getLatestRequirementsSession(projectId);
+
+  if (!session) {
+    return [];
+  }
+
+  const model = await getBusinessUnderstandingModel(session.id);
+
+  if (!model) {
+    return [];
+  }
+
+  const sectionEntries: Array<[string, unknown]> = [
+    ['businessIdentity', model.businessIdentity],
+    ['businessGoals', model.businessGoals],
+    ['processes', model.processes],
+    ['targetUsers', model.targetUsers],
+    ['painPoints', model.painPoints],
+    ['businessConstraints', model.businessConstraints],
+    ['currentSystems', model.currentSystems],
+    ['functionalRequirements', model.functionalRequirements],
+    ['nonFunctionalRequirements', model.nonFunctionalRequirements],
+    ['recommendations', model.recommendations],
+    ['assumptions', model.assumptions],
+    ['risks', model.risks],
+    ['openQuestions', model.openQuestions],
+  ];
+
+  return sectionEntries
+    .filter(([, value]) => (Array.isArray(value) ? value.length > 0 : Object.keys(value ?? {}).length > 0))
+    .map(([sectionKey]) => ({
+      type: 'business-understanding-section' as const,
+      label: `Business Understanding: ${humanizeFieldKey(sectionKey)}`,
+      sectionKey,
+      sessionId: session.id,
+    }));
+}
+
+/**
  * Best-effort, fire-and-forget: records WHY a role's context looked the way it did (see
  * requirement #3/#4, "Context Source Traceability"/"Context Explanation"). Never awaited
  * by `buildRoleContextBlock` — a failure here must never affect the AI generation it's
  * merely describing.
  */
-function recordContextTrace(
+async function recordContextTrace(
   projectId: string,
   roleKey: string,
   roleOutputs: ProjectArtifact[],
   tasks: TaskContextEntry[],
   projectPromptText: string | undefined,
-): void {
+): Promise<void> {
   const sources = buildContextTraceSources(roleOutputs, tasks, projectPromptText);
+
+  if (roleKey === ARTIFACT_TYPES.REQUIREMENTS_DRAFT) {
+    sources.push(...(await buildBusinessUnderstandingSources(projectId)));
+  }
 
   if (sources.length === 0) {
     return;
   }
 
-  buildersDbRepository
-    .saveContextTrace({ projectId, roleKey, sources })
-    .catch((error) => console.error('[BuildersDB Context] recordContextTrace failed:', error));
+  await buildersDbRepository.saveContextTrace({ projectId, roleKey, sources });
 }
 
 /**
@@ -477,7 +535,9 @@ export async function buildRoleContextBlock(
     );
 
     logContextRetrievedActivity(projectId, roleKey, roleOutputs.length, tasks.length);
-    recordContextTrace(projectId, roleKey, roleOutputs, tasks, projectPromptText);
+    recordContextTrace(projectId, roleKey, roleOutputs, tasks, projectPromptText).catch((error) =>
+      console.error('[BuildersDB Context] recordContextTrace failed:', error),
+    );
 
     return sections.join('\n\n');
   } catch (error) {

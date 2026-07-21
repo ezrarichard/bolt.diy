@@ -10,9 +10,10 @@ import {
 } from '~/lib/builders-db/repositories/businessUnderstandingRepository';
 import type { BusinessUnderstandingModelPatch } from '~/lib/builders-db/requirementsSessionDbTypes';
 import type { ProjectKnowledge } from '~/lib/projects/knowledge';
+import type { TraceabilityReference } from '~/lib/projects/requirementsSession';
 
 /**
- * Sprint 51 — Form Mode Integration.
+ * Sprint 51 — Form Mode Integration. Sprint 52 — Requirements Traceability & Provenance.
  *
  * Wires the existing Requirements Form flow into the Sprint 50 durable foundation
  * (Requirements Sessions, Session Messages, Business Understanding Model) WITHOUT changing
@@ -22,12 +23,20 @@ import type { ProjectKnowledge } from '~/lib/projects/knowledge';
  * `stores/projects.ts`: a failure here is logged and swallowed, never surfaced to the UI or
  * allowed to block a save/close action.
  *
- * Deliberately excluded from this sprint (see the Sprint 51 brief): Fact Extraction, Business
- * Assessment, Discovery Strategy, Recommendation/Assumption/Completeness engines, Open
- * Questions, Interview/Document Mode. The Business Understanding Model bootstrap below is a
- * plain, lossless, zero-inference copy of the existing form fields — never an AI call, never
+ * Deliberately excluded from these sprints (see the Sprint 51/52 briefs): Fact Extraction,
+ * Business Assessment, Discovery Strategy, Recommendation/Assumption/Completeness engines,
+ * Open Questions, Interview/Document Mode. The Business Understanding Model bootstrap below is
+ * a plain, lossless, zero-inference copy of the existing form fields — never an AI call, never
  * an invented categorization. Richer field-by-field categorization is Fact Extraction's job
  * (a later sprint), not this one's.
+ *
+ * Sprint 52 adds provenance for the ONE hop this module owns (Session Message → Business
+ * Understanding Model section) by populating the model's existing `traceability` field — a
+ * lightweight reference (message id + section name), never a copy of the message content
+ * itself, which already lives durably in `builders_requirements_session_messages`. The other
+ * hop this sprint covers (Business Understanding → RequirementsDraft) is recorded separately,
+ * by extending the existing Sprint 36 context-trace mechanism — see
+ * app/lib/ai/context/buildersDbContextProvider.ts.
  */
 
 function runFireAndForget(label: string, work: () => Promise<unknown>): void {
@@ -82,14 +91,54 @@ function buildInitialUnderstandingPatch(knowledge: ProjectKnowledge): BusinessUn
   };
 }
 
+/** Whether a Business Understanding Model section (as produced by `buildInitialUnderstandingPatch`) actually has content worth tracing — an empty list/object shouldn't generate a provenance entry pointing at nothing. */
+function isSectionPopulated(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.keys(value).length > 0;
+  }
+
+  return Boolean(value);
+}
+
+/**
+ * Sprint 52 — one traceability entry per non-empty section the form submission populated,
+ * each pointing at the same source message (the whole form was one message; the Business
+ * Understanding Model's sections are the transformation's targets). Appended to whatever
+ * traceability already existed for this session — never replaces prior entries, since a
+ * project may save the Requirements form more than once over its lifetime.
+ */
+function buildTraceabilityForFormSubmission(
+  messageId: string,
+  patch: BusinessUnderstandingModelPatch,
+  existingTraceability: TraceabilityReference[],
+): TraceabilityReference[] {
+  const recordedAt = new Date().toISOString();
+
+  const newEntries: TraceabilityReference[] = (Object.keys(patch) as (keyof BusinessUnderstandingModelPatch)[])
+    .filter((sectionKey) => isSectionPopulated(patch[sectionKey]))
+    .map((sectionKey) => ({
+      source: { type: 'session_message', id: messageId },
+      target: { type: 'business_understanding_section', id: sectionKey },
+      transformation: 'form_field_mapping',
+      recordedAt,
+    }));
+
+  return [...existingTraceability, ...newEntries];
+}
+
 /**
  * Called from `ProjectRequirementsDialog.tsx`'s `handleSave()`, alongside (not instead of) the
  * existing `updateProjectKnowledge()` call. Ensures a session exists (defensively creating one
  * for a legacy pre-Sprint-51 project that has none yet — see the Sprint 51 legacy-compatibility
  * requirement), appends the submitted form as one durable `form_submission` message, and
- * bootstraps/updates the Business Understanding Model from it. None of this feeds into or
- * changes the existing RequirementsDraft generation, which continues reading
- * `project.projectKnowledge` exactly as it does today.
+ * bootstraps/updates the Business Understanding Model from it, recording (Sprint 52) which
+ * message produced which section. None of this feeds into or changes the existing
+ * RequirementsDraft generation, which continues reading `project.projectKnowledge` exactly as
+ * it does today.
  */
 export function recordRequirementsFormSubmission(projectId: string, knowledge: ProjectKnowledge): void {
   runFireAndForget('recordRequirementsFormSubmission', async () => {
@@ -100,14 +149,21 @@ export function recordRequirementsFormSubmission(projectId: string, knowledge: P
       throw new Error(`no Requirements Session available for project ${projectId}`);
     }
 
-    await appendRequirementsSessionMessage(session.id, projectId, {
+    const message = await appendRequirementsSessionMessage(session.id, projectId, {
       role: 'user',
       messageType: 'form_submission',
       content: JSON.stringify(knowledge),
     });
 
-    await initializeBusinessUnderstandingModel(session.id, projectId);
-    await updateBusinessUnderstandingModel(session.id, buildInitialUnderstandingPatch(knowledge));
+    if (!message) {
+      throw new Error(`failed to append Requirements Session message for session ${session.id}`);
+    }
+
+    const model = await initializeBusinessUnderstandingModel(session.id, projectId);
+    const patch = buildInitialUnderstandingPatch(knowledge);
+    const traceability = buildTraceabilityForFormSubmission(message.id, patch, model?.traceability ?? []);
+
+    await updateBusinessUnderstandingModel(session.id, { ...patch, traceability });
   });
 }
 

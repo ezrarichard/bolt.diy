@@ -64,14 +64,34 @@ export interface RequirementsSessionMessage {
 /** How confident the Business Analyst is in a given fact — reused verbatim from the frozen Business Analyst Intelligence Architecture's tiering (Working Memory / Business Understanding Model, Part 2/3). */
 export type FactConfidence = 'inferred' | 'stated' | 'confirmed';
 
-/** Where a fact, recommendation, assumption, or risk came from — the traceability discipline the frozen architecture requires everywhere (Business Analyst Intelligence Architecture, Part 8). */
-export interface TraceabilityReference {
-  /** The session message this originated from, if any. */
-  sourceMessageId?: string;
+/**
+ * Sprint 52 — Requirements Traceability & Provenance.
+ *
+ * A lightweight reference, never a copy of the referenced content — the whole point of
+ * provenance is to answer "where did this come from?" without duplicating payloads that
+ * already live in `builders_requirements_session_messages`/`builders_business_understanding_models`.
+ * `id` on each entity is whatever that entity is already keyed by: a session message's row
+ * id, or a `BusinessUnderstandingModel` section name (e.g. 'targetUsers', 'businessGoals').
+ */
+export type ProvenanceEntityType = 'session_message' | 'business_understanding_section' | 'requirements_draft_section';
 
-  /** A human-readable origin description when no single message applies (e.g. an industry-framework default). */
-  sourceLabel?: string;
+export interface ProvenanceEntityRef {
+  type: ProvenanceEntityType;
+  id: string;
+}
+
+/** One traceable transformation: Source Entity → Target Entity → Transformation → Timestamp → Version (the frozen architecture's provenance principle, Part 8). */
+export interface TraceabilityReference {
+  source: ProvenanceEntityRef;
+  target: ProvenanceEntityRef;
+
+  /** What kind of transformation produced the target from the source, e.g. 'form_field_mapping'. Free text, not an enum — a new transformation kind must never require a schema/type change. */
+  transformation: string;
+
   recordedAt: string;
+
+  /** The target entity's version, when the target is itself versioned (e.g. a RequirementsDraft artifact version). Absent for current-state targets (e.g. a Business Understanding Model section, which isn't versioned). */
+  version?: number;
 }
 
 export interface Recommendation {

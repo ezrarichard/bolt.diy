@@ -211,4 +211,90 @@ describe('requirementsSessionOrchestrator', () => {
       await flush();
     });
   });
+
+  describe('recordRequirementsFormSubmission — Sprint 52 provenance', () => {
+    it('records one traceability entry per non-empty section, pointing at the real message id', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-real-id' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [] });
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+
+      recordRequirementsFormSubmission('proj-1', { targetUsers: 'Patients', coreFeatures: ['Booking'] });
+      await flush();
+
+      const [, patch] = updateBusinessUnderstandingModelMock.mock.calls[0];
+      const targetUsersEntry = patch.traceability.find(
+        (t: { target: { id: string } }) => t.target.id === 'targetUsers',
+      );
+      const functionalRequirementsEntry = patch.traceability.find(
+        (t: { target: { id: string } }) => t.target.id === 'functionalRequirements',
+      );
+
+      expect(targetUsersEntry).toMatchObject({
+        source: { type: 'session_message', id: 'msg-real-id' },
+        target: { type: 'business_understanding_section', id: 'targetUsers' },
+        transformation: 'form_field_mapping',
+      });
+      expect(functionalRequirementsEntry).toMatchObject({
+        source: { type: 'session_message', id: 'msg-real-id' },
+        target: { type: 'business_understanding_section', id: 'functionalRequirements' },
+      });
+      expect(targetUsersEntry.recordedAt).toEqual(expect.any(String));
+    });
+
+    it('does not record a traceability entry for a section the form left empty', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-1' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [] });
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+
+      // No integrations/compliance/payment/shipping provided — currentSystems and businessConstraints stay empty.
+      recordRequirementsFormSubmission('proj-1', { targetUsers: 'Patients' });
+      await flush();
+
+      const [, patch] = updateBusinessUnderstandingModelMock.mock.calls[0];
+      const sectionIds = patch.traceability.map((t: { target: { id: string } }) => t.target.id);
+
+      expect(sectionIds).not.toContain('currentSystems');
+      expect(sectionIds).not.toContain('businessConstraints');
+    });
+
+    it('appends to, rather than overwrites, traceability from a prior form save', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-2' });
+
+      const priorEntry = {
+        source: { type: 'session_message', id: 'msg-1' },
+        target: { type: 'business_understanding_section', id: 'targetUsers' },
+        transformation: 'form_field_mapping',
+        recordedAt: '2026-01-01T00:00:00.000Z',
+      };
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [priorEntry] });
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+
+      recordRequirementsFormSubmission('proj-1', { targetUsers: 'Patients' });
+      await flush();
+
+      const [, patch] = updateBusinessUnderstandingModelMock.mock.calls[0];
+
+      expect(patch.traceability).toContainEqual(priorEntry);
+      expect(patch.traceability.length).toBeGreaterThan(1);
+    });
+
+    it('never throws or blocks the caller if provenance construction hits an unexpected shape', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-1' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1' }); // no traceability field at all
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+
+      expect(() => recordRequirementsFormSubmission('proj-1', { targetUsers: 'X' })).not.toThrow();
+      await flush();
+
+      expect(updateBusinessUnderstandingModelMock).toHaveBeenCalled();
+    });
+  });
 });

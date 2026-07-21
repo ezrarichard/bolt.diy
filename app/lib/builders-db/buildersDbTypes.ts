@@ -390,12 +390,19 @@ export function fromProjectMemberRow(row: BuildersDbProjectMemberRow): ProjectMe
  * Sprint 36 — one entry in a builders_context_traces row's `sources` JSONB array: which
  * single piece of persistent context contributed to a role's generated response.
  * `roleKey`/`version` are only present for `type: 'role-output'`.
+ *
+ * Sprint 52 — `business-understanding-section` records the OTHER provenance hop this sprint
+ * covers (Business Understanding → RequirementsDraft), reusing this same append-only trace
+ * mechanism rather than inventing a second one: `sectionKey`/`sessionId` are only present for
+ * this type, and point at (never copy) a section of `builders_business_understanding_models`.
  */
 export interface ContextTraceSource {
-  type: 'role-output' | 'task' | 'original-prompt';
+  type: 'role-output' | 'task' | 'original-prompt' | 'business-understanding-section';
   label: string;
   roleKey?: string;
   version?: number;
+  sectionKey?: string;
+  sessionId?: string;
 }
 
 /** builders_context_traces row. */
