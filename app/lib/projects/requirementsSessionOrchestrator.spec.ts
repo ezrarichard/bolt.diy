@@ -4,6 +4,7 @@ const {
   isBuildersDbAvailableMock,
   createRequirementsSessionMock,
   getLatestRequirementsSessionMock,
+  updateRequirementsSessionMock,
   appendRequirementsSessionMessageMock,
   initializeBusinessUnderstandingModelMock,
   updateBusinessUnderstandingModelMock,
@@ -11,6 +12,7 @@ const {
   isBuildersDbAvailableMock: vi.fn(),
   createRequirementsSessionMock: vi.fn(),
   getLatestRequirementsSessionMock: vi.fn(),
+  updateRequirementsSessionMock: vi.fn(),
   appendRequirementsSessionMessageMock: vi.fn(),
   initializeBusinessUnderstandingModelMock: vi.fn(),
   updateBusinessUnderstandingModelMock: vi.fn(),
@@ -23,6 +25,7 @@ vi.mock('~/lib/builders-db/repositories/buildersDbRepository', () => ({
 vi.mock('~/lib/builders-db/repositories/requirementsSessionRepository', () => ({
   createRequirementsSession: createRequirementsSessionMock,
   getLatestRequirementsSession: getLatestRequirementsSessionMock,
+  updateRequirementsSession: updateRequirementsSessionMock,
 }));
 
 vi.mock('~/lib/builders-db/repositories/requirementsSessionMessageRepository', () => ({
@@ -49,6 +52,7 @@ describe('requirementsSessionOrchestrator', () => {
     isBuildersDbAvailableMock.mockReset();
     createRequirementsSessionMock.mockReset();
     getLatestRequirementsSessionMock.mockReset();
+    updateRequirementsSessionMock.mockReset().mockResolvedValue(true);
     appendRequirementsSessionMessageMock.mockReset();
     initializeBusinessUnderstandingModelMock.mockReset();
     updateBusinessUnderstandingModelMock.mockReset();
@@ -295,6 +299,83 @@ describe('requirementsSessionOrchestrator', () => {
       await flush();
 
       expect(updateBusinessUnderstandingModelMock).toHaveBeenCalled();
+    });
+  });
+
+  describe('recordRequirementsFormSubmission — Sprint 53 Business Assessment', () => {
+    it('persists an assessment section derived from the same patch, in the same update call', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-1' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [] });
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+
+      recordRequirementsFormSubmission('proj-1', { industry: 'Church' });
+      await flush();
+
+      const [, patch] = updateBusinessUnderstandingModelMock.mock.calls[0];
+      expect(patch.assessment.classification).toBe('Church');
+      expect(patch.assessment.industry).toBe('Church');
+    });
+
+    it('appends assessment evidence to the same traceability array as the form-mapping entries', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-1' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [] });
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+
+      recordRequirementsFormSubmission('proj-1', { industry: 'Church', targetUsers: 'Parishioners' });
+      await flush();
+
+      const [, patch] = updateBusinessUnderstandingModelMock.mock.calls[0];
+      const targets = patch.traceability.map((t: { target: { id: string } }) => t.target.id);
+
+      expect(targets).toContain('targetUsers'); // Sprint 52 form-mapping entry
+      expect(targets).toContain('assessment.classification'); // Sprint 53 assessment entry
+    });
+
+    it('stores the assessment overall confidence on the session, via updateRequirementsSession', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-1' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [] });
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+
+      recordRequirementsFormSubmission('proj-1', { industry: 'Church' });
+      await flush();
+
+      expect(updateRequirementsSessionMock).toHaveBeenCalledWith(
+        'session-1',
+        expect.objectContaining({ assessmentConfidence: expect.any(String) }),
+      );
+    });
+
+    it('never fabricates a classification for a blank form — assessment is Unknown, not silently omitted', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-1' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [] });
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+
+      recordRequirementsFormSubmission('proj-1', {});
+      await flush();
+
+      const [, patch] = updateBusinessUnderstandingModelMock.mock.calls[0];
+      expect(patch.assessment.classification).toBe('Unknown');
+      expect(patch.assessment.industry).toBeUndefined();
+    });
+
+    it('never throws even if the assessment/session-confidence write fails', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-1' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [] });
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+      updateRequirementsSessionMock.mockRejectedValue(new Error('network down'));
+
+      expect(() => recordRequirementsFormSubmission('proj-1', { industry: 'Retail' })).not.toThrow();
+      await flush();
     });
   });
 });

@@ -2,18 +2,21 @@ import { isBuildersDbAvailable } from '~/lib/builders-db/repositories/buildersDb
 import {
   createRequirementsSession,
   getLatestRequirementsSession,
+  updateRequirementsSession,
 } from '~/lib/builders-db/repositories/requirementsSessionRepository';
 import { appendRequirementsSessionMessage } from '~/lib/builders-db/repositories/requirementsSessionMessageRepository';
 import {
   initializeBusinessUnderstandingModel,
   updateBusinessUnderstandingModel,
 } from '~/lib/builders-db/repositories/businessUnderstandingRepository';
+import { runBusinessAssessment } from '~/lib/projects/businessAssessmentEngine';
 import type { BusinessUnderstandingModelPatch } from '~/lib/builders-db/requirementsSessionDbTypes';
 import type { ProjectKnowledge } from '~/lib/projects/knowledge';
 import type { TraceabilityReference } from '~/lib/projects/requirementsSession';
 
 /**
  * Sprint 51 — Form Mode Integration. Sprint 52 — Requirements Traceability & Provenance.
+ * Sprint 53 — Business Assessment Engine.
  *
  * Wires the existing Requirements Form flow into the Sprint 50 durable foundation
  * (Requirements Sessions, Session Messages, Business Understanding Model) WITHOUT changing
@@ -23,12 +26,12 @@ import type { TraceabilityReference } from '~/lib/projects/requirementsSession';
  * `stores/projects.ts`: a failure here is logged and swallowed, never surfaced to the UI or
  * allowed to block a save/close action.
  *
- * Deliberately excluded from these sprints (see the Sprint 51/52 briefs): Fact Extraction,
- * Business Assessment, Discovery Strategy, Recommendation/Assumption/Completeness engines,
- * Open Questions, Interview/Document Mode. The Business Understanding Model bootstrap below is
- * a plain, lossless, zero-inference copy of the existing form fields — never an AI call, never
- * an invented categorization. Richer field-by-field categorization is Fact Extraction's job
- * (a later sprint), not this one's.
+ * Deliberately excluded from these sprints (see the Sprint 51/52/53 briefs): Fact Extraction,
+ * Interview Mode, Discovery Strategy, Recommendation/Assumption/Completeness engines, Open
+ * Questions, Document Mode. The Business Understanding Model bootstrap below is a plain,
+ * lossless, zero-inference copy of the existing form fields — never an AI call, never an
+ * invented categorization. Richer field-by-field categorization is Fact Extraction's job (a
+ * later sprint), not this one's.
  *
  * Sprint 52 adds provenance for the ONE hop this module owns (Session Message → Business
  * Understanding Model section) by populating the model's existing `traceability` field — a
@@ -37,6 +40,12 @@ import type { TraceabilityReference } from '~/lib/projects/requirementsSession';
  * hop this sprint covers (Business Understanding → RequirementsDraft) is recorded separately,
  * by extending the existing Sprint 36 context-trace mechanism — see
  * app/lib/ai/context/buildersDbContextProvider.ts.
+ *
+ * Sprint 53 runs the deterministic Business Assessment Engine (`businessAssessmentEngine.ts`)
+ * automatically, immediately after the same form-save that already updates the Business
+ * Understanding Model — no separate user action, no AI call. Its evidence is appended to the
+ * exact same `traceability` array Sprint 52 introduced, and its overall confidence is stored on
+ * `RequirementsSession.assessmentConfidence`, a field Sprint 50 already reserved for this.
  */
 
 function runFireAndForget(label: string, work: () => Promise<unknown>): void {
@@ -134,11 +143,12 @@ function buildTraceabilityForFormSubmission(
  * Called from `ProjectRequirementsDialog.tsx`'s `handleSave()`, alongside (not instead of) the
  * existing `updateProjectKnowledge()` call. Ensures a session exists (defensively creating one
  * for a legacy pre-Sprint-51 project that has none yet — see the Sprint 51 legacy-compatibility
- * requirement), appends the submitted form as one durable `form_submission` message, and
- * bootstraps/updates the Business Understanding Model from it, recording (Sprint 52) which
- * message produced which section. None of this feeds into or changes the existing
- * RequirementsDraft generation, which continues reading `project.projectKnowledge` exactly as
- * it does today.
+ * requirement), appends the submitted form as one durable `form_submission` message, updates
+ * the Business Understanding Model from it (recording, per Sprint 52, which message produced
+ * which section), then (Sprint 53) runs the deterministic Business Assessment Engine against
+ * that same update and persists its result + evidence in the same write. None of this feeds
+ * into or changes the existing RequirementsDraft generation, which continues reading
+ * `project.projectKnowledge` exactly as it does today.
  */
 export function recordRequirementsFormSubmission(projectId: string, knowledge: ProjectKnowledge): void {
   runFireAndForget('recordRequirementsFormSubmission', async () => {
@@ -163,7 +173,15 @@ export function recordRequirementsFormSubmission(projectId: string, knowledge: P
     const patch = buildInitialUnderstandingPatch(knowledge);
     const traceability = buildTraceabilityForFormSubmission(message.id, patch, model?.traceability ?? []);
 
-    await updateBusinessUnderstandingModel(session.id, { ...patch, traceability });
+    const { assessment, evidence, overallConfidence } = runBusinessAssessment(patch);
+
+    await updateBusinessUnderstandingModel(session.id, {
+      ...patch,
+      assessment,
+      traceability: [...traceability, ...evidence],
+    });
+
+    await updateRequirementsSession(session.id, { assessmentConfidence: overallConfidence });
   });
 }
 

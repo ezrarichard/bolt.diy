@@ -85,13 +85,20 @@ export interface TraceabilityReference {
   source: ProvenanceEntityRef;
   target: ProvenanceEntityRef;
 
-  /** What kind of transformation produced the target from the source, e.g. 'form_field_mapping'. Free text, not an enum — a new transformation kind must never require a schema/type change. */
+  /**
+   * What kind of transformation produced the target from the source, e.g. 'form_field_mapping'
+   * or (Sprint 53) a Business Assessment rule identifier such as 'industry-keyword:church'. Free
+   * text, not an enum — a new transformation/rule must never require a schema/type change.
+   */
   transformation: string;
 
   recordedAt: string;
 
   /** The target entity's version, when the target is itself versioned (e.g. a RequirementsDraft artifact version). Absent for current-state targets (e.g. a Business Understanding Model section, which isn't versioned). */
   version?: number;
+
+  /** Sprint 53 — how confident the transformation is in its result, e.g. a Business Assessment rule that matched on a specific, unambiguous keyword vs. a generic fallback. Absent for transformations that aren't inherently uncertain (e.g. a lossless form-field copy). */
+  confidence?: 'low' | 'medium' | 'high';
 }
 
 export interface Recommendation {
@@ -131,14 +138,21 @@ export interface OpenQuestion {
   answer?: string;
 }
 
-/** Business Assessment section — populated by a later sprint's Business Assessment Engine. */
+/**
+ * Business Assessment section — Sprint 53. "What kind of business is this?", deterministically
+ * derived from the rest of the Business Understanding Model — never AI, never invented.
+ * Per-field confidence deliberately lives in the model's `traceability` array (one
+ * `TraceabilityReference` per assessed field, each with its own `confidence` and rule-id
+ * `transformation`), not duplicated here — this object holds only the resulting values.
+ * `industry` is a plain mirror of `businessIdentity.industry` (never independently
+ * re-derived), kept here purely for a reader's convenience so the whole assessment picture is
+ * in one place.
+ */
 export interface BusinessAssessmentState {
   classification?: string;
-  classificationConfidence?: 'low' | 'medium' | 'high';
   maturity?: string;
-  digitalMaturity?: string;
-  complexity?: string;
-  discoveryStrategy?: string;
+  projectType?: string;
+  industry?: string;
   notes?: string;
 }
 
