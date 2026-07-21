@@ -14,6 +14,7 @@ import {
 } from '~/lib/projects/projectKnowledgeEngine';
 import { blueprintEngine } from '~/lib/blueprints';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '~/components/ui/Collapsible';
+import { recordRequirementsFormSubmission } from '~/lib/projects/requirementsSessionOrchestrator';
 
 interface ProjectRequirementsDialogProps {
   project: Project | null;
@@ -202,7 +203,12 @@ export function ProjectRequirementsDialog({ project, open, onClose }: ProjectReq
       return;
     }
 
-    updateProjectKnowledge(project.id, formStateToKnowledge(form));
+    const knowledge = formStateToKnowledge(form);
+    updateProjectKnowledge(project.id, knowledge);
+
+    // Sprint 51 — fire-and-forget, best-effort; never blocks or affects this save/close action.
+    recordRequirementsFormSubmission(project.id, knowledge);
+
     toast.success('Requirements saved');
     onClose();
   };

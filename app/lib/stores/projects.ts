@@ -28,6 +28,7 @@ import { checkBuildersDbConnection } from '~/lib/builders-db/client';
 import type { RoleOutputGenerationType } from '~/lib/builders-db/buildersDbTypes';
 import { getCurrentSession } from '~/lib/auth/authClient';
 import { invalidateProjectHydration, setProjectHydrationState } from '~/lib/projects/hydration';
+import { createRequirementsSessionForNewProject } from '~/lib/projects/requirementsSessionOrchestrator';
 
 /**
  * Project data model — Sprint 1 (UI-only).
@@ -756,6 +757,13 @@ export function addProject(input: NewProjectInput): Project {
       actorId: actor?.id ?? null,
       actorDisplayName: actor?.displayName ?? null,
     });
+
+    /*
+     * Sprint 51 — sequenced after createProject() succeeds (same serialized mirrorQueue), since
+     * builders_requirements_sessions.project_id is a foreign key into builders_projects: firing
+     * this independently could race ahead of the project row existing yet.
+     */
+    createRequirementsSessionForNewProject(project.id);
   });
 
   return project;
