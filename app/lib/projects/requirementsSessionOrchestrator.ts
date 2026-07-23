@@ -67,6 +67,24 @@ function runFireAndForget(label: string, work: () => Promise<unknown>): void {
 }
 
 /**
+ * Sprint 54.1 — same best-effort contract as `runFireAndForget` (BuildersDB unavailable is a
+ * silent no-op, a mid-write failure is logged and swallowed, never thrown to the caller), but
+ * returns the settled promise instead of discarding it. Existing callers that don't await it
+ * keep today's fire-and-forget behavior unchanged; `ProjectRequirementsDialog.tsx` awaits it
+ * purely to know when it's safe to re-fetch the Discovery Intelligence it just wrote — never to
+ * block the dialog's own close/toast, which still happen synchronously beforehand.
+ */
+function runAwaitable(label: string, work: () => Promise<unknown>): Promise<void> {
+  if (!isBuildersDbAvailable()) {
+    return Promise.resolve();
+  }
+
+  return work()
+    .then(() => undefined)
+    .catch((error) => console.error(`[RequirementsSessionOrchestrator] ${label} failed:`, error));
+}
+
+/**
  * Creates the project's Requirements Session at project-creation time (see `addProject()` in
  * stores/projects.ts, its only caller). Every new guided-engineering project gets exactly one
  * 'form'-mode session from the moment it exists — the Requirements Form later just appends to
@@ -159,9 +177,15 @@ function buildTraceabilityForFormSubmission(
  * that same update and persists its result + evidence in the same write. None of this feeds
  * into or changes the existing RequirementsDraft generation, which continues reading
  * `project.projectKnowledge` exactly as it does today.
+ *
+ * Sprint 54.1 — returns a `Promise<void>` (never rejects — see `runAwaitable`) rather than
+ * `void`, so `ProjectRequirementsDialog.tsx` can await BuildersDB's write finishing before
+ * signaling `ProjectDashboard` to re-fetch Discovery Intelligence. This is purely an additive
+ * return-type change: every existing caller that ignores the return value keeps its identical
+ * fire-and-forget behavior.
  */
-export function recordRequirementsFormSubmission(projectId: string, knowledge: ProjectKnowledge): void {
-  runFireAndForget('recordRequirementsFormSubmission', async () => {
+export function recordRequirementsFormSubmission(projectId: string, knowledge: ProjectKnowledge): Promise<void> {
+  return runAwaitable('recordRequirementsFormSubmission', async () => {
     const session =
       (await getLatestRequirementsSession(projectId)) ?? (await createRequirementsSession(projectId, 'form'));
 

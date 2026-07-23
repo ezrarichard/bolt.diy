@@ -24,6 +24,8 @@ import { projectTaskEngine } from '~/lib/projects/taskEngine';
 import { executionEngine } from '~/lib/projects/executionEngine';
 import { reviewEngine } from '~/lib/projects/reviewEngine';
 import { checkBuildersDbConnection } from '~/lib/builders-db/client';
+import { useDiscoveryIntelligence } from '~/lib/hooks/useDiscoveryIntelligence';
+import { BusinessDiscoveryCard } from './BusinessDiscoveryCard';
 import {
   ARTIFACT_TYPES,
   getLatestArtifact,
@@ -450,6 +452,9 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<DashboardTabId>('overview');
 
+  /** Sprint 54.1 — bumped once `ProjectRequirementsDialog`'s save settles, re-triggering `useDiscoveryIntelligence`'s fetch below. Not persisted, not read anywhere else — purely a "fetch again" trigger. */
+  const [discoveryRefreshKey, setDiscoveryRefreshKey] = useState(0);
+
   const handleTabChange = (value: string) => {
     const tab = value as DashboardTabId;
     setActiveTab(tab);
@@ -526,6 +531,16 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
       cancelled = true;
     };
   }, [open]);
+
+  /*
+   * Sprint 54.1 — Discovery Intelligence (Requirements Session -> Business Understanding
+   * Model -> Business Assessment -> Discovery Decision), read via the same repository
+   * functions the write path (`requirementsSessionOrchestrator.ts`) already uses. Only
+   * fetches while the dashboard is actually open, mirroring `isBuildersDbConnected` above;
+   * `discoveryRefreshKey` is bumped by `ProjectRequirementsDialog`'s `onSaved` once a form
+   * save's BuildersDB write settles, re-triggering this fetch without a full reload.
+   */
+  const discoveryIntelligence = useDiscoveryIntelligence(open ? project?.id : undefined, discoveryRefreshKey);
 
   if (!project) {
     return null;
@@ -607,6 +622,10 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
    */
   const knowledge = getProjectKnowledge(project);
   const requirementsCaptured = isRequirementsCaptured(knowledge);
+
+  /** Sprint 54.1 — passed to `RequirementsDraftPanel` for display-only pipeline-gating copy; `undefined` for a legacy project (no session/model yet) or before the decision has been computed, in which case that panel behaves exactly as it did before this sprint. */
+  const discoveryDecisionState =
+    discoveryIntelligence.status === 'ready' ? discoveryIntelligence.model.decision.state : undefined;
 
   /** Sprint 38.5 — persisted resume state (see workspaceState.ts), hydrated from BuildersDB when this dashboard opened (see hydrateWorkspaceState above). `undefined` until hydration resolves or BuildersDB is unavailable — every reader below already treats that as "nothing generated yet". */
   const workspaceState = project.workspaceState;
@@ -827,6 +846,20 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                 </span>
                               </div>
 
+                              {/*
+                                Sprint 54.1 — Business Discovery. Separate from, and never merged
+                                with, the "Requirements Form Completion" percentage above (that's
+                                `projectKnowledgeEngine`'s legacy ProjectKnowledge completion; this
+                                is the Sprint 54 Discovery Decision Engine's own completeness
+                                score, computed from a different ten-dimension model). Shown for
+                                both captured and not-yet-captured requirements, since the two
+                                signals are independent — a form can be "captured" by the legacy
+                                definition while Discovery still reports missing dimensions.
+                              */}
+                              <div className="mb-5">
+                                <BusinessDiscoveryCard state={discoveryIntelligence} />
+                              </div>
+
                               {!requirementsCaptured ? (
                                 <div className="flex flex-col items-center justify-center text-center py-12 px-4 rounded-xl border border-dashed border-bolt-elements-borderColor/60">
                                   <span className="i-ph:clipboard-text-duotone h-9 w-9 text-bolt-elements-textTertiary mb-3" />
@@ -847,7 +880,10 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                     </button>
                                   </div>
                                   <div className="mt-4 w-full max-w-2xl mx-auto text-left">
-                                    <RequirementsDraftPanel project={project} />
+                                    <RequirementsDraftPanel
+                                      project={project}
+                                      discoveryDecisionState={discoveryDecisionState}
+                                    />
                                   </div>
                                 </div>
                               ) : (
@@ -885,7 +921,10 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                     </button>
                                   </div>
                                   <div className="mt-4 pt-4 border-t border-bolt-elements-borderColor/30">
-                                    <RequirementsDraftPanel project={project} />
+                                    <RequirementsDraftPanel
+                                      project={project}
+                                      discoveryDecisionState={discoveryDecisionState}
+                                    />
                                   </div>
                                 </>
                               )}
@@ -1447,6 +1486,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
         project={project}
         open={isRequirementsDialogOpen}
         onClose={() => setIsRequirementsDialogOpen(false)}
+        onSaved={() => setDiscoveryRefreshKey((key) => key + 1)}
       />
 
       <TaskDetailsDialog

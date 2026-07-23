@@ -447,4 +447,44 @@ describe('requirementsSessionOrchestrator', () => {
       await flush();
     });
   });
+
+  describe('recordRequirementsFormSubmission — Sprint 54.1 refresh signal', () => {
+    it('returns a promise that resolves after the BuildersDB write settles, for ProjectRequirementsDialog to await', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-1' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [] });
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+
+      const onSaved = vi.fn();
+      await recordRequirementsFormSubmission('proj-1', { industry: 'Church' }).then(onSaved);
+
+      expect(onSaved).toHaveBeenCalledTimes(1);
+      expect(updateBusinessUnderstandingModelMock).toHaveBeenCalled();
+    });
+
+    it('still resolves (never rejects) when the write fails, so the refresh signal always eventually fires', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-1' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [] });
+      updateBusinessUnderstandingModelMock.mockRejectedValue(new Error('network down'));
+
+      const onSaved = vi.fn();
+      await expect(
+        recordRequirementsFormSubmission('proj-1', { industry: 'Retail' }).then(onSaved),
+      ).resolves.toBeUndefined();
+
+      expect(onSaved).toHaveBeenCalledTimes(1);
+    });
+
+    it('resolves immediately when BuildersDB is unavailable, so the caller is never left waiting', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(false);
+
+      const onSaved = vi.fn();
+      await recordRequirementsFormSubmission('proj-1', {}).then(onSaved);
+
+      expect(onSaved).toHaveBeenCalledTimes(1);
+    });
+  });
 });

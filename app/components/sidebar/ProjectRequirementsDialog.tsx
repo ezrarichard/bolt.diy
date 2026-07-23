@@ -20,6 +20,14 @@ interface ProjectRequirementsDialogProps {
   project: Project | null;
   open: boolean;
   onClose: () => void;
+
+  /**
+   * Sprint 54.1 — called once `recordRequirementsFormSubmission`'s BuildersDB write settles
+   * (success or failure — see that function's own doc comment; it never rejects). Purely a
+   * "safe to re-fetch now" signal for `ProjectDashboard`'s Discovery Intelligence section;
+   * never awaited before this dialog's own close/toast, which still happen immediately.
+   */
+  onSaved?: () => void;
 }
 
 /*
@@ -154,7 +162,7 @@ function SectionCompletionBadge({ status, percent }: { status: SectionCompletion
   );
 }
 
-export function ProjectRequirementsDialog({ project, open, onClose }: ProjectRequirementsDialogProps) {
+export function ProjectRequirementsDialog({ project, open, onClose, onSaved }: ProjectRequirementsDialogProps) {
   const [form, setForm] = useState<FormState>(() => knowledgeToFormState(undefined));
   const [expandedSections, setExpandedSections] = useState<Record<KnowledgeSectionId, boolean>>(() =>
     loadSectionState(),
@@ -206,8 +214,13 @@ export function ProjectRequirementsDialog({ project, open, onClose }: ProjectReq
     const knowledge = formStateToKnowledge(form);
     updateProjectKnowledge(project.id, knowledge);
 
-    // Sprint 51 — fire-and-forget, best-effort; never blocks or affects this save/close action.
-    recordRequirementsFormSubmission(project.id, knowledge);
+    /*
+     * Sprint 51 — best-effort; never blocks or affects this save/close action, which both
+     * happen synchronously below regardless of how long (or whether) this settles. Sprint
+     * 54.1 — `onSaved` fires once it does, so `ProjectDashboard` knows it's safe to re-fetch
+     * the Discovery Intelligence this write just produced.
+     */
+    recordRequirementsFormSubmission(project.id, knowledge).then(() => onSaved?.());
 
     toast.success('Requirements saved');
     onClose();

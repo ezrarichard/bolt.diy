@@ -24,9 +24,21 @@ import { buildRoleContextBlock } from '~/lib/ai/context/buildersDbContextProvide
 import { getRoleGenerateOptions } from '~/lib/generation-profiles/generationProfileRepository';
 import { generateRoleWithRecovery } from '~/lib/projects/roleGenerationRecovery';
 import { useGenerateText } from '~/lib/hooks/useGenerateText';
+import type { DiscoveryState } from '~/lib/projects/requirementsSession';
 
 interface RequirementsDraftPanelProps {
   project: Project;
+
+  /**
+   * Sprint 54.1 — the Sprint 54 Discovery Decision Engine's latest state for this project, if
+   * one has been computed (`undefined` for a legacy project or one whose Requirements form
+   * hasn't been saved since Sprints 50-54 landed — this panel then behaves exactly as it did
+   * before this sprint, generation always allowed with no extra step). Display-only gating:
+   * READY changes nothing; NEEDS_MORE_INFORMATION adds a non-blocking recommendation; only
+   * INSUFFICIENT_INFORMATION requires an explicit acknowledgement before "Generate Draft" is
+   * clickable. No deeper pipeline logic (businessAnalystEngine, generation itself) is touched.
+   */
+  discoveryDecisionState?: DiscoveryState;
 }
 
 type Phase = 'idle' | 'confirm' | 'generating' | 'error';
@@ -59,10 +71,13 @@ const MAX_OUTPUT_TOKENS = 8192;
  * gathering/prompt building/parsing goes through `businessAnalystEngine`;
  * this component only orchestrates calling it and persisting the result.
  */
-export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps) {
+export function RequirementsDraftPanel({ project, discoveryDecisionState }: RequirementsDraftPanelProps) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [errorMessage, setErrorMessage] = useState('');
+  const [insufficientAcknowledged, setInsufficientAcknowledged] = useState(false);
   const { generate, isGenerating } = useGenerateText();
+
+  const requiresAcknowledgement = discoveryDecisionState === 'INSUFFICIENT_INFORMATION';
 
   const latest = getLatestArtifact(getProjectArtifacts(project), ARTIFACT_TYPE);
   const latestDraft = latest ? parseArtifactContent<RequirementsDraft>(latest.content) : undefined;
@@ -253,27 +268,55 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
           </div>
         </div>
       ) : phase === 'confirm' ? (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-bolt-elements-borderColor/60 p-3">
-          <span className="text-xs text-bolt-elements-textTertiary">
-            The AI Project Manager will draft the Project Definition from your current project context. Nothing is saved
-            until you save it.
-          </span>
-          <div className="flex gap-2 ml-auto shrink-0">
-            <button
-              type="button"
-              onClick={() => setPhase('idle')}
-              className="text-xs font-medium px-3 py-1.5 rounded-lg text-bolt-elements-textTertiary hover:text-bolt-elements-textPrimary hover:bg-bolt-elements-background-depth-2 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => runGeneration()}
-              className="text-xs font-medium px-3 py-1.5 rounded-lg bg-purple-500 text-white hover:bg-purple-600 transition-colors"
-            >
-              Generate Draft
-            </button>
+        <div className="rounded-lg border border-dashed border-bolt-elements-borderColor/60 p-3 space-y-2.5">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs text-bolt-elements-textTertiary">
+              The AI Project Manager will draft the Project Definition from your current project context. Nothing is
+              saved until you save it.
+            </span>
+            <div className="flex gap-2 ml-auto shrink-0">
+              <button
+                type="button"
+                onClick={() => setPhase('idle')}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg text-bolt-elements-textTertiary hover:text-bolt-elements-textPrimary hover:bg-bolt-elements-background-depth-2 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={requiresAcknowledgement && !insufficientAcknowledged}
+                onClick={() => runGeneration()}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg bg-purple-500 text-white hover:bg-purple-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Generate Draft
+              </button>
+            </div>
           </div>
+
+          {discoveryDecisionState === 'NEEDS_MORE_INFORMATION' && (
+            <div className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+              <span className="i-ph:warning-duotone w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                Discovery indicates more information is recommended before generating — see Business Discovery above for
+                missing/partial areas. You can still generate now if you prefer.
+              </span>
+            </div>
+          )}
+
+          {requiresAcknowledgement && (
+            <label className="flex items-start gap-2 text-xs text-red-600 dark:text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={insufficientAcknowledged}
+                onChange={(event) => setInsufficientAcknowledged(event.target.checked)}
+                className="mt-0.5 shrink-0"
+              />
+              <span>
+                Discovery indicates very little business information has been captured yet (Insufficient Information). I
+                understand the generated draft may be low quality and want to proceed anyway.
+              </span>
+            </label>
+          )}
         </div>
       ) : phase === 'generating' || isGenerating ? (
         <div className="flex items-center gap-2 text-xs text-bolt-elements-textTertiary px-1">
@@ -284,7 +327,10 @@ export function RequirementsDraftPanel({ project }: RequirementsDraftPanelProps)
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
-            onClick={() => setPhase('confirm')}
+            onClick={() => {
+              setInsufficientAcknowledged(false);
+              setPhase('confirm');
+            }}
             className="flex gap-2 items-center bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-500/20 rounded-lg px-4 py-2 transition-colors"
           >
             <span className="inline-block i-ph:sparkle h-4 w-4" />
