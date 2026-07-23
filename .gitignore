@@ -43,8 +43,15 @@ site
 # commit file ignore
 app/commit.json
 changelogUI.md
-docs/instructions/Roadmap.md
 .cursorrules
+
+# Ignore stray/generated markdown anywhere in the repo (changelogs, scratch notes, etc.),
+# but never the documentation knowledge base under docs/ — every doc there must be trackable.
 *.md
+!docs/**/*.md
+# ...except this specific legacy path, kept ignored to preserve the original rule's intent
+# (the file/folder doesn't exist in this codebase, so this is currently a no-op).
+docs/instructions/Roadmap.md
+
 .qodo
 .claude/

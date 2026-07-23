@@ -1,5 +1,10 @@
 # Sprint 50 — Requirements Discovery Durable Foundation
 
+**See also:** [06 — Requirements Discovery index](./00-index.md) ·
+[Sprint 55 — Interview Mode Architecture](./02-sprint-55-interview-mode-architecture.md)
+(the sprint this foundation's `'interview'` session mode and `FactConfidence`/`OpenQuestion`
+types were reserved for, per that document's own §0 grounding section)
+
 **Status: IMPLEMENTED (foundation only), pending manual Supabase migration execution.**
 Introduces durable BuildersDB storage for the Requirements Session, its append-only message
 history, and its current-state Business Understanding Model — the storage layer the frozen
