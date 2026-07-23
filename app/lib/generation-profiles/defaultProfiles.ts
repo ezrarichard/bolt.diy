@@ -12,7 +12,7 @@ import type { GenerationProfileWithRoles } from './generationProfileTypes';
  * `role_key` values match builders_ai_roles exactly (verified live against BuildersDB):
  * requirements-draft, product-owner-draft, architecture-draft, database-draft, uiux-draft,
  * backend-draft, frontend-draft, qa-draft, devops-draft, code-reviewer, repair-engineer,
- * build-validator.
+ * build-validator, discovery-agent.
  *
  * Sprint 46D — live end-to-end validation found `product-owner-draft` (Sprint 46B) was
  * missing from every tier here entirely. `getRoleGenerateOptions()`
@@ -23,6 +23,17 @@ import type { GenerationProfileWithRoles } from './generationProfileTypes';
  * key") the moment the Product Owner tried to generate. Fixed by giving it the same
  * model tier as `requirements-draft` in each profile (comparable planning complexity, and
  * the next role after it in the chain).
+ *
+ * Sprint 57.1 — the EXACT same failure mode recurred for `discovery-agent` (the Discovery AI
+ * Engine's fact extractor, `app/lib/projects/discoveryAiEngine/`, called from
+ * `useInterviewSession.ts`): with no cookie-selected model and no entry here,
+ * `getRoleGenerateOptions()` returned `{}`, so `useGenerateText` fell back to
+ * `DEFAULT_MODEL`/`DEFAULT_PROVIDER` (app/utils/constants.ts) — an Anthropic model paired
+ * with whatever provider happens to register first in `LLMManager` (not guaranteed to be
+ * Anthropic), which live-verification confirmed fails with the identical "Invalid or missing
+ * API key" 401. Fixed the same way: registered `discovery-agent` here with the same model
+ * tier as `requirements-draft` (Interview Mode's fact extraction is the same "read Business
+ * Understanding, produce structured output" complexity class as the Requirements Draft).
  */
 
 export const DEFAULT_GENERATION_PROFILE_ID = 'balanced';
@@ -48,6 +59,7 @@ export const DEFAULT_GENERATION_PROFILES: GenerationProfileWithRoles[] = [
       { roleKey: 'code-reviewer', modelKey: 'claude-haiku-4.5', priority: 10 },
       { roleKey: 'repair-engineer', modelKey: 'claude-sonnet-4.5', priority: 11 },
       { roleKey: 'build-validator', modelKey: 'claude-haiku-4.5', priority: 12 },
+      { roleKey: 'discovery-agent', modelKey: 'claude-haiku-4.5', priority: 13 },
     ],
   },
   {
@@ -70,6 +82,7 @@ export const DEFAULT_GENERATION_PROFILES: GenerationProfileWithRoles[] = [
       { roleKey: 'code-reviewer', modelKey: 'claude-sonnet-4.5', priority: 10 },
       { roleKey: 'repair-engineer', modelKey: 'claude-sonnet-4.6', priority: 11 },
       { roleKey: 'build-validator', modelKey: 'claude-haiku-4.5', priority: 12 },
+      { roleKey: 'discovery-agent', modelKey: 'claude-sonnet-4.5', priority: 13 },
     ],
   },
   {
@@ -92,6 +105,7 @@ export const DEFAULT_GENERATION_PROFILES: GenerationProfileWithRoles[] = [
       { roleKey: 'code-reviewer', modelKey: 'claude-sonnet-4.6', priority: 10 },
       { roleKey: 'repair-engineer', modelKey: 'claude-sonnet-4.6', priority: 11 },
       { roleKey: 'build-validator', modelKey: 'claude-sonnet-4.6', priority: 12 },
+      { roleKey: 'discovery-agent', modelKey: 'claude-sonnet-4.6', priority: 13 },
     ],
   },
 ];

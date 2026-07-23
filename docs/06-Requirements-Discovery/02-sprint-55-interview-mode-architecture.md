@@ -9,6 +9,97 @@ should be structured.
 [Sprint 55.1 — Interview Mode UX Specification](./03-sprint-55.1-interview-mode-ux-specification.md) ·
 [Builders Discovery Experience — Master Specification](./04-builders-discovery-experience-master-spec.md)
 
+> **Sprint 56 implementation status (added post-approval — this note only; the specification
+> below is unchanged):** the §16 roadmap's Sprint 56 scope ("Discovery Agent Skeleton & Session
+> Plumbing") is implemented, along with a simplified, deterministic version of Sprint 57's
+> Question Planner (§2) so the full turn loop is demoable end-to-end. Implemented:
+> `'interview'`-mode `RequirementsSession` creation/resume via the existing repositories
+> (`startOrResumeInterview` in `requirementsSessionOrchestrator.ts`), a `recordInterviewAnswer`
+> orchestrator function mirroring `recordRequirementsFormSubmission` (§6's per-turn update
+> sequence, verbatim), and `selectNextDimension`/`buildInterviewPatch` in the new
+> `app/lib/projects/discoveryAgent.ts` (named per §15's recommendation). `runBusinessAssessment`/
+> `runDiscoveryDecision` are reused unchanged, exactly as §0 requires. **Still exactly as
+> specified — not yet built:** §2's topic-locality override (point 4), §11's two AI prompts
+> (question phrasing and fact extraction are simple templates/literal mappings, not LLM calls —
+> `buildInterviewPatch`'s doc comment flags this explicitly), §5's rolling interview digest, and
+> §13's contradiction/short-answer handling beyond the basic "don't re-ask an already-asked
+> dimension" rule. See the Sprint 56 entry in [00 — index](./00-index.md) for the full file list.
+
+> **Sprint 57 implementation status (added post-approval — this note only; the specification
+> below is unchanged):** §11's fact-extraction prompt (Prompt B) is now a real LLM call — the
+> `buildInterviewPatch` mock this doc's own Sprint 56 note flagged has been replaced by the
+> **Discovery AI Engine** (`app/lib/projects/discoveryAiEngine/`), which implements the full
+> Context Builder → Fact Extractor → Fact Validator → Fact Normalizer → Confidence Scorer →
+> Contradiction Detector → Evidence Tracker → Patch Generator pipeline this sprint's brief
+> specifies, generalized beyond Interview Mode per §15 ("build Interview Mode as an agent with a
+> chat UI as its first surface"). `recordInterviewAnswer` in `requirementsSessionOrchestrator.ts`
+> now calls `runDiscoveryAiEngine` instead of containing any extraction logic itself — exactly
+> the "Interview should become just another producer" requirement. The LLM call is
+> dependency-injected (`GenerateTextFn`) and only ever returns structured candidate facts; it
+> never writes to BuildersDB, matching §11's Prompt B contract verbatim ("Only extract what the
+> user actually said — never infer beyond the text"). Confidence remains `'stated'` only, never
+> `'confirmed'`, exactly as §11 requires. Contradiction detection (§5/§8/§13) is now real, but is
+> a documented foundation-level heuristic (compares against the currently stored value, not yet
+> tiered by `FactConfidence` per stored field — see `contradictionDetector.ts`'s own header
+> comment) rather than the full `'confirmed'`-vs-`'inferred'`/`'stated'` distinction §5 describes.
+> **Still exactly as specified — not yet built:** §2's topic-locality override, §5's rolling
+> interview digest and full per-field confidence-tier tracking, §11 Prompt A (question phrasing is
+> still templated, not LLM-generated), §13's Clarification-question UI for surfacing a detected
+> contradiction to the user (contradictions are computed and excluded from the patch, but not yet
+> shown in the chat). Document/Website/Voice/Meeting/CRM Context Builders (§15) are typed
+> (`DiscoverySourceType`) but not implemented — only `buildInterviewDiscoveryContext` exists.
+
+> **Sprint 57.1 implementation status (real-provider verification & hardening — this note only;
+> the specification below is unchanged):** live-verified the Sprint 57 pipeline end-to-end
+> against a real, authenticated Builders session, a real BuildersDB project, and a real
+> Anthropic Claude call through the production `/api/generate-text` route — a full interview
+> (single-dimension answers, one multi-dimension answer extracting 3 facts from 1 turn, an
+> industry-synonym normalization, a full refresh/resume cycle) reached `READY` at 88%
+> completeness with every step confirmed against actual BuildersDB rows (see the Sprint 57.1
+> summary below the fold in this doc's implementation notes, or the session transcript retained
+> by the implementing agent).
+>
+> **Root cause found and fixed — NOT an authentication bug.** The 401 ("Invalid or missing API
+> key") observed during Sprint 57's own verification was traced precisely: `X-Builders-Auth`
+> (the fetch interceptor in `app/lib/auth/authClient.ts`) and `requireAuthenticatedUser`
+> (`app/lib/auth/requireUser.ts`) both worked correctly in every reproduction — a valid,
+> non-expired Supabase session was present, and a direct `/api/generate-text` call with an
+> explicit model/provider succeeded immediately. The actual cause: `useInterviewSession.ts`
+> never supplied `model`/`provider` to `useGenerateText`, so it fell back to
+> `DEFAULT_MODEL`/`DEFAULT_PROVIDER` (`app/utils/constants.ts`) — an Anthropic model id paired
+> with whichever provider happens to register first in `LLMManager` (AmazonBedrock in this
+> environment, not Anthropic), which has no configured credentials for that model. This is the
+> exact same failure class Sprint 46D already hit and fixed for `product-owner-draft` (see
+> `defaultProfiles.ts`'s own header comment) — Interview Mode simply hadn't adopted the fix yet.
+> **Fix:** registered a `discovery-agent` role in every `DEFAULT_GENERATION_PROFILES` tier
+> (`app/lib/generation-profiles/defaultProfiles.ts`, mirroring `requirements-draft`'s model
+> tier), and `useInterviewSession.ts` now calls `getRoleGenerateOptions(project,
+> 'discovery-agent')` — the same Generation Profile model-resolution path every other AI role
+> call site already uses. No new authentication mechanism was introduced; the existing one was
+> simply given a reliable model/provider to use.
+>
+> **Task 8 hardening — extraction failures no longer silently advance the conversation.**
+> `factExtractor.ts`'s `extractFacts` now returns `{ candidates, error? }` instead of a bare
+> array, distinguishing a genuine failure (network/auth/provider error, or an unparseable
+> response) from a legitimate empty result (`{"facts": []}`, e.g. a short/irrelevant answer —
+> still not an error). `runDiscoveryAiEngine` surfaces this as `DiscoveryAiEngineResult.
+> extractionError`; `recordInterviewAnswer` skips the assessment/decision/patch write entirely
+> on a genuine failure (Task 7: "no partial factual patch when extraction fails"), posts the
+> exact UX-spec-approved copy ("I couldn't process that — mind trying again?", §3's Error
+> States table) tagged `metadata: { kind: 'extraction_error', dimension }`, and returns the SAME
+> `pendingDimension` so the UI keeps that question active. `InterviewChatDialog.tsx` renders
+> this as a distinct red-bordered bubble with a Retry chip that resends the exact same answer
+> text — live-verified end-to-end against real BuildersDB (a simulated failure left
+> `completenessScore`/`functionalRequirements`/the model's own `updated_at` timestamp completely
+> unchanged; an immediate real retry then applied the fact and advanced normally).
+>
+> **Verified:** 657/659 automated tests passing (2 skipped — a pre-existing, opt-in
+> `RUN_LIVE_PIPELINE_CHECK`-gated live-provider harness unrelated to this sprint, not a
+> regression), typecheck/lint/build clean. **Known limitation carried forward:** the industry
+> synonym normalizer (`factNormalizer.ts`) only matches an exact full value ("shop"), not a
+> substring within a longer phrase ("Plumbing shop") — live-verified as a real, minor gap, left
+> as-is per Part 5's explicit "do not implement every feature completely" scope.
+
 ---
 
 ## 0. Grounding: What Already Exists (and What This Design Must Reuse)

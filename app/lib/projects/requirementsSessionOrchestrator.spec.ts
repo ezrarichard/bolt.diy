@@ -4,16 +4,24 @@ const {
   isBuildersDbAvailableMock,
   createRequirementsSessionMock,
   getLatestRequirementsSessionMock,
+  getRequirementsSessionMock,
   updateRequirementsSessionMock,
+  updateRequirementsSessionStatusMock,
   appendRequirementsSessionMessageMock,
+  listRequirementsSessionMessagesMock,
+  getBusinessUnderstandingModelMock,
   initializeBusinessUnderstandingModelMock,
   updateBusinessUnderstandingModelMock,
 } = vi.hoisted(() => ({
   isBuildersDbAvailableMock: vi.fn(),
   createRequirementsSessionMock: vi.fn(),
   getLatestRequirementsSessionMock: vi.fn(),
+  getRequirementsSessionMock: vi.fn(),
   updateRequirementsSessionMock: vi.fn(),
+  updateRequirementsSessionStatusMock: vi.fn(),
   appendRequirementsSessionMessageMock: vi.fn(),
+  listRequirementsSessionMessagesMock: vi.fn(),
+  getBusinessUnderstandingModelMock: vi.fn(),
   initializeBusinessUnderstandingModelMock: vi.fn(),
   updateBusinessUnderstandingModelMock: vi.fn(),
 }));
@@ -25,21 +33,56 @@ vi.mock('~/lib/builders-db/repositories/buildersDbRepository', () => ({
 vi.mock('~/lib/builders-db/repositories/requirementsSessionRepository', () => ({
   createRequirementsSession: createRequirementsSessionMock,
   getLatestRequirementsSession: getLatestRequirementsSessionMock,
+  getRequirementsSession: getRequirementsSessionMock,
   updateRequirementsSession: updateRequirementsSessionMock,
+  updateRequirementsSessionStatus: updateRequirementsSessionStatusMock,
 }));
 
 vi.mock('~/lib/builders-db/repositories/requirementsSessionMessageRepository', () => ({
   appendRequirementsSessionMessage: appendRequirementsSessionMessageMock,
+  listRequirementsSessionMessages: listRequirementsSessionMessagesMock,
 }));
 
 vi.mock('~/lib/builders-db/repositories/businessUnderstandingRepository', () => ({
+  getBusinessUnderstandingModel: getBusinessUnderstandingModelMock,
   initializeBusinessUnderstandingModel: initializeBusinessUnderstandingModelMock,
   updateBusinessUnderstandingModel: updateBusinessUnderstandingModelMock,
 }));
 
-const { createRequirementsSessionForNewProject, recordRequirementsFormSubmission } = await import(
-  './requirementsSessionOrchestrator'
-);
+const {
+  createRequirementsSessionForNewProject,
+  recordRequirementsFormSubmission,
+  startOrResumeInterview,
+  recordInterviewAnswer,
+} = await import('./requirementsSessionOrchestrator');
+
+function emptyModel(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'model-1',
+    sessionId: 'session-1',
+    schemaVersion: 1,
+    assessment: {},
+    decision: {},
+    businessIdentity: {},
+    businessGoals: [],
+    processes: [],
+    targetUsers: [],
+    painPoints: [],
+    businessConstraints: [],
+    currentSystems: [],
+    functionalRequirements: [],
+    nonFunctionalRequirements: [],
+    recommendations: [],
+    assumptions: [],
+    risks: [],
+    openQuestions: [],
+    traceability: [],
+    completeness: { categories: {}, overallReady: false },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
 
 /** Lets pending microtasks (the fire-and-forget promise chains) flush before assertions run. */
 async function flush() {
@@ -52,8 +95,12 @@ describe('requirementsSessionOrchestrator', () => {
     isBuildersDbAvailableMock.mockReset();
     createRequirementsSessionMock.mockReset();
     getLatestRequirementsSessionMock.mockReset();
+    getRequirementsSessionMock.mockReset();
     updateRequirementsSessionMock.mockReset().mockResolvedValue(true);
+    updateRequirementsSessionStatusMock.mockReset().mockResolvedValue(true);
     appendRequirementsSessionMessageMock.mockReset();
+    listRequirementsSessionMessagesMock.mockReset().mockResolvedValue([]);
+    getBusinessUnderstandingModelMock.mockReset();
     initializeBusinessUnderstandingModelMock.mockReset();
     updateBusinessUnderstandingModelMock.mockReset();
   });
@@ -485,6 +532,472 @@ describe('requirementsSessionOrchestrator', () => {
       await recordRequirementsFormSubmission('proj-1', {}).then(onSaved);
 
       expect(onSaved).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('startOrResumeInterview — Sprint 56 Interview Mode Foundation', () => {
+    it('reuses an existing session rather than creating a new one', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      listRequirementsSessionMessagesMock.mockResolvedValue([{ id: 'm1', role: 'assistant', metadata: {} }]);
+
+      const result = await startOrResumeInterview('proj-1', 'Plumber Coimbatore Website');
+
+      expect(createRequirementsSessionMock).not.toHaveBeenCalled();
+      expect(result?.session.id).toBe('session-1');
+    });
+
+    it("creates an 'interview'-mode session for a project with none yet", async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue(null);
+      createRequirementsSessionMock.mockResolvedValue({ id: 'session-new', status: 'created' });
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-new', status: 'active' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'm1' });
+      listRequirementsSessionMessagesMock.mockResolvedValue([]);
+
+      await startOrResumeInterview('proj-1', undefined);
+
+      expect(createRequirementsSessionMock).toHaveBeenCalledWith('proj-1', 'interview');
+    });
+
+    it('marks a brand-new session active and posts a greeting plus the first question', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'created' });
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'm1' });
+      listRequirementsSessionMessagesMock
+        .mockResolvedValueOnce([]) // empty transcript check
+        .mockResolvedValueOnce([
+          { id: 'm1', role: 'assistant', metadata: { kind: 'greeting' } },
+          { id: 'm2', role: 'assistant', metadata: { dimension: 'businessVision' } },
+        ]);
+
+      const result = await startOrResumeInterview('proj-1', 'My Project');
+
+      expect(updateRequirementsSessionStatusMock).toHaveBeenCalledWith('session-1', 'active');
+      expect(appendRequirementsSessionMessageMock).toHaveBeenCalledWith(
+        'session-1',
+        'proj-1',
+        expect.objectContaining({ role: 'assistant', metadata: { kind: 'greeting' } }),
+      );
+      expect(appendRequirementsSessionMessageMock).toHaveBeenCalledWith(
+        'session-1',
+        'proj-1',
+        expect.objectContaining({ role: 'assistant', metadata: { dimension: 'businessVision' } }),
+      );
+      expect(result?.pendingDimension).toBe('businessVision');
+    });
+
+    it('does not append any new messages for a session that already has a pending question', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      listRequirementsSessionMessagesMock.mockResolvedValue([
+        { id: 'm1', role: 'assistant', metadata: { kind: 'greeting' } },
+        { id: 'm2', role: 'assistant', metadata: { dimension: 'targetUsers' } },
+      ]);
+
+      const result = await startOrResumeInterview('proj-1', undefined);
+
+      expect(appendRequirementsSessionMessageMock).not.toHaveBeenCalled();
+      expect(result?.pendingDimension).toBe('targetUsers');
+    });
+
+    it('posts a first question (without a greeting) for a session whose only history is a prior Form submission', async () => {
+      /*
+       * Regression test — startOrResumeInterview reuses getLatestRequirementsSession regardless
+       * of mode, so a project that used the Requirements Form first hands this function a
+       * non-empty transcript whose last message is a 'form_submission', not an interview turn.
+       * The old `messages.length === 0` bootstrap check skipped posting any question at all in
+       * this case, leaving `pendingDimension` incorrectly null (read by the UI as "already
+       * READY") the very first time Interview Mode was opened on such a project.
+       */
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'm2' });
+      listRequirementsSessionMessagesMock
+        .mockResolvedValueOnce([{ id: 'm1', role: 'user', messageType: 'form_submission', metadata: {} }])
+        .mockResolvedValueOnce([
+          { id: 'm1', role: 'user', messageType: 'form_submission', metadata: {} },
+          { id: 'm2', role: 'assistant', metadata: { dimension: 'businessVision' } },
+        ]);
+
+      const result = await startOrResumeInterview('proj-1', 'Plumber Coimbatore Website');
+
+      expect(appendRequirementsSessionMessageMock).not.toHaveBeenCalledWith(
+        'session-1',
+        'proj-1',
+        expect.objectContaining({ metadata: { kind: 'greeting' } }),
+      );
+      expect(appendRequirementsSessionMessageMock).toHaveBeenCalledWith(
+        'session-1',
+        'proj-1',
+        expect.objectContaining({ role: 'assistant', metadata: { dimension: 'businessVision' } }),
+      );
+      expect(result?.pendingDimension).toBe('businessVision');
+    });
+
+    it('resolves to null when BuildersDB is unavailable', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(false);
+
+      const result = await startOrResumeInterview('proj-1', undefined);
+
+      expect(result).toBeNull();
+      expect(getLatestRequirementsSessionMock).not.toHaveBeenCalled();
+    });
+
+    it('never throws and resolves to null when the underlying call rejects', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockRejectedValue(new Error('network down'));
+
+      await expect(startOrResumeInterview('proj-1', undefined)).resolves.toBeNull();
+    });
+  });
+
+  describe('recordInterviewAnswer — Sprint 56 Interview Mode Foundation, Sprint 57 Discovery AI Engine', () => {
+    /**
+     * Sprint 57 — `recordInterviewAnswer` now runs the answer through `runDiscoveryAiEngine`
+     * (real extractor/validator/normalizer/scorer/detector/tracker/generator, only the LLM call
+     * itself faked) instead of Sprint 56's deterministic `buildInterviewPatch` mock. Every test
+     * below injects a fake `generateText` returning a controlled JSON facts response — the same
+     * DI seam `discoveryAiEngine/factExtractor.spec.ts` establishes — rather than asserting on
+     * the old mock's literal per-dimension field-write behavior.
+     */
+    function fakeGenerateText(text: string) {
+      return vi.fn().mockResolvedValue({ ok: true, text });
+    }
+
+    function factsResponse(dimension: string, value: string): string {
+      return JSON.stringify({ facts: [{ dimension, value }] });
+    }
+
+    it('appends the answer as a durable user message tagged with its dimension', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-answer' });
+      getBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+      listRequirementsSessionMessagesMock.mockResolvedValue([]);
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+
+      const generateText = fakeGenerateText(factsResponse('targetUsers', 'Local shop owners in Coimbatore'));
+
+      await recordInterviewAnswer('proj-1', 'session-1', 'targetUsers', 'Local shop owners in Coimbatore', {
+        generateText,
+      });
+
+      expect(appendRequirementsSessionMessageMock).toHaveBeenCalledWith(
+        'session-1',
+        'proj-1',
+        expect.objectContaining({
+          role: 'user',
+          content: 'Local shop owners in Coimbatore',
+          metadata: { dimension: 'targetUsers' },
+        }),
+      );
+    });
+
+    it('merges the Discovery AI Engine patch with real assessment/decision output in one update call', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-answer' });
+      getBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+      listRequirementsSessionMessagesMock.mockResolvedValue([]);
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+
+      const generateText = fakeGenerateText(factsResponse('businessVision', 'A boutique clothing retailer'));
+
+      await recordInterviewAnswer('proj-1', 'session-1', 'businessVision', 'A boutique clothing retailer', {
+        generateText,
+      });
+
+      const [, patch] = updateBusinessUnderstandingModelMock.mock.calls[0];
+      expect(patch.businessIdentity.vision).toBe('A boutique clothing retailer');
+      expect(patch.decision.state).toEqual(expect.any(String));
+      expect(patch.assessment.classification).toEqual(expect.any(String));
+      expect(patch.traceability).toContainEqual(
+        expect.objectContaining({
+          source: { type: 'session_message', id: 'msg-answer' },
+          transformation: 'interview_fact_extraction',
+        }),
+      );
+    });
+
+    it('extracts and applies facts across multiple dimensions from one multi-topic answer', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-answer' });
+      getBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+      listRequirementsSessionMessagesMock.mockResolvedValue([]);
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+
+      const generateText = fakeGenerateText(
+        JSON.stringify({
+          facts: [
+            { dimension: 'coreFeatures', value: 'Online booking' },
+            { dimension: 'integrations', value: 'WhatsApp notifications' },
+          ],
+        }),
+      );
+
+      await recordInterviewAnswer(
+        'proj-1',
+        'session-1',
+        'coreFeatures',
+        'Online booking, and also WhatsApp notifications',
+        { generateText },
+      );
+
+      const [, patch] = updateBusinessUnderstandingModelMock.mock.calls[0];
+      expect(patch.functionalRequirements).toEqual(['Online booking']);
+      expect(patch.currentSystems).toEqual(['WhatsApp notifications']);
+    });
+
+    it('excludes a contradicting fact from the persisted patch', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-answer' });
+      getBusinessUnderstandingModelMock.mockResolvedValue(emptyModel({ businessIdentity: { industry: 'Hospital' } }));
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+      listRequirementsSessionMessagesMock.mockResolvedValue([]);
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+
+      const generateText = fakeGenerateText(factsResponse('industry', 'Retail'));
+
+      await recordInterviewAnswer('proj-1', 'session-1', 'industry', 'We sell clothes', { generateText });
+
+      const [, patch] = updateBusinessUnderstandingModelMock.mock.calls[0];
+      expect(patch.businessIdentity.industry).toBe('Hospital');
+    });
+
+    it('advances to a different, not-yet-asked dimension for the next question', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-answer' });
+      getBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+      listRequirementsSessionMessagesMock.mockResolvedValue([
+        { id: 'm1', role: 'assistant', metadata: { dimension: 'businessVision' } },
+        { id: 'm2', role: 'user', metadata: { dimension: 'businessVision' } },
+      ]);
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+
+      const generateText = fakeGenerateText(factsResponse('businessVision', 'A retail storefront'));
+
+      const result = await recordInterviewAnswer('proj-1', 'session-1', 'businessVision', 'A retail storefront', {
+        generateText,
+      });
+
+      expect(result?.pendingDimension).not.toBe('businessVision');
+      expect(appendRequirementsSessionMessageMock).toHaveBeenLastCalledWith(
+        'session-1',
+        'proj-1',
+        expect.objectContaining({ role: 'assistant', metadata: { dimension: result?.pendingDimension } }),
+      );
+    });
+
+    it('posts the READY completion message once nothing more is missing', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-answer' });
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+      listRequirementsSessionMessagesMock.mockResolvedValue([]);
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+
+      const wellDescribedModel = emptyModel({
+        businessIdentity: {
+          industry: 'Retail',
+          vision: 'A patient portal for scheduling appointments across a multi-location retail clinic network',
+          businessModel: 'Subscription',
+          formSnapshot: { technicalPreferences: 'Prefer React and Postgres', paymentNeeds: ['Stripe'] },
+        },
+        targetUsers: ['Front-desk staff, dentists, and patients booking appointments online'],
+        functionalRequirements: ['Online booking', 'Patient records'],
+        currentSystems: ['Existing EHR system', 'SMS reminders'],
+        businessConstraints: ['HIPAA compliance', 'Card payments via Stripe'],
+      });
+      getBusinessUnderstandingModelMock.mockResolvedValue(wellDescribedModel);
+
+      const generateText = fakeGenerateText(factsResponse('technicalPreferences', 'Prefer React and Postgres'));
+
+      const result = await recordInterviewAnswer(
+        'proj-1',
+        'session-1',
+        'technicalPreferences',
+        'Prefer React and Postgres',
+        { generateText },
+      );
+
+      expect(result?.pendingDimension).toBeNull();
+      expect(appendRequirementsSessionMessageMock).toHaveBeenLastCalledWith(
+        'session-1',
+        'proj-1',
+        expect.objectContaining({ role: 'assistant', metadata: { kind: 'completion' } }),
+      );
+    });
+
+    it('resolves to null when BuildersDB is unavailable', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(false);
+
+      const result = await recordInterviewAnswer('proj-1', 'session-1', 'targetUsers', 'anyone', {
+        generateText: fakeGenerateText('{"facts": []}'),
+      });
+
+      expect(result).toBeNull();
+      expect(appendRequirementsSessionMessageMock).not.toHaveBeenCalled();
+    });
+
+    it('never throws and resolves to null when the underlying call rejects', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockRejectedValue(new Error('network down'));
+
+      await expect(
+        recordInterviewAnswer('proj-1', 'session-1', 'targetUsers', 'anyone', {
+          generateText: fakeGenerateText('{"facts": []}'),
+        }),
+      ).resolves.toBeNull();
+    });
+
+    it('never throws when the LLM call itself fails — makes no progress rather than crashing the turn', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-answer' });
+      getBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+      listRequirementsSessionMessagesMock.mockResolvedValue([]);
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+
+      const generateText = vi.fn().mockResolvedValue({ ok: false, error: 'network down' });
+
+      const result = await recordInterviewAnswer('proj-1', 'session-1', 'targetUsers', 'Shop owners', {
+        generateText,
+      });
+
+      expect(result).not.toBeNull();
+      expect(updateBusinessUnderstandingModelMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('recordInterviewAnswer — Sprint 57.1 extraction-failure handling (Task 8)', () => {
+    it('posts a distinct, retryable error message instead of the next question when the LLM call fails', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-answer' });
+      getBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      listRequirementsSessionMessagesMock.mockResolvedValue([]);
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+
+      const generateText = vi.fn().mockResolvedValue({ ok: false, error: 'Invalid or missing API key' });
+
+      await recordInterviewAnswer('proj-1', 'session-1', 'targetUsers', 'Shop owners', { generateText });
+
+      expect(appendRequirementsSessionMessageMock).toHaveBeenLastCalledWith(
+        'session-1',
+        'proj-1',
+        expect.objectContaining({
+          role: 'assistant',
+          metadata: { kind: 'extraction_error', dimension: 'targetUsers' },
+        }),
+      );
+    });
+
+    it('does not write assessment/decision/patch or advance the question when extraction fails', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-answer' });
+      getBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      listRequirementsSessionMessagesMock.mockResolvedValue([]);
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+
+      const generateText = vi.fn().mockResolvedValue({ ok: false, error: 'network down' });
+
+      await recordInterviewAnswer('proj-1', 'session-1', 'targetUsers', 'Shop owners', { generateText });
+
+      expect(updateBusinessUnderstandingModelMock).not.toHaveBeenCalled();
+      expect(updateRequirementsSessionMock).not.toHaveBeenCalled();
+    });
+
+    it('returns the SAME pendingDimension as before, so the UI keeps the failed question active for retry', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-answer' });
+      getBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      listRequirementsSessionMessagesMock.mockResolvedValue([]);
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+
+      const generateText = vi.fn().mockResolvedValue({ ok: false, error: 'network down' });
+
+      const result = await recordInterviewAnswer('proj-1', 'session-1', 'coreFeatures', 'Online booking', {
+        generateText,
+      });
+
+      expect(result?.pendingDimension).toBe('coreFeatures');
+    });
+
+    it('still persists the user answer as a durable message even when extraction fails', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-answer' });
+      getBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      listRequirementsSessionMessagesMock.mockResolvedValue([]);
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+
+      const generateText = vi.fn().mockResolvedValue({ ok: false, error: 'network down' });
+
+      await recordInterviewAnswer('proj-1', 'session-1', 'targetUsers', 'Shop owners', { generateText });
+
+      expect(appendRequirementsSessionMessageMock).toHaveBeenCalledWith(
+        'session-1',
+        'proj-1',
+        expect.objectContaining({ role: 'user', content: 'Shop owners', metadata: { dimension: 'targetUsers' } }),
+      );
+    });
+
+    it('does not append an extraction-error message (or skip the patch) for a legitimate empty-facts result', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-answer' });
+      getBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+      listRequirementsSessionMessagesMock.mockResolvedValue([]);
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+
+      const generateText = vi.fn().mockResolvedValue({ ok: true, text: '{"facts": []}' });
+
+      await recordInterviewAnswer('proj-1', 'session-1', 'targetUsers', 'idk', { generateText });
+
+      expect(updateBusinessUnderstandingModelMock).toHaveBeenCalled();
+      expect(appendRequirementsSessionMessageMock).not.toHaveBeenCalledWith(
+        'session-1',
+        'proj-1',
+        expect.objectContaining({ metadata: expect.objectContaining({ kind: 'extraction_error' }) }),
+      );
+    });
+
+    it('retrying with the same answer after a failure succeeds and applies the patch normally', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-answer' });
+      getBusinessUnderstandingModelMock.mockResolvedValue(emptyModel());
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+      listRequirementsSessionMessagesMock.mockResolvedValue([]);
+      getRequirementsSessionMock.mockResolvedValue({ id: 'session-1', status: 'active' });
+
+      const failThenSucceed = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: false, error: 'network down' })
+        .mockResolvedValueOnce({ ok: true, text: '{"facts": [{"dimension": "targetUsers", "value": "Shop owners"}]}' });
+
+      const first = await recordInterviewAnswer('proj-1', 'session-1', 'targetUsers', 'Shop owners', {
+        generateText: failThenSucceed,
+      });
+      expect(first?.pendingDimension).toBe('targetUsers');
+      expect(updateBusinessUnderstandingModelMock).not.toHaveBeenCalled();
+
+      const retry = await recordInterviewAnswer('proj-1', 'session-1', 'targetUsers', 'Shop owners', {
+        generateText: failThenSucceed,
+      });
+      expect(updateBusinessUnderstandingModelMock).toHaveBeenCalledTimes(1);
+
+      const [, patch] = updateBusinessUnderstandingModelMock.mock.calls[0];
+      expect(patch.targetUsers).toEqual(['Shop owners']);
+      expect(retry).not.toBeNull();
     });
   });
 });

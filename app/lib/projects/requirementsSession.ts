@@ -73,7 +73,23 @@ export type FactConfidence = 'inferred' | 'stated' | 'confirmed';
  * `id` on each entity is whatever that entity is already keyed by: a session message's row
  * id, or a `BusinessUnderstandingModel` section name (e.g. 'targetUsers', 'businessGoals').
  */
-export type ProvenanceEntityType = 'session_message' | 'business_understanding_section' | 'requirements_draft_section';
+/**
+ * Sprint 57 — Discovery AI Engine. Extended (additively, no migration — this is a plain
+ * string-backed union, never a DB CHECK constraint, per Sprint 52's own design note) with the
+ * source kinds a future Discovery Input Adapter produces, per the Sprint 55 architecture doc
+ * §15/Builders Discovery Experience master spec §6: a document paragraph, a crawled website
+ * section, and a transcribed voice/meeting turn are all just different evidence sources
+ * pointing at the same `business_understanding_section` targets `session_message` already
+ * does for conversational sources (Interview, and — once built — Voice/Meeting, which reuse
+ * the Chat Adapter's turn-by-turn shape and so also produce `session_message` evidence; only
+ * genuinely non-conversational adapters need their own source kind here).
+ */
+export type ProvenanceEntityType =
+  | 'session_message'
+  | 'business_understanding_section'
+  | 'requirements_draft_section'
+  | 'document_paragraph'
+  | 'website_section';
 
 export interface ProvenanceEntityRef {
   type: ProvenanceEntityType;

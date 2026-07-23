@@ -28,6 +28,9 @@ interface ProjectRequirementsDialogProps {
    * never awaited before this dialog's own close/toast, which still happen immediately.
    */
   onSaved?: () => void;
+
+  /** Sprint 56 — Interview Mode Foundation. Optional so this dialog still works standalone (e.g. in tests) without Interview Mode wired up. */
+  onSwitchToInterview?: () => void;
 }
 
 /*
@@ -162,7 +165,13 @@ function SectionCompletionBadge({ status, percent }: { status: SectionCompletion
   );
 }
 
-export function ProjectRequirementsDialog({ project, open, onClose, onSaved }: ProjectRequirementsDialogProps) {
+export function ProjectRequirementsDialog({
+  project,
+  open,
+  onClose,
+  onSaved,
+  onSwitchToInterview,
+}: ProjectRequirementsDialogProps) {
   const [form, setForm] = useState<FormState>(() => knowledgeToFormState(undefined));
   const [expandedSections, setExpandedSections] = useState<Record<KnowledgeSectionId, boolean>>(() =>
     loadSectionState(),
@@ -417,20 +426,38 @@ export function ProjectRequirementsDialog({ project, open, onClose, onSaved }: P
               </div>
 
               {/* Footer */}
-              <div className="flex justify-end gap-3 px-8 py-4 border-t border-bolt-elements-borderColor/60 bg-bolt-elements-background-depth-2/40">
-                <button
-                  onClick={handleClose}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors bg-transparent text-bolt-elements-textSecondary hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-bolt-elements-textPrimary"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSave}
-                  disabled={!project}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors bg-purple-500 text-white hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Save Requirements
-                </button>
+              <div className="flex items-center justify-between gap-3 px-8 py-4 border-t border-bolt-elements-borderColor/60 bg-bolt-elements-background-depth-2/40">
+                {/* Sprint 56 — Interview Mode escape hatch, symmetric to InterviewChatDialog's "Switch to Form" (UX spec §10: "never a trap"). */}
+                {onSwitchToInterview ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSwitchToInterview();
+                      onClose();
+                    }}
+                    className="flex gap-1.5 items-center text-xs text-bolt-elements-textTertiary hover:text-purple-500 transition-colors"
+                  >
+                    <span className="i-ph:chat-circle-dots h-4 w-4" />
+                    Talk it through instead
+                  </button>
+                ) : (
+                  <span />
+                )}
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleClose}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors bg-transparent text-bolt-elements-textSecondary hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-bolt-elements-textPrimary"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    disabled={!project}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors bg-purple-500 text-white hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Save Requirements
+                  </button>
+                </div>
               </div>
             </div>
           </RadixDialog.Content>
