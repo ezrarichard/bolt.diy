@@ -378,4 +378,73 @@ describe('requirementsSessionOrchestrator', () => {
       await flush();
     });
   });
+
+  describe('recordRequirementsFormSubmission — Sprint 54 Discovery Decision', () => {
+    it('persists a decision derived from the same patch, in the same update call', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-1' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [] });
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+
+      recordRequirementsFormSubmission('proj-1', {});
+      await flush();
+
+      const [, patch] = updateBusinessUnderstandingModelMock.mock.calls[0];
+      expect(patch.decision.state).toBe('INSUFFICIENT_INFORMATION');
+      expect(patch.decision.completenessScore).toBe(0);
+      expect(patch.decision.readyForRequirementsDraft).toBe(false);
+    });
+
+    it('appends decision evidence to the same traceability array as the assessment/form-mapping entries', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-1' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [] });
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+
+      recordRequirementsFormSubmission('proj-1', { industry: 'Church', targetUsers: 'Parishioners' });
+      await flush();
+
+      const [, patch] = updateBusinessUnderstandingModelMock.mock.calls[0];
+      const targets = patch.traceability.map((t: { target: { id: string } }) => t.target.id);
+
+      expect(targets).toContain('targetUsers'); // Sprint 52 form-mapping entry
+      expect(targets).toContain('assessment.classification'); // Sprint 53 assessment entry
+      expect(targets).toContain('decision.state'); // Sprint 54 decision entry
+      expect(targets).toContain('decision.completenessScore');
+      expect(targets).toContain('decision.missingAreas');
+      expect(targets).toContain('decision.partialAreas');
+    });
+
+    it('does not change what is persisted on RequirementsSession — decision lives only on the model', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-1' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [] });
+      updateBusinessUnderstandingModelMock.mockResolvedValue(true);
+
+      recordRequirementsFormSubmission('proj-1', { industry: 'Church' });
+      await flush();
+
+      expect(updateRequirementsSessionMock).toHaveBeenCalledWith(
+        'session-1',
+        expect.objectContaining({ assessmentConfidence: expect.any(String) }),
+      );
+
+      const sessionPatch = updateRequirementsSessionMock.mock.calls[0][1];
+      expect(sessionPatch).not.toHaveProperty('decision');
+    });
+
+    it('never throws even if the decision write fails', async () => {
+      isBuildersDbAvailableMock.mockReturnValue(true);
+      getLatestRequirementsSessionMock.mockResolvedValue({ id: 'session-1' });
+      appendRequirementsSessionMessageMock.mockResolvedValue({ id: 'msg-1' });
+      initializeBusinessUnderstandingModelMock.mockResolvedValue({ id: 'model-1', traceability: [] });
+      updateBusinessUnderstandingModelMock.mockRejectedValue(new Error('network down'));
+
+      expect(() => recordRequirementsFormSubmission('proj-1', { industry: 'Retail' })).not.toThrow();
+      await flush();
+    });
+  });
 });

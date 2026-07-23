@@ -10,6 +10,7 @@ import {
   updateBusinessUnderstandingModel,
 } from '~/lib/builders-db/repositories/businessUnderstandingRepository';
 import { runBusinessAssessment } from '~/lib/projects/businessAssessmentEngine';
+import { runDiscoveryDecision } from '~/lib/projects/discoveryDecisionEngine';
 import type { BusinessUnderstandingModelPatch } from '~/lib/builders-db/requirementsSessionDbTypes';
 import type { ProjectKnowledge } from '~/lib/projects/knowledge';
 import type { TraceabilityReference } from '~/lib/projects/requirementsSession';
@@ -46,6 +47,15 @@ import type { TraceabilityReference } from '~/lib/projects/requirementsSession';
  * Understanding Model — no separate user action, no AI call. Its evidence is appended to the
  * exact same `traceability` array Sprint 52 introduced, and its overall confidence is stored on
  * `RequirementsSession.assessmentConfidence`, a field Sprint 50 already reserved for this.
+ *
+ * Sprint 54 runs the deterministic Discovery Decision Engine (`discoveryDecisionEngine.ts`)
+ * immediately after the Business Assessment Engine, in the same update — deciding whether
+ * enough business knowledge exists to continue (READY / NEEDS_MORE_INFORMATION /
+ * INSUFFICIENT_INFORMATION), never asking a question or generating a recommendation itself. Its
+ * result is persisted on `BusinessUnderstandingModel.decision`, and its evidence is appended to
+ * the same `traceability` array Sprints 52/53 already write to. It does not change how or when
+ * RequirementsDraft generation runs — that pipeline still reads `project.projectKnowledge`
+ * exactly as it does today.
  */
 
 function runFireAndForget(label: string, work: () => Promise<unknown>): void {
@@ -173,12 +183,16 @@ export function recordRequirementsFormSubmission(projectId: string, knowledge: P
     const patch = buildInitialUnderstandingPatch(knowledge);
     const traceability = buildTraceabilityForFormSubmission(message.id, patch, model?.traceability ?? []);
 
-    const { assessment, evidence, overallConfidence } = runBusinessAssessment(patch);
+    const assessmentResult = runBusinessAssessment(patch);
+    const { assessment, evidence, overallConfidence } = assessmentResult;
+
+    const { decision, evidence: decisionEvidence } = runDiscoveryDecision(patch, assessmentResult);
 
     await updateBusinessUnderstandingModel(session.id, {
       ...patch,
       assessment,
-      traceability: [...traceability, ...evidence],
+      decision,
+      traceability: [...traceability, ...evidence, ...decisionEvidence],
     });
 
     await updateRequirementsSession(session.id, { assessmentConfidence: overallConfidence });

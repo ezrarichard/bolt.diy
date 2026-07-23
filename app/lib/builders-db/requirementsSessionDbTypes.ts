@@ -3,6 +3,7 @@ import type {
   BusinessAssessmentState,
   BusinessUnderstandingCompleteness,
   BusinessUnderstandingModel,
+  DiscoveryDecision,
   OpenQuestion,
   Recommendation,
   RequirementsSession,
@@ -136,6 +137,7 @@ export interface BuildersDbBusinessUnderstandingModelRow {
   project_id: string;
   schema_version: number;
   assessment: BusinessAssessmentState;
+  decision: DiscoveryDecision;
   business_identity: Record<string, unknown>;
   business_goals: string[];
   processes: string[];
@@ -163,6 +165,7 @@ export function fromBusinessUnderstandingModelRow(
     sessionId: row.session_id,
     schemaVersion: row.schema_version,
     assessment: row.assessment ?? {},
+    decision: row.decision ?? {},
     businessIdentity: row.business_identity ?? {},
     businessGoals: row.business_goals ?? [],
     processes: row.processes ?? [],
@@ -193,6 +196,7 @@ export function toBusinessUnderstandingModelInsert(
     project_id: projectId,
     schema_version: 1,
     assessment: {},
+    decision: {},
     business_identity: {},
     business_goals: [],
     processes: [],
@@ -233,6 +237,10 @@ export function toBusinessUnderstandingModelUpdate(
 
   if (patch.assessment !== undefined) {
     row.assessment = patch.assessment;
+  }
+
+  if (patch.decision !== undefined) {
+    row.decision = patch.decision;
   }
 
   if (patch.businessIdentity !== undefined) {

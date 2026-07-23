@@ -163,6 +163,44 @@ export interface BusinessUnderstandingCompleteness {
 }
 
 /**
+ * Discovery Decision Engine — Sprint 54. Whether enough business knowledge exists to continue
+ * the software engineering pipeline. Purely a decision, never a question or a recommendation
+ * (see `discoveryDecisionEngine.ts`'s header comment for the full scope boundary).
+ */
+export type DiscoveryState = 'READY' | 'NEEDS_MORE_INFORMATION' | 'INSUFFICIENT_INFORMATION';
+
+/** The ten assessment dimensions the Sprint 54 brief requires every decision to evaluate. */
+export type DiscoveryDimension =
+  | 'businessVision'
+  | 'targetUsers'
+  | 'coreFeatures'
+  | 'industry'
+  | 'businessAssessment'
+  | 'projectType'
+  | 'businessConstraints'
+  | 'currentSystems'
+  | 'integrations'
+  | 'technicalPreferences';
+
+/**
+ * Result of the Discovery Decision Engine — one per Business Understanding Model, recomputed
+ * (never incrementally patched) on every form submission. Fields are optional, mirroring
+ * `BusinessAssessmentState`'s convention, so a legacy model with no decision computed yet
+ * (`decision: {}`) remains a valid value of this type — no backward-compatibility shim needed.
+ */
+export interface DiscoveryDecision {
+  state?: DiscoveryState;
+  overallConfidence?: 'low' | 'medium' | 'high';
+
+  /** 0-100, weighted across the ten dimensions above — see `discoveryDecisionEngine.ts` for the documented weights. */
+  completenessScore?: number;
+
+  missingAreas?: DiscoveryDimension[];
+  partialAreas?: DiscoveryDimension[];
+  readyForRequirementsDraft?: boolean;
+}
+
+/**
  * The Business Understanding Model — one per Requirements Session, current-state (not
  * versioned). See the frozen Requirements Session Architecture Part 3 / Business Analyst
  * Intelligence Architecture Part 2 for what each section means and why it exists.
@@ -181,6 +219,7 @@ export interface BusinessUnderstandingModel {
   schemaVersion: number;
 
   assessment: BusinessAssessmentState;
+  decision: DiscoveryDecision;
   businessIdentity: Record<string, unknown>;
   businessGoals: string[];
   processes: string[];
