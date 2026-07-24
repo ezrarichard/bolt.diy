@@ -14,29 +14,69 @@ import type {
  *
  * The single point of access for blueprint data.
  *
- *   BlueprintRegistry (registry.ts, raw data)
- *     -> blueprintEngine (this file)
- *       -> Project Dashboard (today)
- *       -> Future AI Builder / GitHub / Supabase (later sprints)
+ *   BlueprintRegistry (registry.ts, hardcoded seed data)
+ *     -> activeBlueprints (this file's in-memory cache, below)
+ *       -> blueprintEngine (this file's public, synchronous API)
+ *         -> Project Dashboard, New Project dialog, every AI role's buildContext() (today)
  *
- * Every method below just reads registry.ts — there is no computation, no
- * AI call, no network request, and nothing here mutates anything. Consumers
- * (UI components, and eventually other systems) should never import
- * registry.ts or types.ts directly; import from app/lib/blueprints (the
- * index barrel) and use blueprintEngine so the registry's internal shape
- * can change later without touching a single consumer.
+ * Every public method below is still 100% synchronous and still just reads an in-memory
+ * array — there is no computation, no AI call, no network request in any of them, and nothing
+ * here mutates anything. This is deliberate: every existing call site (27+ across the AI role
+ * engines and UI components) calls `blueprintEngine.getBlueprint()`/`getDefaultBlueprint()`/etc.
+ * synchronously, with no `await`, and per the Sprint 59 brief none of them may change — so the
+ * public API's shape and its output must stay identical no matter where the data underneath it
+ * came from.
+ *
+ * Sprint 59 (Blueprint Foundation) adds `hydrateBlueprints()`, an async, fire-and-forget
+ * function (called once at app boot — see `AuthProvider.tsx`) that swaps `activeBlueprints`
+ * from the hardcoded `PROJECT_BLUEPRINTS` registry to the same data read back from BuildersDB
+ * (`builders_blueprints`, seeded from this exact registry — see
+ * supabase/migrations/20260729100000_blueprint_foundation.sql). Every synchronous getter below
+ * reads whatever `activeBlueprints` currently holds, so:
+ *   - before hydration completes, or if BuildersDB is unconfigured/unreachable/empty: every
+ *     getter behaves exactly as it always has (reads the hardcoded registry) — zero behavior
+ *     change, invisible to any consumer.
+ *   - after a successful hydration: every getter reads BuildersDB-sourced data instead — but
+ *     because that data is a byte-for-byte seed of the same registry, every getter's OUTPUT is
+ *     still identical. This sprint is infrastructure only; it changes where the data lives, not
+ *     what it says.
+ * Consumers should never import registry.ts or types.ts directly; import from
+ * app/lib/blueprints (the index barrel) and use blueprintEngine so the storage shape can keep
+ * changing later without touching a single consumer.
  */
+
+let activeBlueprints: ProjectBlueprint[] = PROJECT_BLUEPRINTS;
+
+/**
+ * Sprint 59 — fire-and-forget boot hydration (see `AuthProvider.tsx`'s call site, mirroring
+ * `hydrateProjectsFromBuildersDb()`'s own convention exactly). Never throws, never awaited by
+ * anything that would block on it, and only swaps `activeBlueprints` when BuildersDB actually
+ * returned at least one row — an empty/unavailable/errored result leaves the hardcoded registry
+ * in place rather than ever leaving the app with zero blueprints.
+ */
+export async function hydrateBlueprints(): Promise<void> {
+  try {
+    const { listActiveBlueprints } = await import('~/lib/builders-db/repositories/blueprintRepository');
+    const blueprints = await listActiveBlueprints();
+
+    if (blueprints.length > 0) {
+      activeBlueprints = blueprints;
+    }
+  } catch (error) {
+    console.error('[BlueprintEngine] hydrateBlueprints() failed, keeping the built-in registry:', error);
+  }
+}
 
 function getBlueprint(id: string | undefined): ProjectBlueprint | undefined {
   if (!id) {
     return undefined;
   }
 
-  return PROJECT_BLUEPRINTS.find((blueprint) => blueprint.id === id);
+  return activeBlueprints.find((blueprint) => blueprint.id === id);
 }
 
 function getAllBlueprints(): ProjectBlueprint[] {
-  return PROJECT_BLUEPRINTS;
+  return activeBlueprints;
 }
 
 function getDefaultBlueprint(): ProjectBlueprint {

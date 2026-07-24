@@ -8,7 +8,7 @@
  * re-exported here, so the registry's internal storage can change later
  * without touching any consumer.
  */
-export { blueprintEngine } from './engine';
+export { blueprintEngine, hydrateBlueprints } from './engine';
 export type {
   ProjectBlueprint,
   BlueprintCategory,

@@ -124,6 +124,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       import('~/lib/stores/projects').then(({ hydrateProjectsFromBuildersDb }) => {
         hydrateProjectsFromBuildersDb();
       });
+
+      /*
+       * Sprint 59 — Blueprint Foundation. Same fire-and-forget, once-per-session convention as
+       * hydrateProjectsFromBuildersDb() above: swaps blueprintEngine's in-memory cache from the
+       * hardcoded registry to BuildersDB-sourced data once it's available, never blocking
+       * anything and never throwing (see hydrateBlueprints()'s own doc comment).
+       */
+      import('~/lib/blueprints').then(({ hydrateBlueprints }) => {
+        hydrateBlueprints();
+      });
     }
 
     if (state.status === 'unauthenticated') {

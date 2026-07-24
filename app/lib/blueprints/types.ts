@@ -47,6 +47,40 @@ export interface ProjectBlueprint {
 
   enabled: boolean;
   comingSoon?: boolean;
+
+  /*
+   * ----------------------------------------------------------------------
+   * Sprint 59 — Blueprint Foundation. Extensibility fields for the future
+   * Blueprint Engine (Industry Detection, Regional Overlays, Package
+   * Levels, Blueprint Studio — see the approved Blueprint Architecture
+   * Proposal). All optional, all unpopulated/unread by anything today:
+   * every existing call site keeps working unchanged whether or not these
+   * are present. Nothing in this sprint injects any of this into an AI
+   * role's context or prompt.
+   * ----------------------------------------------------------------------
+   */
+
+  /** Reserved for Industry Detection (later sprint) — e.g. "Dental Clinic", "Restaurant". */
+  industry?: string;
+
+  /** Base -> Industry -> Regional hierarchy (later sprint). The BuildersDB row id of this blueprint's parent, if any. */
+  parentBlueprintId?: string;
+
+  /** BuildersDB versioning — see blueprintRepository.ts. Absent for the still-hardcoded registry fallback. */
+  version?: number;
+
+  /** BuildersDB lifecycle state. Absent for the still-hardcoded registry fallback, which is always implicitly "active". */
+  status?: 'draft' | 'active' | 'deprecated';
+
+  /** Free-form extensibility bag for future blueprint-intelligence fields (package tiers, confidence inputs, ...) — empty/absent and unread today. */
+  metadata?: Record<string, unknown>;
+
+  /**
+   * Structured Blueprint Content (Standard Workflows, Business Rules, Pages & Screens, QA
+   * Scenarios, AI Role Guidance, ...) per the Blueprint Architecture Proposal — empty/absent
+   * and unread by any AI role today. Populating and consuming this is later-sprint work.
+   */
+  content?: Record<string, unknown>;
 }
 
 /**

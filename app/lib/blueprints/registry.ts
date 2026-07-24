@@ -12,6 +12,14 @@ import type { ProjectBlueprint } from './types';
  * Data is unchanged from Sprint 3/4 — same 9 blueprints, same fields,
  * same India-first payment guidance (Razorpay/UPI/PhonePe/Paytm/Cashfree,
  * no Stripe).
+ *
+ * Sprint 59 (Blueprint Foundation) gives this array a second role: it is now also the seed
+ * data inserted into BuildersDB's `builders_blueprints` table (see
+ * supabase/migrations/20260729100000_blueprint_foundation.sql — every field/value below is
+ * duplicated there verbatim). This array remains `blueprintEngine`'s permanent fallback —
+ * `engine.ts`'s `activeBlueprints` cache starts as this exact array and only ever swaps to
+ * BuildersDB-sourced data after a successful `hydrateBlueprints()`, never removing this as the
+ * safety net for an unconfigured/unreachable BuildersDB.
  */
 export const PROJECT_BLUEPRINTS: ProjectBlueprint[] = [
   {
