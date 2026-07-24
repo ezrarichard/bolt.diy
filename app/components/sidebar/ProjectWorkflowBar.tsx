@@ -35,20 +35,29 @@ interface ProjectWorkflowBarProps {
   onSelect: (id: string) => void;
 }
 
+/**
+ * Sprint UX-2.1 — dark-surface node treatment per state (was: solid saturated fills, which
+ * read fine on their own but exposed a real bug: the outer `<button>` below never reset its
+ * background, so every node sat on the browser's native `buttonface` gray/white — the
+ * "white rectangular card" reported. Fixing that (bg-transparent on the button) alone would
+ * have left the old solid-fill circles; this also softens them to translucent surfaces + a
+ * colored border/glow, matching the rest of the dashboard's dark-glass language instead of
+ * flat UI-kit color chips. Sizes/shadow radius unchanged — colors only.
+ */
 const STATUS_META: Record<WorkflowStageStatus, { nodeClass: string; labelClass: string; ringClass: string }> = {
   complete: {
-    nodeClass: 'bg-green-500 border-green-500 text-white shadow-[0_0_0_4px_rgba(34,197,94,0.12)]',
+    nodeClass: 'bg-green-500/15 border-green-500/50 text-green-400 shadow-[0_0_0_4px_rgba(34,197,94,0.10)]',
     labelClass: 'text-green-600 dark:text-green-400',
     ringClass: '',
   },
   active: {
-    nodeClass: 'bg-purple-500 border-purple-500 text-white scale-110 workflow-node-glow',
+    nodeClass: 'bg-purple-500/20 border-purple-500/60 text-purple-300 scale-110 workflow-node-glow',
     labelClass: 'text-purple-600 dark:text-purple-300',
     ringClass: '',
   },
   pending: {
     nodeClass:
-      'bg-bolt-elements-background-depth-2 border-bolt-elements-borderColor/60 text-bolt-elements-textTertiary',
+      'bg-bolt-elements-background-depth-2/80 border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary/70',
     labelClass: 'text-bolt-elements-textTertiary',
     ringClass: '',
   },
@@ -94,7 +103,7 @@ function StageNode({
           type="button"
           onClick={() => onSelect(stage.id)}
           aria-label={`${stage.label} — ${stage.status === 'complete' ? 'completed' : stage.status === 'active' ? 'in progress' : 'not started yet'}`}
-          className="flex flex-col items-center gap-2 shrink-0 group focus:outline-none"
+          className="flex flex-col items-center gap-2 shrink-0 group bg-transparent border-0 p-0 appearance-none focus:outline-none"
         >
           <span className="relative flex items-center justify-center">
             {stage.status === 'active' && (
