@@ -347,7 +347,7 @@ describe('buildersDbContextProvider — Sprint 63 Blueprint-Aware Business Analy
     await flush();
   });
 
-  it('never adds Blueprint guidance for a different role (e.g. database-draft — architecture-draft gets its own guidance since Sprint 65)', async () => {
+  it('never adds Blueprint guidance for a different role (e.g. qa-draft — architecture/database/backend-draft each get their own guidance since Sprint 65/66)', async () => {
     getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
     getBlueprintMock.mockReturnValue(makeBlueprint());
     getRoleOutputsForProjectMock.mockResolvedValue([
@@ -364,7 +364,7 @@ describe('buildersDbContextProvider — Sprint 63 Blueprint-Aware Business Analy
       },
     ]);
 
-    const block = await buildRoleContextBlock('proj-1', 'database-draft', 'Build a dental clinic site');
+    const block = await buildRoleContextBlock('proj-1', 'qa-draft', 'Build a dental clinic site');
     await flush();
 
     expect(getLatestBlueprintResolutionMock).not.toHaveBeenCalled();
@@ -511,11 +511,11 @@ describe('buildersDbContextProvider — Sprint 64 Blueprint-Aware Product Owners
     expect(block).not.toContain('Blueprint Guidance for Product Planning');
   });
 
-  it('never adds any Blueprint guidance for an unrelated role (e.g. database-draft — architecture-draft gets its own guidance since Sprint 65)', async () => {
+  it('never adds any Blueprint guidance for an unrelated role (e.g. qa-draft — architecture/database/backend-draft each get their own guidance since Sprint 65/66)', async () => {
     getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
     getBlueprintMock.mockReturnValue(makeBlueprint());
 
-    const block = await buildRoleContextBlock('proj-1', 'database-draft', 'Build a dental clinic site');
+    const block = await buildRoleContextBlock('proj-1', 'qa-draft', 'Build a dental clinic site');
     await flush();
 
     expect(getLatestBlueprintResolutionMock).not.toHaveBeenCalled();
@@ -732,5 +732,428 @@ describe('buildersDbContextProvider — Sprint 65 Blueprint-Aware Solution Archi
 
     expect(block).toContain('Blueprint Guidance for Product Planning');
     expect(block).not.toContain('Blueprint Guidance for Solution Architecture');
+  });
+});
+
+describe('buildersDbContextProvider — Sprint 66 Blueprint-Aware Database Engineering', () => {
+  beforeEach(() => {
+    isBuildersDbAvailableMock.mockReset().mockReturnValue(true);
+    getRoleOutputsForProjectMock.mockReset().mockResolvedValue([]);
+    getProjectTasksMock.mockReset().mockResolvedValue([]);
+    getTaskReviewsMock.mockReset().mockResolvedValue([]);
+    addProjectActivityMock.mockReset().mockResolvedValue(true);
+    saveContextTraceMock.mockReset().mockResolvedValue(true);
+    getLatestRequirementsSessionMock.mockReset().mockResolvedValue(null);
+    getBusinessUnderstandingModelMock.mockReset();
+    getLatestBlueprintResolutionMock.mockReset();
+    getBlueprintMock.mockReset();
+  });
+
+  it('adds no Blueprint guidance when no resolution has ever been recorded', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(null);
+
+    const block = await buildRoleContextBlock('proj-1', 'database-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).not.toContain('Blueprint Guidance for Database Design');
+    expect(getBlueprintMock).not.toHaveBeenCalled();
+  });
+
+  it('uses the recommended Blueprint when selected equals recommended', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(makeBlueprint());
+
+    const block = await buildRoleContextBlock('proj-1', 'database-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(getBlueprintMock).toHaveBeenCalledWith('business-website');
+    expect(block).toContain('Blueprint Guidance for Database Design');
+    expect(block).toContain('the recommended match');
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const blueprintSource = sources.find((s: { type: string }) => s.type === 'blueprint-resolution');
+    expect(blueprintSource).toEqual(
+      expect.objectContaining({
+        blueprintId: 'business-website',
+        blueprintVersion: 2,
+        resolutionId: 'res-1',
+        selectionSource: 'recommendation',
+        contentAvailable: false,
+      }),
+    );
+  });
+
+  it('respects manual override: uses the selected Blueprint even when it differs from the recommendation, and records the override', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(
+      makeResolution({ recommendedBlueprintId: 'business-website', selectedBlueprintId: 'localshop-india' }),
+    );
+    getBlueprintMock.mockReturnValue(makeBlueprint({ id: 'localshop-india', name: 'LocalShop India' }));
+
+    const block = await buildRoleContextBlock('proj-1', 'database-draft', 'Build a clothing store site');
+    await flush();
+
+    expect(getBlueprintMock).toHaveBeenCalledWith('localshop-india');
+    expect(block).toContain('manually selected by the user');
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const blueprintSource = sources.find((s: { type: string }) => s.type === 'blueprint-resolution');
+    expect(blueprintSource).toEqual(
+      expect.objectContaining({ blueprintId: 'localshop-india', selectionSource: 'manual_override' }),
+    );
+  });
+
+  it('surfaces entity relationships to improve relationship design', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(
+      makeBlueprint({
+        content: {
+          schemaVersion: 1,
+          dataEntities: [{ name: 'Product', description: 'An item', keyFields: ['sku'], relationships: ['Order'] }],
+        },
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'database-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('Product');
+    expect(block).toContain('Relates to: Order');
+  });
+
+  it('surfaces compliance considerations', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(
+      makeBlueprint({
+        content: { schemaVersion: 1, compliance: [{ name: 'GST invoicing', description: 'Tax compliance' }] },
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'database-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('Compliance considerations');
+    expect(block).toContain('GST invoicing');
+  });
+
+  it('surfaces security expectations', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(
+      makeBlueprint({
+        content: {
+          schemaVersion: 1,
+          security: [{ concern: 'Payment fraud', mitigation: 'Use a PCI-compliant gateway' }],
+        },
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'database-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('Security expectations');
+    expect(block).toContain('Payment fraud');
+  });
+
+  it('surfaces performance expectations', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(
+      makeBlueprint({
+        content: { schemaVersion: 1, performanceExpectations: [{ metric: 'Query latency', target: '<100ms' }] },
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'database-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('Performance expectations');
+    expect(block).toContain('Query latency');
+  });
+
+  it('continues safely when the selected Blueprint has no structured content yet', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(
+      makeResolution({ selectedBlueprintId: 'shopify-app', recommendedBlueprintId: 'shopify-app' }),
+    );
+    getBlueprintMock.mockReturnValue(makeBlueprint({ id: 'shopify-app', name: 'Shopify App', content: undefined }));
+
+    const block = await buildRoleContextBlock('proj-1', 'database-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('No structured Blueprint knowledge is available');
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const blueprintSource = sources.find((s: { type: string }) => s.type === 'blueprint-resolution');
+    expect(blueprintSource.contentAvailable).toBe(false);
+  });
+
+  it('falls back safely when the effective Blueprint id no longer resolves', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution({ selectedBlueprintId: 'deprecated-blueprint' }));
+    getBlueprintMock.mockReturnValue(undefined);
+
+    const block = await buildRoleContextBlock('proj-1', 'database-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).not.toContain('Blueprint Guidance for Database Design');
+  });
+
+  it('never throws even when the Blueprint Resolution lookup itself fails', async () => {
+    getLatestBlueprintResolutionMock.mockRejectedValue(new Error('BuildersDB unreachable'));
+
+    await expect(buildRoleContextBlock('proj-1', 'database-draft', 'Build a dental clinic site')).resolves.toEqual(
+      expect.any(String),
+    );
+    await flush();
+  });
+
+  it('records correct Blueprint traceability metadata', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(
+      makeBlueprint({
+        content: {
+          schemaVersion: 1,
+          userRoles: [{ name: 'Customer', description: 'Buys products', permissions: [] }],
+          security: [{ concern: 'PHI exposure', mitigation: 'Encrypt at rest' }],
+        },
+      }),
+    );
+
+    await buildRoleContextBlock('proj-1', 'database-draft', 'Build a dental clinic site');
+    await flush();
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const blueprintSource = sources.find((s: { type: string }) => s.type === 'blueprint-resolution');
+    expect(blueprintSource).toEqual(
+      expect.objectContaining({
+        type: 'blueprint-resolution',
+        blueprintId: 'business-website',
+        blueprintVersion: 2,
+        resolutionId: 'res-1',
+        selectionSource: 'recommendation',
+        sectionsSupplied: ['userRoles', 'security'],
+        contentAvailable: true,
+      }),
+    );
+  });
+
+  it('never adds Database Blueprint guidance for a different role (e.g. backend-draft uses its own Sprint 66 guidance)', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(makeBlueprint());
+
+    const block = await buildRoleContextBlock('proj-1', 'backend-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).not.toContain('Blueprint Guidance for Database Design');
+  });
+});
+
+describe('buildersDbContextProvider — Sprint 66 Blueprint-Aware Backend Engineering', () => {
+  beforeEach(() => {
+    isBuildersDbAvailableMock.mockReset().mockReturnValue(true);
+    getRoleOutputsForProjectMock.mockReset().mockResolvedValue([]);
+    getProjectTasksMock.mockReset().mockResolvedValue([]);
+    getTaskReviewsMock.mockReset().mockResolvedValue([]);
+    addProjectActivityMock.mockReset().mockResolvedValue(true);
+    saveContextTraceMock.mockReset().mockResolvedValue(true);
+    getLatestRequirementsSessionMock.mockReset().mockResolvedValue(null);
+    getBusinessUnderstandingModelMock.mockReset();
+    getLatestBlueprintResolutionMock.mockReset();
+    getBlueprintMock.mockReset();
+  });
+
+  it('adds no Blueprint guidance when no resolution has ever been recorded', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(null);
+
+    const block = await buildRoleContextBlock('proj-1', 'backend-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).not.toContain('Blueprint Guidance for Backend Design');
+    expect(getBlueprintMock).not.toHaveBeenCalled();
+  });
+
+  it('uses the recommended Blueprint when selected equals recommended', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(makeBlueprint());
+
+    const block = await buildRoleContextBlock('proj-1', 'backend-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(getBlueprintMock).toHaveBeenCalledWith('business-website');
+    expect(block).toContain('Blueprint Guidance for Backend Design');
+    expect(block).toContain('the recommended match');
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const blueprintSource = sources.find((s: { type: string }) => s.type === 'blueprint-resolution');
+    expect(blueprintSource).toEqual(
+      expect.objectContaining({
+        blueprintId: 'business-website',
+        blueprintVersion: 2,
+        resolutionId: 'res-1',
+        selectionSource: 'recommendation',
+        contentAvailable: false,
+      }),
+    );
+  });
+
+  it('respects manual override: uses the selected Blueprint even when it differs from the recommendation, and records the override', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(
+      makeResolution({ recommendedBlueprintId: 'business-website', selectedBlueprintId: 'ai-agent' }),
+    );
+    getBlueprintMock.mockReturnValue(makeBlueprint({ id: 'ai-agent', name: 'AI Agent' }));
+
+    const block = await buildRoleContextBlock('proj-1', 'backend-draft', 'Build an AI product');
+    await flush();
+
+    expect(getBlueprintMock).toHaveBeenCalledWith('ai-agent');
+    expect(block).toContain('manually selected by the user');
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const blueprintSource = sources.find((s: { type: string }) => s.type === 'blueprint-resolution');
+    expect(blueprintSource).toEqual(
+      expect.objectContaining({ blueprintId: 'ai-agent', selectionSource: 'manual_override' }),
+    );
+  });
+
+  it('improves API quality via functional modules and integrations', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(
+      makeBlueprint({
+        content: {
+          schemaVersion: 1,
+          functionalModules: [{ name: 'Booking', description: 'Appointment scheduling', features: [] }],
+          integrations: [{ name: 'Razorpay', purpose: 'Payments', required: true }],
+        },
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'backend-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('Booking');
+    expect(block).toContain('Razorpay');
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const blueprintSource = sources.find((s: { type: string }) => s.type === 'blueprint-resolution');
+    expect(blueprintSource.sectionsSupplied).toEqual(['functionalModules', 'integrations']);
+  });
+
+  it('informs authentication planning via user roles', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(
+      makeBlueprint({
+        content: {
+          schemaVersion: 1,
+          userRoles: [{ name: 'Patient', description: 'Books appointments', permissions: [] }],
+        },
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'backend-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('authentication/authorization design');
+    expect(block).toContain('Patient');
+  });
+
+  it('surfaces error-handling-relevant security expectations', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(
+      makeBlueprint({
+        content: {
+          schemaVersion: 1,
+          security: [{ concern: 'Rate limit abuse', mitigation: 'Throttle by API key' }],
+        },
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'backend-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('Security expectations');
+    expect(block).toContain('Rate limit abuse');
+  });
+
+  it('continues safely when the selected Blueprint has no structured content yet', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(
+      makeResolution({ selectedBlueprintId: 'shopify-app', recommendedBlueprintId: 'shopify-app' }),
+    );
+    getBlueprintMock.mockReturnValue(makeBlueprint({ id: 'shopify-app', name: 'Shopify App', content: undefined }));
+
+    const block = await buildRoleContextBlock('proj-1', 'backend-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('No structured Blueprint knowledge is available');
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const blueprintSource = sources.find((s: { type: string }) => s.type === 'blueprint-resolution');
+    expect(blueprintSource.contentAvailable).toBe(false);
+  });
+
+  it('falls back safely when the effective Blueprint id no longer resolves', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution({ selectedBlueprintId: 'deprecated-blueprint' }));
+    getBlueprintMock.mockReturnValue(undefined);
+
+    const block = await buildRoleContextBlock('proj-1', 'backend-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).not.toContain('Blueprint Guidance for Backend Design');
+  });
+
+  it('never throws even when the Blueprint Resolution lookup itself fails', async () => {
+    getLatestBlueprintResolutionMock.mockRejectedValue(new Error('BuildersDB unreachable'));
+
+    await expect(buildRoleContextBlock('proj-1', 'backend-draft', 'Build a dental clinic site')).resolves.toEqual(
+      expect.any(String),
+    );
+    await flush();
+  });
+
+  it('records correct Blueprint traceability metadata', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(
+      makeBlueprint({
+        content: {
+          schemaVersion: 1,
+          deploymentConsiderations: [{ consideration: 'Autoscaling', detail: 'Scale on CPU > 70%' }],
+          performanceExpectations: [{ metric: 'API latency', target: '<200ms' }],
+        },
+      }),
+    );
+
+    await buildRoleContextBlock('proj-1', 'backend-draft', 'Build a dental clinic site');
+    await flush();
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const blueprintSource = sources.find((s: { type: string }) => s.type === 'blueprint-resolution');
+    expect(blueprintSource).toEqual(
+      expect.objectContaining({
+        type: 'blueprint-resolution',
+        blueprintId: 'business-website',
+        blueprintVersion: 2,
+        resolutionId: 'res-1',
+        selectionSource: 'recommendation',
+        sectionsSupplied: ['performanceExpectations', 'deploymentConsiderations'],
+        contentAvailable: true,
+      }),
+    );
+  });
+
+  it('never adds Backend Blueprint guidance for a different role (e.g. database-draft uses its own Sprint 66 guidance)', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(makeBlueprint());
+
+    const block = await buildRoleContextBlock('proj-1', 'database-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).not.toContain('Blueprint Guidance for Backend Design');
+  });
+
+  it('never affects the Solution Architect role (architecture-draft keeps its own Sprint 65 guidance, unaffected by Sprint 66)', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(makeBlueprint());
+
+    const block = await buildRoleContextBlock('proj-1', 'architecture-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('Blueprint Guidance for Solution Architecture');
+    expect(block).not.toContain('Blueprint Guidance for Backend Design');
+    expect(block).not.toContain('Blueprint Guidance for Database Design');
   });
 });

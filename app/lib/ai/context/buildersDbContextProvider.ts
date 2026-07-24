@@ -34,6 +34,18 @@ import {
   hasSolutionArchitectBlueprintContent,
   formatSolutionArchitectBlueprintGuidanceSection,
 } from '~/lib/blueprints/blueprintSolutionArchitectProjection';
+import {
+  projectBlueprintForDatabase,
+  describeSuppliedSections as describeDatabaseSuppliedSections,
+  hasDatabaseBlueprintContent,
+  formatDatabaseBlueprintGuidanceSection,
+} from '~/lib/blueprints/blueprintDatabaseProjection';
+import {
+  projectBlueprintForBackend,
+  describeSuppliedSections as describeBackendSuppliedSections,
+  hasBackendBlueprintContent,
+  formatBackendBlueprintGuidanceSection,
+} from '~/lib/blueprints/blueprintBackendProjection';
 
 /**
  * BuildersDB AI Context Provider — Sprint 35 (AI Role Context Retrieval from
@@ -601,6 +613,109 @@ async function buildSolutionArchitectBlueprintGuidance(
 }
 
 /**
+ * Sprint 66 (Blueprint-Aware Database & Backend Engineering) — the Database Engineer's sibling
+ * of `buildBlueprintGuidance`/`buildProductOwnerBlueprintGuidance`/
+ * `buildSolutionArchitectBlueprintGuidance` above: same effective-selection resolution and the
+ * same never-throws/safe-fallback discipline, but projects and formats the Blueprint through
+ * `blueprintDatabaseProjection.ts`'s dedicated 7-section, data-modeling-focused view instead —
+ * a deliberately separate projection per the Sprint 66 brief, not a reuse of any prior sprint's.
+ *
+ * Deliberately only ever called for `ARTIFACT_TYPES.DATABASE_DRAFT` — see this file's only
+ * caller, `buildRoleContextBlock`.
+ */
+async function buildDatabaseBlueprintGuidance(
+  projectId: string,
+): Promise<{ text: string; source: ContextTraceSource } | null> {
+  try {
+    const resolution = await getLatestBlueprintResolution(projectId);
+    const effective = resolveEffectiveBlueprintSelection(resolution);
+
+    if (!effective) {
+      return null;
+    }
+
+    const blueprint = blueprintEngine.getBlueprint(effective.blueprintId);
+
+    if (!blueprint) {
+      return null;
+    }
+
+    const projection = projectBlueprintForDatabase(blueprint.content);
+    const text = formatDatabaseBlueprintGuidanceSection(blueprint.name, effective.selectionSource, projection);
+
+    const source: ContextTraceSource = {
+      type: 'blueprint-resolution',
+      label: `Blueprint: ${blueprint.name} (${effective.selectionSource === 'manual_override' ? 'manual override' : 'recommended'})`,
+      blueprintId: blueprint.id,
+      blueprintVersion: blueprint.version,
+      resolutionId: resolution!.id,
+      selectionSource: effective.selectionSource,
+      sectionsSupplied: describeDatabaseSuppliedSections(projection),
+      contentAvailable: hasDatabaseBlueprintContent(projection),
+    };
+
+    return { text, source };
+  } catch (error) {
+    console.error(
+      '[BuildersDB Context] buildDatabaseBlueprintGuidance failed, continuing without Blueprint context:',
+      error,
+    );
+    return null;
+  }
+}
+
+/**
+ * Sprint 66 (Blueprint-Aware Database & Backend Engineering) — the Backend Engineer's sibling
+ * of the above: same effective-selection resolution and the same never-throws/safe-fallback
+ * discipline, but projects and formats the Blueprint through `blueprintBackendProjection.ts`'s
+ * dedicated 8-section, service/API-focused view instead — a deliberately separate projection
+ * per the Sprint 66 brief, not a reuse of `blueprintDatabaseProjection.ts` or any prior sprint's.
+ *
+ * Deliberately only ever called for `ARTIFACT_TYPES.BACKEND_DRAFT` — see this file's only
+ * caller, `buildRoleContextBlock`.
+ */
+async function buildBackendBlueprintGuidance(
+  projectId: string,
+): Promise<{ text: string; source: ContextTraceSource } | null> {
+  try {
+    const resolution = await getLatestBlueprintResolution(projectId);
+    const effective = resolveEffectiveBlueprintSelection(resolution);
+
+    if (!effective) {
+      return null;
+    }
+
+    const blueprint = blueprintEngine.getBlueprint(effective.blueprintId);
+
+    if (!blueprint) {
+      return null;
+    }
+
+    const projection = projectBlueprintForBackend(blueprint.content);
+    const text = formatBackendBlueprintGuidanceSection(blueprint.name, effective.selectionSource, projection);
+
+    const source: ContextTraceSource = {
+      type: 'blueprint-resolution',
+      label: `Blueprint: ${blueprint.name} (${effective.selectionSource === 'manual_override' ? 'manual override' : 'recommended'})`,
+      blueprintId: blueprint.id,
+      blueprintVersion: blueprint.version,
+      resolutionId: resolution!.id,
+      selectionSource: effective.selectionSource,
+      sectionsSupplied: describeBackendSuppliedSections(projection),
+      contentAvailable: hasBackendBlueprintContent(projection),
+    };
+
+    return { text, source };
+  } catch (error) {
+    console.error(
+      '[BuildersDB Context] buildBackendBlueprintGuidance failed, continuing without Blueprint context:',
+      error,
+    );
+    return null;
+  }
+}
+
+/**
  * Best-effort, fire-and-forget: records WHY a role's context looked the way it did (see
  * requirement #3/#4, "Context Source Traceability"/"Context Explanation"). Never awaited
  * by `buildRoleContextBlock` — a failure here must never affect the AI generation it's
@@ -695,11 +810,13 @@ export async function buildRoleContextBlock(
     const { roleOutputs, tasks } = await getContextForRole(projectId, roleKey);
 
     /*
-     * Sprint 63/64/65 — Blueprint guidance is scoped to exactly the Business Analyst, Product
-     * Owner, and Solution Architect roles, each via its own dedicated projection (see
-     * blueprintBusinessAnalystProjection.ts / blueprintProductOwnerProjection.ts /
-     * blueprintSolutionArchitectProjection.ts) — every other role's call to this function is
-     * unaffected, per each sprint's "update only this one generation path" brief.
+     * Sprint 63/64/65/66 — Blueprint guidance is scoped to exactly the Business Analyst, Product
+     * Owner, Solution Architect, Database Engineer, and Backend Engineer roles, each via its own
+     * dedicated projection (see blueprintBusinessAnalystProjection.ts /
+     * blueprintProductOwnerProjection.ts / blueprintSolutionArchitectProjection.ts /
+     * blueprintDatabaseProjection.ts / blueprintBackendProjection.ts) — every other role's call
+     * to this function is unaffected, per each sprint's "update only this one generation path"
+     * brief.
      */
     const blueprintGuidance =
       roleKey === ARTIFACT_TYPES.REQUIREMENTS_DRAFT
@@ -708,7 +825,11 @@ export async function buildRoleContextBlock(
           ? await buildProductOwnerBlueprintGuidance(projectId)
           : roleKey === ARTIFACT_TYPES.ARCHITECTURE_DRAFT
             ? await buildSolutionArchitectBlueprintGuidance(projectId)
-            : null;
+            : roleKey === ARTIFACT_TYPES.DATABASE_DRAFT
+              ? await buildDatabaseBlueprintGuidance(projectId)
+              : roleKey === ARTIFACT_TYPES.BACKEND_DRAFT
+                ? await buildBackendBlueprintGuidance(projectId)
+                : null;
 
     if (roleOutputs.length === 0 && tasks.length === 0 && !projectPromptText && !blueprintGuidance) {
       return '';
