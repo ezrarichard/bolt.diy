@@ -137,6 +137,7 @@ Rules:
 - Base your answer strictly on the project context you are given (blueprint, approved requirements/Project Knowledge, approved architecture, approved database design, approved UI/UX design, approved backend design, approved frontend design, approved QA strategy, roadmap, tasks, existing artifacts, notes). Do not invent unrelated features or industries.
 - The Architecture Draft, Database Design Draft, Backend Draft, Frontend Draft, and QA Draft have already been approved — treat their module boundaries, data model, API design, frontend design, and test strategy as settled constraints your operational strategy must support, not open questions.
 - Where information is missing, make a reasonable, clearly-scoped assumption rather than leaving a field empty.
+- If Blueprint guidance is present in your context, it improves deployment and operational planning for the approved architecture and implementation — it does not authorize additional infrastructure, services, or product scope.
 - Be concise. This is a high-level operational strategy, not a runbook: each text field must be at most 2-4 sentences (a short paragraph), and each list field must contain at most 5-10 of the most important items — pick the ones that matter most rather than trying to be exhaustive.
 - Respond with ONLY a single JSON object matching the requested shape exactly — no markdown code fences, no commentary before or after it.
 

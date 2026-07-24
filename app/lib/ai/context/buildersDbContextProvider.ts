@@ -58,6 +58,18 @@ import {
   hasFrontendBlueprintContent,
   formatFrontendBlueprintGuidanceSection,
 } from '~/lib/blueprints/blueprintFrontendProjection';
+import {
+  projectBlueprintForQa,
+  describeSuppliedSections as describeQaSuppliedSections,
+  hasQaBlueprintContent,
+  formatQaBlueprintGuidanceSection,
+} from '~/lib/blueprints/blueprintQaProjection';
+import {
+  projectBlueprintForDevOps,
+  describeSuppliedSections as describeDevOpsSuppliedSections,
+  hasDevOpsBlueprintContent,
+  formatDevOpsBlueprintGuidanceSection,
+} from '~/lib/blueprints/blueprintDevOpsProjection';
 
 /**
  * BuildersDB AI Context Provider — Sprint 35 (AI Role Context Retrieval from
@@ -833,6 +845,106 @@ async function buildFrontendBlueprintGuidance(
 }
 
 /**
+ * Sprint 68 (Blueprint-Aware QA & DevOps Engineering) — the QA Engineer's sibling of the above:
+ * same effective-selection resolution and the same never-throws/safe-fallback discipline, but
+ * projects and formats the Blueprint through `blueprintQaProjection.ts`'s dedicated 13-section,
+ * coverage/risk-focused view instead — a deliberately separate projection per the Sprint 68
+ * brief, not a reuse of any prior sprint's.
+ *
+ * Deliberately only ever called for `ARTIFACT_TYPES.QA_DRAFT` — see this file's only caller,
+ * `buildRoleContextBlock`.
+ */
+async function buildQaBlueprintGuidance(
+  projectId: string,
+): Promise<{ text: string; source: ContextTraceSource } | null> {
+  try {
+    const resolution = await getLatestBlueprintResolution(projectId);
+    const effective = resolveEffectiveBlueprintSelection(resolution);
+
+    if (!effective) {
+      return null;
+    }
+
+    const blueprint = blueprintEngine.getBlueprint(effective.blueprintId);
+
+    if (!blueprint) {
+      return null;
+    }
+
+    const projection = projectBlueprintForQa(blueprint.content);
+    const text = formatQaBlueprintGuidanceSection(blueprint.name, effective.selectionSource, projection);
+
+    const source: ContextTraceSource = {
+      type: 'blueprint-resolution',
+      label: `Blueprint: ${blueprint.name} (${effective.selectionSource === 'manual_override' ? 'manual override' : 'recommended'})`,
+      blueprintId: blueprint.id,
+      blueprintVersion: blueprint.version,
+      resolutionId: resolution!.id,
+      selectionSource: effective.selectionSource,
+      sectionsSupplied: describeQaSuppliedSections(projection),
+      contentAvailable: hasQaBlueprintContent(projection),
+    };
+
+    return { text, source };
+  } catch (error) {
+    console.error('[BuildersDB Context] buildQaBlueprintGuidance failed, continuing without Blueprint context:', error);
+    return null;
+  }
+}
+
+/**
+ * Sprint 68 (Blueprint-Aware QA & DevOps Engineering) — the DevOps Engineer's sibling of the
+ * above: same effective-selection resolution and the same never-throws/safe-fallback
+ * discipline, but projects and formats the Blueprint through `blueprintDevOpsProjection.ts`'s
+ * dedicated 9-section, operations-focused view instead — a deliberately separate projection per
+ * the Sprint 68 brief, NOT a reuse of `blueprintSolutionArchitectProjection.ts` or
+ * `blueprintBackendProjection.ts` even though all three touch overlapping sections.
+ *
+ * Deliberately only ever called for `ARTIFACT_TYPES.DEVOPS_DRAFT` — see this file's only
+ * caller, `buildRoleContextBlock`.
+ */
+async function buildDevOpsBlueprintGuidance(
+  projectId: string,
+): Promise<{ text: string; source: ContextTraceSource } | null> {
+  try {
+    const resolution = await getLatestBlueprintResolution(projectId);
+    const effective = resolveEffectiveBlueprintSelection(resolution);
+
+    if (!effective) {
+      return null;
+    }
+
+    const blueprint = blueprintEngine.getBlueprint(effective.blueprintId);
+
+    if (!blueprint) {
+      return null;
+    }
+
+    const projection = projectBlueprintForDevOps(blueprint.content);
+    const text = formatDevOpsBlueprintGuidanceSection(blueprint.name, effective.selectionSource, projection);
+
+    const source: ContextTraceSource = {
+      type: 'blueprint-resolution',
+      label: `Blueprint: ${blueprint.name} (${effective.selectionSource === 'manual_override' ? 'manual override' : 'recommended'})`,
+      blueprintId: blueprint.id,
+      blueprintVersion: blueprint.version,
+      resolutionId: resolution!.id,
+      selectionSource: effective.selectionSource,
+      sectionsSupplied: describeDevOpsSuppliedSections(projection),
+      contentAvailable: hasDevOpsBlueprintContent(projection),
+    };
+
+    return { text, source };
+  } catch (error) {
+    console.error(
+      '[BuildersDB Context] buildDevOpsBlueprintGuidance failed, continuing without Blueprint context:',
+      error,
+    );
+    return null;
+  }
+}
+
+/**
  * Best-effort, fire-and-forget: records WHY a role's context looked the way it did (see
  * requirement #3/#4, "Context Source Traceability"/"Context Explanation"). Never awaited
  * by `buildRoleContextBlock` — a failure here must never affect the AI generation it's
@@ -927,14 +1039,16 @@ export async function buildRoleContextBlock(
     const { roleOutputs, tasks } = await getContextForRole(projectId, roleKey);
 
     /*
-     * Sprint 63/64/65/66/67 — Blueprint guidance is scoped to exactly the Business Analyst,
+     * Sprint 63/64/65/66/67/68 — Blueprint guidance is scoped to exactly the Business Analyst,
      * Product Owner, Solution Architect, Database Engineer, Backend Engineer, UI/UX Designer,
-     * and Frontend Engineer roles, each via its own dedicated projection (see
-     * blueprintBusinessAnalystProjection.ts / blueprintProductOwnerProjection.ts /
-     * blueprintSolutionArchitectProjection.ts / blueprintDatabaseProjection.ts /
-     * blueprintBackendProjection.ts / blueprintUiUxProjection.ts / blueprintFrontendProjection.ts)
-     * — every other role's call to this function (QA, DevOps) is unaffected, per each sprint's
-     * "update only this one generation path" brief.
+     * Frontend Engineer, QA Engineer, and DevOps Engineer roles — every pipeline role now has
+     * its own dedicated projection (see blueprintBusinessAnalystProjection.ts /
+     * blueprintProductOwnerProjection.ts / blueprintSolutionArchitectProjection.ts /
+     * blueprintDatabaseProjection.ts / blueprintBackendProjection.ts /
+     * blueprintUiUxProjection.ts / blueprintFrontendProjection.ts / blueprintQaProjection.ts /
+     * blueprintDevOpsProjection.ts). As of Sprint 68 there is no remaining pipeline role that
+     * falls through to `null` here — an unrecognized `roleKey` (outside the pipeline entirely)
+     * still does.
      */
     const blueprintGuidance =
       roleKey === ARTIFACT_TYPES.REQUIREMENTS_DRAFT
@@ -951,7 +1065,11 @@ export async function buildRoleContextBlock(
                   ? await buildUIUXBlueprintGuidance(projectId)
                   : roleKey === ARTIFACT_TYPES.FRONTEND_DRAFT
                     ? await buildFrontendBlueprintGuidance(projectId)
-                    : null;
+                    : roleKey === ARTIFACT_TYPES.QA_DRAFT
+                      ? await buildQaBlueprintGuidance(projectId)
+                      : roleKey === ARTIFACT_TYPES.DEVOPS_DRAFT
+                        ? await buildDevOpsBlueprintGuidance(projectId)
+                        : null;
 
     if (roleOutputs.length === 0 && tasks.length === 0 && !projectPromptText && !blueprintGuidance) {
       return '';
