@@ -26,6 +26,7 @@ import { reviewEngine } from '~/lib/projects/reviewEngine';
 import { checkBuildersDbConnection } from '~/lib/builders-db/client';
 import { useDiscoveryIntelligence } from '~/lib/hooks/useDiscoveryIntelligence';
 import { BusinessDiscoveryCard } from './BusinessDiscoveryCard';
+import { BlueprintRecommendationCard } from './BlueprintRecommendationCard';
 import {
   ARTIFACT_TYPES,
   getLatestArtifact,
@@ -866,6 +867,17 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                               */}
                               <div className="mb-5">
                                 <BusinessDiscoveryCard state={discoveryIntelligence} />
+                              </div>
+
+                              {/*
+                                Sprint 62 — Blueprint Recommendation & Selection. Advisory only:
+                                reads/writes `builders_blueprint_resolutions` via
+                                `useBlueprintRecommendation`, never `project.blueprintId` — see
+                                that hook's own header comment for why. Renders nothing until
+                                Business Discovery above has something to recommend from.
+                              */}
+                              <div className="mb-5">
+                                <BlueprintRecommendationCard projectId={project.id} discovery={discoveryIntelligence} />
                               </div>
 
                               {!requirementsCaptured ? (
