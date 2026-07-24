@@ -1,12 +1,44 @@
-import type { MouseEvent } from 'react';
+import { useState, type MouseEvent } from 'react';
+import { differenceInCalendarDays, format, isToday, isYesterday } from 'date-fns';
 import { classNames } from '~/utils/classNames';
 import type { Project } from '~/lib/stores/projects';
-import { getProjectTypeDefinition } from '~/lib/project-types/projectTypeRegistry';
+import { ConfirmationDialog } from '~/components/ui/Dialog';
 
 interface ProjectListItemProps {
   project: Project;
   onClick: () => void;
   onDelete: (projectId: string) => void;
+}
+
+/**
+ * Sprint 58 UI cleanup — replaces the "Builders Software Factory" project-type subtitle
+ * (redundant now that Quick Build is frozen/no longer created) with a lightweight, glanceable
+ * created-date label. Mirrors the relative-date convention `date-binning.ts` already uses for
+ * chat history ("Today"/"Yesterday"), extended with "N days ago" for the past week and falling
+ * back to an absolute "24 Jul 2026"-style date beyond that, per this sprint's stated format.
+ */
+function formatProjectCreatedDate(createdAt: string): string {
+  const date = new Date(createdAt);
+
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  if (isToday(date)) {
+    return 'Today';
+  }
+
+  if (isYesterday(date)) {
+    return 'Yesterday';
+  }
+
+  const daysAgo = differenceInCalendarDays(new Date(), date);
+
+  if (daysAgo > 0 && daysAgo < 7) {
+    return `${daysAgo} days ago`;
+  }
+
+  return format(date, 'd MMM yyyy');
 }
 
 /*
@@ -26,15 +58,18 @@ const COLOR_CLASSES: Record<string, { bg: string; ring: string }> = {
 
 export function ProjectListItem({ project, onClick, onDelete }: ProjectListItemProps) {
   const colorClasses = COLOR_CLASSES[project.color] || COLOR_CLASSES.purple;
-  const projectType = getProjectTypeDefinition(project.projectType);
+  const createdLabel = formatProjectCreatedDate(project.createdAt);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
 
   const handleDeleteClick = (event: MouseEvent<HTMLButtonElement>) => {
     // Never let the delete click also trigger the row's own onClick (which would open the project).
     event.stopPropagation();
+    setIsDeleteConfirmOpen(true);
+  };
 
-    if (window.confirm('Delete this project? This cannot be undone.')) {
-      onDelete(project.id);
-    }
+  const handleConfirmDelete = () => {
+    setIsDeleteConfirmOpen(false);
+    onDelete(project.id);
   };
 
   return (
@@ -61,9 +96,9 @@ export function ProjectListItem({ project, onClick, onDelete }: ProjectListItemP
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 min-w-0">
             <div className="text-[13px] font-medium text-bolt-elements-textPrimary truncate">{project.name}</div>
-            <span className="text-[10px] text-bolt-elements-textTertiary shrink-0">
-              {projectType.icon} {projectType.displayName}
-            </span>
+            {createdLabel && (
+              <span className="text-[10px] text-bolt-elements-textTertiary/70 shrink-0">{createdLabel}</span>
+            )}
           </div>
           {project.description && (
             <div className="text-xs text-bolt-elements-textTertiary truncate">{project.description}</div>
@@ -82,6 +117,17 @@ export function ProjectListItem({ project, onClick, onDelete }: ProjectListItemP
       >
         <span className="i-ph:trash w-3.5 h-3.5" />
       </button>
+
+      <ConfirmationDialog
+        isOpen={isDeleteConfirmOpen}
+        onClose={() => setIsDeleteConfirmOpen(false)}
+        onConfirm={handleConfirmDelete}
+        title="Delete Project"
+        description={`Are you sure you want to delete "${project.name}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="destructive"
+      />
     </div>
   );
 }

@@ -1,3 +1,5 @@
+import type { BusinessUnderstandingModel } from '~/lib/projects/requirementsSession';
+
 /**
  * Project Knowledge — Phase 2 Sprint 9.
  *
@@ -210,4 +212,88 @@ export function isRequirementsCaptured(knowledge: ProjectKnowledge | undefined):
     hasText(knowledge.technicalPreferences) ||
     hasText(knowledge.notes)
   );
+}
+
+/**
+ * Sprint 58 — Business Knowledge Completion.
+ *
+ * The single bridge every non-Form discovery method (Interview, Document Import) uses to reach
+ * `project.projectKnowledge` — the field `businessAnalystEngine.ts` (and every other AI role
+ * engine that calls `getProjectKnowledge(project)`) actually reads. The Business Understanding
+ * Model (`requirementsSession.ts`) is the durable source of truth Discovery writes to regardless
+ * of mode; this function is a read-only projection of it into the legacy `ProjectKnowledge` shape
+ * so nothing downstream needs to change to see Interview/Document-derived facts.
+ *
+ * Only includes a key when the model actually has a non-empty value for it — the caller
+ * (`updateProjectKnowledge`, a shallow merge) must never overwrite a previously-set field with
+ * "nothing new learned this turn." Array-shaped Business Understanding sections are copied
+ * wholesale (never appended) because the model itself already accumulates each turn's facts into
+ * the same running list (`patchGenerator.ts`'s merge-not-replace contract) — this function is a
+ * pure snapshot of "what's known now," not an incremental delta.
+ *
+ * `businessConstraints` (the one Business Understanding dimension that conflates payments,
+ * compliance, and shipping into a single list — see `discoveryAgent.ts`'s
+ * `DIMENSION_TARGET_SECTION`) is mapped into `complianceNeeds` rather than split three ways: the
+ * model has no sub-categorization to split on, and `ProjectKnowledge` is read by the Business
+ * Analyst as prose context, not a strict schema, so an approximate bucket is sufficient here.
+ */
+export function businessUnderstandingModelToKnowledgePatch(
+  model: BusinessUnderstandingModel,
+): Partial<ProjectKnowledge> {
+  const identity = model.businessIdentity as Record<string, unknown>;
+  const formSnapshot = identity.formSnapshot as Record<string, unknown> | undefined;
+  const patch: Partial<ProjectKnowledge> = {};
+
+  const identityText = (key: string): string | undefined => {
+    const value = identity[key];
+    return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+  };
+
+  const vision = identityText('vision');
+
+  if (vision) {
+    patch.projectVision = vision;
+  }
+
+  const industry = identityText('industry');
+
+  if (industry) {
+    patch.industry = industry;
+  }
+
+  const businessModel = identityText('businessModel');
+
+  if (businessModel) {
+    patch.businessModel = businessModel;
+  }
+
+  const location = identityText('location');
+
+  if (location) {
+    patch.location = location;
+  }
+
+  if (model.targetUsers.length > 0) {
+    patch.targetUsers = model.targetUsers.join('; ');
+  }
+
+  if (model.functionalRequirements.length > 0) {
+    patch.coreFeatures = model.functionalRequirements;
+  }
+
+  if (model.currentSystems.length > 0) {
+    patch.integrations = model.currentSystems;
+  }
+
+  if (model.businessConstraints.length > 0) {
+    patch.complianceNeeds = model.businessConstraints;
+  }
+
+  const technicalPreferences = formSnapshot?.technicalPreferences;
+
+  if (typeof technicalPreferences === 'string' && technicalPreferences.trim().length > 0) {
+    patch.technicalPreferences = technicalPreferences;
+  }
+
+  return patch;
 }

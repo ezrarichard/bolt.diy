@@ -4,6 +4,7 @@
  */
 export { runDiscoveryAiEngine } from './discoveryAiEngine';
 export { buildInterviewDiscoveryContext, type InterviewContextInput } from './contextBuilder';
+export { buildDocumentDiscoveryContext, type DocumentContextInput } from './contextBuilder';
 export type {
   CandidateFact,
   Contradiction,

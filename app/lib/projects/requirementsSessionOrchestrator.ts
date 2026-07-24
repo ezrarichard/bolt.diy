@@ -23,10 +23,15 @@ import {
   INTERVIEW_READY_MESSAGE,
   selectNextDimension,
 } from '~/lib/projects/discoveryAgent';
-import { buildInterviewDiscoveryContext, runDiscoveryAiEngine } from '~/lib/projects/discoveryAiEngine';
+import {
+  buildDocumentDiscoveryContext,
+  buildInterviewDiscoveryContext,
+  runDiscoveryAiEngine,
+} from '~/lib/projects/discoveryAiEngine';
 import type { GenerateTextFn } from '~/lib/projects/discoveryAiEngine';
 import type { BusinessUnderstandingModelPatch } from '~/lib/builders-db/requirementsSessionDbTypes';
-import type { ProjectKnowledge } from '~/lib/projects/knowledge';
+import { businessUnderstandingModelToKnowledgePatch, type ProjectKnowledge } from '~/lib/projects/knowledge';
+import { updateProjectKnowledge } from '~/lib/stores/projects';
 import type {
   BusinessUnderstandingModel,
   DiscoveryDimension,
@@ -102,6 +107,24 @@ function runAwaitable(label: string, work: () => Promise<unknown>): Promise<void
   return work()
     .then(() => undefined)
     .catch((error) => console.error(`[RequirementsSessionOrchestrator] ${label} failed:`, error));
+}
+
+/**
+ * Sprint 58 — Business Knowledge Completion. The one call site every discovery-writing function
+ * below (Form, Interview, Document Import) uses to keep `project.projectKnowledge` — the field
+ * `businessAnalystEngine.ts` and every other AI role engine actually reads — in sync with
+ * whatever the Business Understanding Model just learned. This is what makes the Business
+ * Analyst see the same understanding regardless of which discovery method produced it: the model
+ * is the one thing every method writes to, and this is the one bridge every write flows back
+ * through. Best-effort, mirrors `updateProjectKnowledge`'s own fire-and-forget contract — never
+ * awaited, never allowed to fail a discovery turn.
+ */
+function syncProjectKnowledgeFromModel(projectId: string, model: BusinessUnderstandingModel): void {
+  const patch = businessUnderstandingModelToKnowledgePatch(model);
+
+  if (Object.keys(patch).length > 0) {
+    updateProjectKnowledge(projectId, patch);
+  }
 }
 
 /**
@@ -240,6 +263,12 @@ export function recordRequirementsFormSubmission(projectId: string, knowledge: P
     });
 
     await updateRequirementsSession(session.id, { assessmentConfidence: overallConfidence });
+
+    const refreshedModel = await getBusinessUnderstandingModel(session.id);
+
+    if (refreshedModel) {
+      syncProjectKnowledgeFromModel(projectId, refreshedModel);
+    }
   });
 }
 
@@ -506,9 +535,125 @@ export async function recordInterviewAnswer(
       return null;
     }
 
+    syncProjectKnowledgeFromModel(projectId, refreshedModel);
+
     return { session, messages, model: refreshedModel, pendingDimension: nextDimension };
   } catch (error) {
     console.error('[RequirementsSessionOrchestrator] recordInterviewAnswer failed:', error);
+    return null;
+  }
+}
+
+/**
+ * Sprint 58 — Business Knowledge Completion (Document Discovery).
+ *
+ * Document Import's equivalent of `recordRequirementsFormSubmission`/`recordInterviewAnswer` —
+ * same shape, same reuse of the Sprint 50-54 durable foundation and the unchanged Sprint 53/54
+ * engines, generalized to a one-shot "here's a whole document" producer of the same
+ * `BusinessUnderstandingModelPatch` contract. Reuses `getLatestRequirementsSession` — the exact
+ * same lookup Form and Interview already use — so a project's Requirements Session (and the one
+ * Business Understanding Model beneath it) is shared across all three discovery methods; Document
+ * Import never starts its own parallel model (Sprint 58 objective 4: "nothing bypasses it").
+ *
+ * `documentText` is capped at `MAX_DOCUMENT_TEXT_LENGTH` before extraction — a defensive limit on
+ * the one LLM call this function makes, not a product decision about document size; a longer
+ * document just has its tail truncated rather than failing outright.
+ */
+
+const MAX_DOCUMENT_TEXT_LENGTH = 20000;
+
+export interface DocumentImportResult {
+  session: RequirementsSession;
+  model: BusinessUnderstandingModel;
+  acceptedFactCount: number;
+  extractionError?: string;
+}
+
+export async function recordDocumentImport(
+  projectId: string,
+  documentName: string,
+  documentText: string,
+  deps: { generateText: GenerateTextFn },
+): Promise<DocumentImportResult | null> {
+  if (!isBuildersDbAvailable()) {
+    return null;
+  }
+
+  const truncatedText = documentText.slice(0, MAX_DOCUMENT_TEXT_LENGTH);
+
+  try {
+    const session =
+      (await getLatestRequirementsSession(projectId)) ?? (await createRequirementsSession(projectId, 'document'));
+
+    if (!session) {
+      return null;
+    }
+
+    const message = await appendRequirementsSessionMessage(session.id, projectId, {
+      role: 'user',
+      messageType: 'document_input',
+      content: truncatedText,
+      metadata: { documentName },
+    });
+
+    if (!message) {
+      return null;
+    }
+
+    const model = await initializeBusinessUnderstandingModel(session.id, projectId);
+
+    if (!model) {
+      return null;
+    }
+
+    const discoveryContext = buildDocumentDiscoveryContext({
+      projectId,
+      sessionId: session.id,
+      model,
+      documentMessageId: message.id,
+      documentText: truncatedText,
+    });
+
+    const {
+      patch,
+      evidence: factEvidence,
+      extractionError,
+      acceptedFacts,
+    } = await runDiscoveryAiEngine(discoveryContext, deps);
+
+    /* Sprint 57.1, Task 8's "no partial factual patch when extraction fails" rule, reused verbatim from `recordInterviewAnswer` — a genuine extraction failure must not silently write a no-op patch as though the document were understood. */
+    if (extractionError) {
+      return { session, model, acceptedFactCount: 0, extractionError };
+    }
+
+    const assessmentResult = runBusinessAssessment(patch);
+    const { assessment, evidence, overallConfidence } = assessmentResult;
+    const { decision, evidence: decisionEvidence } = runDiscoveryDecision(patch, assessmentResult);
+
+    const traceability: TraceabilityReference[] = [...model.traceability, ...factEvidence];
+
+    await updateBusinessUnderstandingModel(session.id, {
+      ...patch,
+      assessment,
+      decision,
+      traceability: [...traceability, ...evidence, ...decisionEvidence],
+    });
+
+    await updateRequirementsSession(session.id, { assessmentConfidence: overallConfidence });
+
+    const refreshedModel = await getBusinessUnderstandingModel(session.id);
+
+    if (!refreshedModel) {
+      return null;
+    }
+
+    syncProjectKnowledgeFromModel(projectId, refreshedModel);
+
+    const refreshedSession = (await getRequirementsSession(session.id)) ?? session;
+
+    return { session: refreshedSession, model: refreshedModel, acceptedFactCount: acceptedFacts.length };
+  } catch (error) {
+    console.error('[RequirementsSessionOrchestrator] recordDocumentImport failed:', error);
     return null;
   }
 }
@@ -518,4 +663,5 @@ export const requirementsSessionOrchestrator = {
   recordRequirementsFormSubmission,
   startOrResumeInterview,
   recordInterviewAnswer,
+  recordDocumentImport,
 };

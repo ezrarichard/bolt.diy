@@ -35,6 +35,7 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '~/components/ui/Tabs';
 import { ProjectRequirementsDialog } from './ProjectRequirementsDialog';
 import { InterviewChatDialog } from './InterviewChatDialog';
+import { ProjectDocumentImportDialog } from './ProjectDocumentImportDialog';
 import { ProjectTaskCard } from './ProjectTaskCard';
 import { TaskDetailsDialog } from './TaskDetailsDialog';
 import { ReviewQueueCard } from './ReviewComponents';
@@ -453,6 +454,9 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
 
   /** Sprint 56 — Interview Mode Foundation. Sibling to `isRequirementsDialogOpen`, same open/onClose/onSaved contract (UX spec §10: switching between modes should feel like changing the view of one thing, not switching products). */
   const [isInterviewDialogOpen, setIsInterviewDialogOpen] = useState(false);
+
+  /** Sprint 58 — Business Knowledge Completion (Document Discovery). Third sibling to `isRequirementsDialogOpen`/`isInterviewDialogOpen`, same contract. */
+  const [isDocumentImportDialogOpen, setIsDocumentImportDialogOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<DashboardTabId>('overview');
 
@@ -891,6 +895,15 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                       <span className="inline-block i-ph:chat-circle-dots h-4 w-4" />
                                       <span className="text-sm font-medium">Talk it through instead</span>
                                     </button>
+                                    {/* Sprint 58 — Document Import entry point, third Discovery method alongside Form/Interview. */}
+                                    <button
+                                      type="button"
+                                      onClick={() => setIsDocumentImportDialogOpen(true)}
+                                      className="flex gap-2 items-center bg-transparent border border-bolt-elements-borderColor text-bolt-elements-textSecondary hover:text-purple-600 dark:hover:text-purple-300 hover:border-purple-500/40 rounded-lg px-4 py-2 transition-colors"
+                                    >
+                                      <span className="inline-block i-ph:file-arrow-up h-4 w-4" />
+                                      <span className="text-sm font-medium">Import a document</span>
+                                    </button>
                                   </div>
                                   <div className="mt-4 w-full max-w-2xl mx-auto text-left">
                                     <RequirementsDraftPanel
@@ -940,6 +953,15 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                     >
                                       <span className="inline-block i-ph:chat-circle-dots h-4 w-4" />
                                       <span className="text-sm font-medium">Continue via Interview</span>
+                                    </button>
+                                    {/* Sprint 58 — Document Import remains reachable the same way, for adding more source material later. */}
+                                    <button
+                                      type="button"
+                                      onClick={() => setIsDocumentImportDialogOpen(true)}
+                                      className="flex gap-2 items-center bg-transparent border border-bolt-elements-borderColor text-bolt-elements-textSecondary hover:text-purple-600 dark:hover:text-purple-300 hover:border-purple-500/40 rounded-lg px-4 py-2 transition-colors"
+                                    >
+                                      <span className="inline-block i-ph:file-arrow-up h-4 w-4" />
+                                      <span className="text-sm font-medium">Import a document</span>
                                     </button>
                                   </div>
                                   <div className="mt-4 pt-4 border-t border-bolt-elements-borderColor/30">
@@ -1521,6 +1543,15 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
         onClose={() => setIsInterviewDialogOpen(false)}
         onSaved={() => setDiscoveryRefreshKey((key) => key + 1)}
         onSwitchToForm={() => setIsRequirementsDialogOpen(true)}
+      />
+
+      <ProjectDocumentImportDialog
+        project={project}
+        open={isDocumentImportDialogOpen}
+        onClose={() => setIsDocumentImportDialogOpen(false)}
+        onSaved={() => setDiscoveryRefreshKey((key) => key + 1)}
+        onSwitchToForm={() => setIsRequirementsDialogOpen(true)}
+        onSwitchToInterview={() => setIsInterviewDialogOpen(true)}
       />
 
       <TaskDetailsDialog
