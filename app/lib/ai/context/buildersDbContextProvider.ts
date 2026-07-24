@@ -13,6 +13,15 @@ import {
   type ProjectArtifact,
 } from '~/lib/projects/artifacts';
 import { ROLE_ARTIFACT_CHAIN } from '~/lib/projects/collaborationContext';
+import { blueprintEngine } from '~/lib/blueprints';
+import { getLatestBlueprintResolution } from '~/lib/projects/blueprintResolutionService';
+import {
+  resolveEffectiveBlueprintSelection,
+  projectBlueprintForBusinessAnalyst,
+  describeSuppliedSections,
+  hasBusinessAnalystBlueprintContent,
+  formatBlueprintGuidanceSection,
+} from '~/lib/blueprints/blueprintBusinessAnalystProjection';
 
 /**
  * BuildersDB AI Context Provider — Sprint 35 (AI Role Context Retrieval from
@@ -424,6 +433,57 @@ async function buildBusinessUnderstandingSources(projectId: string): Promise<Con
 }
 
 /**
+ * Sprint 63 (Blueprint-Aware Business Analysis) — the effective (selected, per
+ * `resolveEffectiveBlueprintSelection`) Blueprint's Business-Analyst-focused guidance text plus
+ * its own traceability source, or `null` when there's nothing to add: no resolution has ever
+ * been recorded for this project (Sprint 61/62 haven't run yet, or the project predates them),
+ * or the effective Blueprint id no longer resolves via `blueprintEngine.getBlueprint()` (it was
+ * hydrated from a BuildersDB row that's since been deprecated/removed, or hydration itself
+ * hasn't completed — see engine.ts's own `activeBlueprints` fallback). Either case is a normal,
+ * safe "nothing to add" outcome, not an error — this function never throws, so a Blueprint
+ * lookup failure can never take down the rest of `buildRoleContextBlock`'s context assembly.
+ *
+ * Deliberately only ever called for `ARTIFACT_TYPES.REQUIREMENTS_DRAFT` (the Business Analyst) —
+ * see this file's only caller, `buildRoleContextBlock` — per the Sprint 63 brief's "update only
+ * the Business Analyst generation path."
+ */
+async function buildBlueprintGuidance(projectId: string): Promise<{ text: string; source: ContextTraceSource } | null> {
+  try {
+    const resolution = await getLatestBlueprintResolution(projectId);
+    const effective = resolveEffectiveBlueprintSelection(resolution);
+
+    if (!effective) {
+      return null;
+    }
+
+    const blueprint = blueprintEngine.getBlueprint(effective.blueprintId);
+
+    if (!blueprint) {
+      return null;
+    }
+
+    const projection = projectBlueprintForBusinessAnalyst(blueprint.content);
+    const text = formatBlueprintGuidanceSection(blueprint.name, effective.selectionSource, projection);
+
+    const source: ContextTraceSource = {
+      type: 'blueprint-resolution',
+      label: `Blueprint: ${blueprint.name} (${effective.selectionSource === 'manual_override' ? 'manual override' : 'recommended'})`,
+      blueprintId: blueprint.id,
+      blueprintVersion: blueprint.version,
+      resolutionId: resolution!.id,
+      selectionSource: effective.selectionSource,
+      sectionsSupplied: describeSuppliedSections(projection),
+      contentAvailable: hasBusinessAnalystBlueprintContent(projection),
+    };
+
+    return { text, source };
+  } catch (error) {
+    console.error('[BuildersDB Context] buildBlueprintGuidance failed, continuing without Blueprint context:', error);
+    return null;
+  }
+}
+
+/**
  * Best-effort, fire-and-forget: records WHY a role's context looked the way it did (see
  * requirement #3/#4, "Context Source Traceability"/"Context Explanation"). Never awaited
  * by `buildRoleContextBlock` — a failure here must never affect the AI generation it's
@@ -435,8 +495,13 @@ async function recordContextTrace(
   roleOutputs: ProjectArtifact[],
   tasks: TaskContextEntry[],
   projectPromptText: string | undefined,
+  blueprintSource?: ContextTraceSource,
 ): Promise<void> {
   const sources = buildContextTraceSources(roleOutputs, tasks, projectPromptText);
+
+  if (blueprintSource) {
+    sources.push(blueprintSource);
+  }
 
   if (roleKey === ARTIFACT_TYPES.REQUIREMENTS_DRAFT) {
     sources.push(...(await buildBusinessUnderstandingSources(projectId)));
@@ -512,7 +577,14 @@ export async function buildRoleContextBlock(
   try {
     const { roleOutputs, tasks } = await getContextForRole(projectId, roleKey);
 
-    if (roleOutputs.length === 0 && tasks.length === 0 && !projectPromptText) {
+    /*
+     * Sprint 63 — Blueprint guidance is Business-Analyst-only, per the brief's "update only the
+     * Business Analyst generation path"; every other role's call to this function is unaffected.
+     */
+    const blueprintGuidance =
+      roleKey === ARTIFACT_TYPES.REQUIREMENTS_DRAFT ? await buildBlueprintGuidance(projectId) : null;
+
+    if (roleOutputs.length === 0 && tasks.length === 0 && !projectPromptText && !blueprintGuidance) {
       return '';
     }
 
@@ -530,13 +602,17 @@ export async function buildRoleContextBlock(
 
     sections.push(`### Relevant Tasks\n${formatTasksForContext(tasks)}`);
 
+    if (blueprintGuidance) {
+      sections.push(blueprintGuidance.text);
+    }
+
     sections.push(
       '### Important Instruction\nUse this context as the source of truth. Do not contradict approved outputs unless clearly explaining why.',
     );
 
     logContextRetrievedActivity(projectId, roleKey, roleOutputs.length, tasks.length);
-    recordContextTrace(projectId, roleKey, roleOutputs, tasks, projectPromptText).catch((error) =>
-      console.error('[BuildersDB Context] recordContextTrace failed:', error),
+    recordContextTrace(projectId, roleKey, roleOutputs, tasks, projectPromptText, blueprintGuidance?.source).catch(
+      (error) => console.error('[BuildersDB Context] recordContextTrace failed:', error),
     );
 
     return sections.join('\n\n');

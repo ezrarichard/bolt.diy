@@ -397,12 +397,29 @@ export function fromProjectMemberRow(row: BuildersDbProjectMemberRow): ProjectMe
  * this type, and point at (never copy) a section of `builders_business_understanding_models`.
  */
 export interface ContextTraceSource {
-  type: 'role-output' | 'task' | 'original-prompt' | 'business-understanding-section';
+  type: 'role-output' | 'task' | 'original-prompt' | 'business-understanding-section' | 'blueprint-resolution';
   label: string;
   roleKey?: string;
   version?: number;
   sectionKey?: string;
   sessionId?: string;
+
+  /*
+   * Sprint 63 (Blueprint-Aware Business Analysis) — populated only for `type:
+   * 'blueprint-resolution'` sources. `blueprintId` is the effective (selected) Blueprint's
+   * slug, `blueprintVersion` its BuildersDB row version (absent for the hardcoded registry
+   * fallback — see ProjectBlueprint.version's own comment), `resolutionId` the
+   * `builders_blueprint_resolutions` row this was read from, `selectionSource` whether the
+   * effective Blueprint was the engine's own recommendation or a manual override, and
+   * `sectionsSupplied`/`contentAvailable` what the Business Analyst projection actually found
+   * (see blueprintBusinessAnalystProjection.ts) — auditable without re-deriving any of it.
+   */
+  blueprintId?: string;
+  blueprintVersion?: number;
+  resolutionId?: string;
+  selectionSource?: 'recommendation' | 'manual_override';
+  sectionsSupplied?: string[];
+  contentAvailable?: boolean;
 }
 
 /** builders_context_traces row. */
