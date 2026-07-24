@@ -1,12 +1,35 @@
 # Builders Design System
 
-**Sprint 69 — Design System Foundation.** This document describes what actually exists in the
-codebase today: real tokens, real components, real adoption sites. Nothing here is aspirational
-— if a component or token isn't listed, it hasn't been built yet.
+**Sprint 69 — Design System Foundation. Sprint 70 — Legacy Dark-Theme Token Remediation.** This
+document describes what actually exists in the codebase today: real tokens, real components,
+real adoption sites. Nothing here is aspirational — if a component or token isn't listed, it
+hasn't been built yet.
 
-Status: **Foundation established, limited adoption proven.** Most of the app still uses its
-pre-existing styling and is completely unaffected by this sprint — see [Remaining Adoption
+Status: **Foundation established, limited adoption proven, legacy `app/components/ui/**` token
+layer corrected and guarded against regression.** Most of the app still uses its pre-existing
+styling and is completely unaffected by these sprints — see [Remaining Adoption
 Work](#remaining-adoption-work).
+
+## 0. Legacy Token Rule (Sprint 70)
+
+**Rule: a `-dark`-suffixed `bolt-elements-*` class is always invalid in this codebase and must
+never be introduced.** This app's theming is CSS-custom-property + `[data-theme]`-attribute
+based (`app/styles/variables.scss`, `uno.config.ts`'s `presetUno({ dark: { light:
+'[data-theme="light"]', dark: '[data-theme="dark"]' } })`) — a token like
+`bg-bolt-elements-background-depth-1` already resolves correctly in both themes on its own.
+There is no parallel `-dark`-suffixed token family and there never has been one; any class
+shaped like `text-bolt-elements-textPrimary-dark` compiles (UnoCSS silently emits nothing for an
+unknown utility) but resolves to no CSS, exposing whatever the browser's native surface/text
+color is underneath.
+
+Sprint 69's audit found roughly 175 such occurrences, concentrated in `app/components/ui/**`
+(plus a handful of dependent Bolt-token bugs: bare `bolt-elements-background`/`-border`/`-ring`
+references with no matching CSS var, and one invalid `background-depth-0`). Sprint 70 fixed
+every occurrence found in `app/components/ui/**` and added a permanent regression guard —
+see §18.
+
+**A handful of files outside `app/components/ui/**` still have this bug** (found but not fixed
+in Sprint 70, since it scoped strictly to the shared primitives directory) — see §17.
 
 ---
 
@@ -408,18 +431,39 @@ No component in this sprint hardcodes one density — every spacing/size prop is
 
 The vast majority of the app — Sidebar (93 files), Chat, Workbench, the remaining ~90% of
 `ProjectDashboard.tsx`, every other status-color map (`ProjectDashboard.tsx`'s
-`ROADMAP_STATUS_META`, `ProjectTaskCard.tsx`'s `TASK_STATUS_META`,
-`app/components/ui/StatusIndicator.tsx`), every existing `app/components/ui/*` primitive
-(including the ones with dead `-dark`-suffixed classes found in the audit), the Business/
-Engineering tab content beyond the hero, forms, modals, and popovers elsewhere in the app — is
-**untouched and continues to use its pre-existing styling**, exactly as the sprint's scope
-requires.
+`ROADMAP_STATUS_META`, `ProjectTaskCard.tsx`'s `TASK_STATUS_META`), the Business/Engineering tab
+content beyond the hero, forms, modals, and popovers elsewhere in the app — is **untouched and
+continues to use its pre-existing styling**, exactly as both sprints' scope required.
+
+**Sprint 70 fixed the dead `-dark`-suffixed tokens in `app/components/ui/**` (see §0, §18) — that
+item from Sprint 69's list is done.** Four files outside that directory still have the same bug
+(found during Sprint 70's audit but out of its stated scope, which was `app/components/ui/**`
+only): `app/components/@settings/tabs/gitlab/components/GitLabAuthDialog.tsx`,
+`app/components/@settings/tabs/mcp/McpTab.tsx`, `app/components/deploy/GitLabDeploymentDialog.tsx`,
+`app/components/deploy/GitHubDeploymentDialog.tsx`.
 
 Future sprints could:
-- Fix the ~175 dead `-dark`-suffixed class references and missing `background`/`border`/`ring`
-  token shorthands found in `app/components/ui/*` (a real bug, but out of this sprint's
-  "foundation, not a rewrite" scope).
-- Migrate the other four status-color maps onto `BUILDERS_STATUS_META`.
+- Fix the 4 remaining dead `-dark`-suffixed occurrences outside `app/components/ui/**` (above).
+- Migrate the other status-color maps onto `BUILDERS_STATUS_META`.
 - Build the remaining suggested primitives (`BuildersTextarea`, `BuildersSelect`, `BuildersTabs`,
   `BuildersEmptyState`, ...) as real repeated patterns are identified.
 - Consider a lightweight internal showcase route once/if the team wants one (§14).
+
+## 18. Legacy Token Validation Guard (Sprint 70)
+
+`app/components/ui/legacyTokenGuard.ts` is a pure, synchronous scanner
+(`findInvalidLegacyTokenReferences(source: string)`) checking source text against 5 known-invalid
+patterns: `-dark`-suffixed `bolt-elements-*` tokens, bare `bolt-elements-background` (no
+`-depth-N`), bare `bolt-elements-border` (not `-borderColor`), `bolt-elements-ring` (never
+defined), and `background-depth-0` (only 1–4 exist).
+
+`app/components/ui/legacyTokenGuard.spec.ts` runs it two ways, as part of the normal
+`npm test` suite:
+1. **Pattern self-tests** — synthetic bad/good strings, proving each pattern catches what it
+   should and doesn't false-positive on valid Bolt/Builders/plain-Tailwind classes.
+2. **Real source scan** — globs every `.ts`/`.tsx` file in `app/components/ui/**` (excluding
+   specs and the guard module itself) and asserts zero unresolved matches outside
+   `LEGACY_TOKEN_ALLOWLIST` (empty today — every Sprint 70 finding was fixed, not allowlisted).
+
+If a future change reintroduces a `-dark`-suffixed or otherwise invalid legacy token anywhere in
+`app/components/ui/**`, this test fails with the exact file, line, and matched string.

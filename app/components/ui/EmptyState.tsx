@@ -87,7 +87,7 @@ export function EmptyState({
     <div
       className={classNames(
         'flex flex-col items-center justify-center',
-        'text-bolt-elements-textSecondary dark:text-bolt-elements-textSecondary-dark',
+        'text-bolt-elements-textSecondary',
         'bg-bolt-elements-background-depth-2 dark:bg-bolt-elements-background-depth-3 rounded-lg',
         styles.container,
         className,
@@ -100,13 +100,7 @@ export function EmptyState({
           styles.icon.container,
         )}
       >
-        <span
-          className={classNames(
-            icon,
-            styles.icon.size,
-            'text-bolt-elements-textTertiary dark:text-bolt-elements-textTertiary-dark',
-          )}
-        />
+        <span className={classNames(icon, styles.icon.size, 'text-bolt-elements-textTertiary')} />
       </div>
 
       {/* Title */}
@@ -114,12 +108,7 @@ export function EmptyState({
 
       {/* Description */}
       {description && (
-        <p
-          className={classNames(
-            'text-bolt-elements-textTertiary dark:text-bolt-elements-textTertiary-dark text-center max-w-xs',
-            styles.description,
-          )}
-        >
+        <p className={classNames('text-bolt-elements-textTertiary text-center max-w-xs', styles.description)}>
           {description}
         </p>
       )}
@@ -133,7 +122,7 @@ export function EmptyState({
                 onClick={onAction}
                 variant="default"
                 size={styles.buttonSize}
-                className="bg-purple-500 hover:bg-purple-600 text-white"
+                className="bg-builders-brand-primary hover:bg-builders-brand-hover text-white"
               >
                 {actionLabel}
               </Button>
