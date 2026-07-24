@@ -28,6 +28,12 @@ import {
   hasProductOwnerBlueprintContent,
   formatProductOwnerBlueprintGuidanceSection,
 } from '~/lib/blueprints/blueprintProductOwnerProjection';
+import {
+  projectBlueprintForSolutionArchitect,
+  describeSuppliedSections as describeSolutionArchitectSuppliedSections,
+  hasSolutionArchitectBlueprintContent,
+  formatSolutionArchitectBlueprintGuidanceSection,
+} from '~/lib/blueprints/blueprintSolutionArchitectProjection';
 
 /**
  * BuildersDB AI Context Provider — Sprint 35 (AI Role Context Retrieval from
@@ -543,6 +549,58 @@ async function buildProductOwnerBlueprintGuidance(
 }
 
 /**
+ * Sprint 65 (Blueprint-Aware Solution Architecture) — the Solution Architect's sibling of
+ * `buildBlueprintGuidance`/`buildProductOwnerBlueprintGuidance` above: same effective-selection
+ * resolution and the same never-throws/safe-fallback discipline, but projects and formats the
+ * Blueprint through `blueprintSolutionArchitectProjection.ts`'s dedicated 10-section,
+ * architecture-focused view instead — a deliberately separate projection per the Sprint 65
+ * brief, not a reuse of Sprint 63's or Sprint 64's.
+ *
+ * Deliberately only ever called for `ARTIFACT_TYPES.ARCHITECTURE_DRAFT` — see this file's only
+ * caller, `buildRoleContextBlock`.
+ */
+async function buildSolutionArchitectBlueprintGuidance(
+  projectId: string,
+): Promise<{ text: string; source: ContextTraceSource } | null> {
+  try {
+    const resolution = await getLatestBlueprintResolution(projectId);
+    const effective = resolveEffectiveBlueprintSelection(resolution);
+
+    if (!effective) {
+      return null;
+    }
+
+    const blueprint = blueprintEngine.getBlueprint(effective.blueprintId);
+
+    if (!blueprint) {
+      return null;
+    }
+
+    const projection = projectBlueprintForSolutionArchitect(blueprint.content);
+    const text = formatSolutionArchitectBlueprintGuidanceSection(blueprint.name, effective.selectionSource, projection);
+
+    const source: ContextTraceSource = {
+      type: 'blueprint-resolution',
+      label: `Blueprint: ${blueprint.name} (${effective.selectionSource === 'manual_override' ? 'manual override' : 'recommended'})`,
+      blueprintId: blueprint.id,
+      blueprintVersion: blueprint.version,
+      resolutionId: resolution!.id,
+      selectionSource: effective.selectionSource,
+      sectionsSupplied: describeSolutionArchitectSuppliedSections(projection),
+      contentAvailable: hasSolutionArchitectBlueprintContent(projection),
+    };
+
+    return { text, source };
+  } catch (error) {
+    console.error(
+      '[BuildersDB Context] buildSolutionArchitectBlueprintGuidance failed, continuing without Blueprint context:',
+      error,
+    );
+    return null;
+  }
+}
+
+/**
  * Best-effort, fire-and-forget: records WHY a role's context looked the way it did (see
  * requirement #3/#4, "Context Source Traceability"/"Context Explanation"). Never awaited
  * by `buildRoleContextBlock` — a failure here must never affect the AI generation it's
@@ -637,9 +695,10 @@ export async function buildRoleContextBlock(
     const { roleOutputs, tasks } = await getContextForRole(projectId, roleKey);
 
     /*
-     * Sprint 63/64 — Blueprint guidance is scoped to exactly the Business Analyst and Product
-     * Owner roles, each via its own dedicated projection (see blueprintBusinessAnalystProjection.ts
-     * / blueprintProductOwnerProjection.ts) — every other role's call to this function is
+     * Sprint 63/64/65 — Blueprint guidance is scoped to exactly the Business Analyst, Product
+     * Owner, and Solution Architect roles, each via its own dedicated projection (see
+     * blueprintBusinessAnalystProjection.ts / blueprintProductOwnerProjection.ts /
+     * blueprintSolutionArchitectProjection.ts) — every other role's call to this function is
      * unaffected, per each sprint's "update only this one generation path" brief.
      */
     const blueprintGuidance =
@@ -647,7 +706,9 @@ export async function buildRoleContextBlock(
         ? await buildBlueprintGuidance(projectId)
         : roleKey === ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT
           ? await buildProductOwnerBlueprintGuidance(projectId)
-          : null;
+          : roleKey === ARTIFACT_TYPES.ARCHITECTURE_DRAFT
+            ? await buildSolutionArchitectBlueprintGuidance(projectId)
+            : null;
 
     if (roleOutputs.length === 0 && tasks.length === 0 && !projectPromptText && !blueprintGuidance) {
       return '';
