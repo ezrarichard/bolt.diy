@@ -1,11 +1,10 @@
 import { useState } from 'react';
 import { classNames } from '~/utils/classNames';
-import { getProjectArtifacts, type Project } from '~/lib/stores/projects';
-import { ARTIFACT_STATUS_META, formatArtifactTimestamp, getLatestArtifact } from '~/lib/projects/artifacts';
+import type { Project } from '~/lib/stores/projects';
+import { ARTIFACT_STATUS_META } from '~/lib/projects/artifacts';
 import {
   projectManagerEngine,
   type ArtifactReadinessStatus,
-  type EngineeringStageId,
   type EngineeringStageStatus,
 } from '~/lib/projects/projectManagerEngine';
 import { AUTO_ENGINEERING_ESTIMATED_SECONDS } from '~/lib/projects/autoEngineeringEngine';
@@ -13,6 +12,9 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '~/component
 
 interface ProjectManagerPanelProps {
   project: Project;
+
+  /** Sprint UX-2 — jumps to whichever workflow tab is next-actionable; the hero's "Continue" button only renders when the caller supplies this. Purely a navigation shortcut — never approves, generates, or writes anything itself. */
+  onContinue?: () => void;
 }
 
 /** Extends ARTIFACT_STATUS_META (draft/approved/discarded) with the one status it has no concept of — an artifact that was never generated. */
@@ -24,22 +26,6 @@ const STAGE_STATUS_META: Record<ArtifactReadinessStatus, { label: string; classN
   draft: ARTIFACT_STATUS_META.draft,
   discarded: ARTIFACT_STATUS_META.discarded,
   approved: ARTIFACT_STATUS_META.approved,
-};
-
-/**
- * Sprint 44.1 — the human name a business user should see for the engineer currently
- * working, instead of the internal stage label ("Architecture", "UI/UX Design"). Keyed by
- * the same `EngineeringStageId` the Project Manager engine already emits.
- */
-const ENGINEER_BY_STAGE: Record<EngineeringStageId, string> = {
-  requirements: 'Business Analyst',
-  architecture: 'Solution Architect',
-  database: 'Database Engineer',
-  uiux: 'UI/UX Designer',
-  backend: 'Backend Engineer',
-  frontend: 'Frontend Engineer',
-  qa: 'QA Engineer',
-  devops: 'DevOps Engineer',
 };
 
 function getHealthMeta(score: number): { label: string; className: string } {
@@ -88,16 +74,43 @@ function StagePill({ stage }: StagePillProps) {
   );
 }
 
-/** Sprint 44.1 — one business-friendly summary stat in the Project Status hero. */
-function StatusMetric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+/** Sprint UX-2 — one stat card in the "Current Stage" hero. A subtle hover lift + icon replace the old plain label/value pair from Sprint 44.1's StatusMetric. `wide` gives a card two grid columns at the `lg` breakpoint — used for Next Action, whose value is a full sentence and truncates too aggressively at one column's width. */
+function StatusMetric({
+  label,
+  value,
+  icon,
+  accent,
+  wide,
+}: {
+  label: string;
+  value: string;
+  icon: string;
+  accent?: boolean;
+  wide?: boolean;
+}) {
   return (
-    <div className="rounded-lg border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-3 bg-bolt-elements-background-depth-2/60">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1">
-        {label}
+    <div
+      className={classNames(
+        'rounded-xl border p-3.5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md',
+        wide && 'lg:col-span-2',
+        accent
+          ? 'border-purple-500/30 bg-purple-50/60 dark:bg-purple-500/[0.07]'
+          : 'border-bolt-elements-borderColor/40 dark:border-white/[0.06] bg-bolt-elements-background-depth-2/60',
+      )}
+    >
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <span
+          className={classNames(
+            icon,
+            'w-3.5 h-3.5 shrink-0',
+            accent ? 'text-purple-500' : 'text-bolt-elements-textTertiary',
+          )}
+        />
+        <div className="text-[10px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary">{label}</div>
       </div>
       <div
         className={classNames(
-          'text-sm font-medium truncate',
+          'text-sm font-semibold truncate',
           accent ? 'text-purple-600 dark:text-purple-300' : 'text-bolt-elements-textPrimary',
         )}
       >
@@ -108,20 +121,24 @@ function StatusMetric({ label, value, accent }: { label: string; value: string; 
 }
 
 /**
- * Sprint 23 — the AI Project Manager's live dashboard view, reframed in Sprint 44.1.
+ * Sprint 23 — the AI Project Manager's live dashboard view, reframed in Sprint 44.1, restyled
+ * as the dashboard's hero in Sprint UX-2.
  *
- * The default view is now a calm, business-friendly "Project Status" summary: a positive
- * status line plus Overall Progress / Current AI Engineer / Estimated Time / Last Update /
- * Next. Every engineering diagnostic that used to lead this panel (readiness score, health
- * grade, "Why Not Ready", the stage grid, missing items, warnings, recommendations, and the
- * roadmap/task/review counters) is preserved verbatim inside a "Project details (Advanced)"
- * section, collapsed by default — nothing is removed, only relocated.
+ * The default view is a calm, business-friendly "Current Stage" hero: a status line, a rich
+ * progress bar, and five stat cards (Current Stage / Overall Progress / Estimated Time
+ * Remaining / Approval Required / Next Action) — no AI-role or engine-internal language.
+ * "Current AI Engineer" (Sprint 44.1) is gone from this view entirely; the granular per-role
+ * name only ever appears inside "Project details (Advanced)" below, which still preserves
+ * every engineering diagnostic (readiness score, health grade, "Why Not Ready", the stage
+ * grid, missing items, warnings, recommendations, and the roadmap/task/review counters)
+ * verbatim, collapsed by default.
  *
  * Still a pure read of `projectManagerEngine.analyzeProject()`, recomputed on every render;
- * no AI call, no prompt, no code generation. All the friendlier presentation below is
- * derived in this component from the exact same `health` object — the engine is untouched.
+ * no AI call, no prompt, no code generation. All presentation below (including the new
+ * business-friendly stage naming) is derived in this component from the exact same `health`
+ * object — the engine is untouched.
  */
-export function ProjectManagerPanel({ project }: ProjectManagerPanelProps) {
+export function ProjectManagerPanel({ project, onContinue }: ProjectManagerPanelProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   const health = projectManagerEngine.analyzeProject(project);
@@ -160,45 +177,122 @@ export function ProjectManagerPanel({ project }: ProjectManagerPanelProps) {
       ? '< 1 min'
       : `~${Math.round(estimatedSeconds / 60)} min`;
 
-  const currentEngineer = currentStage ? ENGINEER_BY_STAGE[currentStage.id] : 'All engineers finished';
+  /*
+   * Sprint UX-2 — "Current Stage", not "Current AI Engineer": Business Mode hides which
+   * engineer/role is running — that per-role name (`stage.label`, e.g. "Architecture",
+   * "UI/UX Design") still appears in the Engineering Pipeline grid inside Project
+   * details/Advanced below. Requirements maps to the customer-facing "Business Analysis"
+   * step; every engineering role (architecture..devops) collapses to one "Engineering"
+   * label, since Business Mode has no per-role screen for the customer to land on anyway
+   * (see ProjectDashboard.tsx's Engineering tab).
+   */
+  const currentStageLabel = !currentStage
+    ? 'Complete'
+    : currentStage.id === 'requirements'
+      ? 'Business Analysis'
+      : 'Engineering';
 
-  const artifacts = getProjectArtifacts(project);
-  const lastUpdatedAt = stages
-    .map((stage) => getLatestArtifact(artifacts, stage.artifactType)?.updatedAt)
-    .filter((value): value is string => Boolean(value))
-    .sort()
-    .pop();
-  const lastUpdate = lastUpdatedAt ? formatArtifactTimestamp(lastUpdatedAt) : 'Not started yet';
+  /** Sprint UX-2 — "Approval Required" stat: true exactly when there's a generated draft sitting in front of the customer waiting for a decision (same condition the old "Review your ... work" copy used). */
+  const approvalRequired = currentStage?.status === 'draft';
 
   const nextAction = isComplete
     ? 'Generate your prototype'
     : needsRequirements
       ? 'Add your requirements to begin'
-      : currentStage?.status === 'draft'
-        ? `Review your ${currentEngineer}'s work`
-        : `${currentEngineer} is working on it`;
+      : approvalRequired
+        ? `Review your ${currentStageLabel} output`
+        : `${currentStageLabel} is in progress`;
 
   const statusMessage = isComplete
     ? 'Your product is ready to preview.'
     : needsRequirements
       ? 'Add your requirements so your AI team can start.'
-      : 'Your AI team is building your product.';
-  const statusDotClass = needsRequirements ? 'bg-amber-500' : 'bg-green-500';
+      : approvalRequired
+        ? 'Your review is needed to continue.'
+        : 'Your AI team is building your product.';
+  const statusTone: 'amber' | 'purple' | 'green' = needsRequirements
+    ? 'amber'
+    : approvalRequired
+      ? 'amber'
+      : isComplete
+        ? 'green'
+        : 'purple';
+  const statusDotClass =
+    statusTone === 'amber' ? 'bg-amber-500' : statusTone === 'green' ? 'bg-green-500' : 'bg-purple-500';
+
+  const continueLabel = needsRequirements
+    ? 'Add Your Requirements'
+    : approvalRequired
+      ? 'Review & Approve'
+      : isComplete
+        ? 'Generate Your App'
+        : undefined;
 
   return (
     <div className="space-y-5">
-      {/* Sprint 44.1 — Project Status hero (business-friendly default view) */}
+      {/* Sprint UX-2 — "Current Stage" hero: status line, rich progress bar, stat cards, Continue CTA. */}
       <div>
-        <div className="flex items-center gap-2 mb-3">
-          <span className={classNames('w-2.5 h-2.5 rounded-full shrink-0', statusDotClass)} />
-          <span className="text-sm font-medium text-bolt-elements-textPrimary">{statusMessage}</span>
+        <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+          <div className="flex items-center gap-2.5">
+            <span className="relative flex items-center justify-center w-2.5 h-2.5 shrink-0">
+              {statusTone === 'purple' && (
+                <span className="absolute inset-0 rounded-full bg-purple-500/60 workflow-node-ping" />
+              )}
+              <span className={classNames('relative w-2.5 h-2.5 rounded-full', statusDotClass)} />
+            </span>
+            <div>
+              <div className="text-base font-semibold text-bolt-elements-textPrimary leading-tight">
+                {isComplete ? 'Ready to Preview' : currentStageLabel}
+              </div>
+              <div className="text-xs text-bolt-elements-textTertiary mt-0.5">{statusMessage}</div>
+            </div>
+          </div>
+          {continueLabel && onContinue && (
+            <button
+              type="button"
+              onClick={onContinue}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-purple-500 text-white hover:bg-purple-600 active:scale-[0.98] transition-all duration-150 shadow-sm shrink-0"
+            >
+              {continueLabel}
+              <span className="i-ph:arrow-right w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          <StatusMetric label="Overall Progress" value={`${health.overallScore}%`} />
-          <StatusMetric label="Current AI Engineer" value={currentEngineer} />
-          <StatusMetric label="Estimated Time" value={estimatedLabel} />
-          <StatusMetric label="Last Update" value={lastUpdate} />
-          <StatusMetric label="Next" value={nextAction} accent />
+
+        {/* Rich progress bar — same health.overallScore the Advanced section's "Overall Readiness" stat uses, just with a visible fill instead of a bare number. */}
+        <div className="mb-4">
+          <div className="flex items-center justify-between text-[11px] text-bolt-elements-textTertiary mb-1.5">
+            <span>Overall Progress</span>
+            <span className="font-medium text-bolt-elements-textSecondary">{health.overallScore}%</span>
+          </div>
+          <div className="h-2 w-full rounded-full bg-bolt-elements-background-depth-2 overflow-hidden">
+            <div
+              className={classNames(
+                'h-full rounded-full transition-[width] duration-700 ease-out',
+                isComplete ? 'bg-green-500' : 'bg-purple-500',
+              )}
+              style={{ width: `${health.overallScore}%` }}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <StatusMetric icon="i-ph:map-pin-duotone" label="Current Stage" value={currentStageLabel} />
+          <StatusMetric icon="i-ph:gauge-duotone" label="Overall Progress" value={`${health.overallScore}%`} />
+          <StatusMetric icon="i-ph:clock-duotone" label="Time Remaining" value={estimatedLabel} />
+          <StatusMetric
+            icon={approvalRequired ? 'i-ph:hand-palm-duotone' : 'i-ph:check-circle-duotone'}
+            label="Approval Required"
+            value={approvalRequired ? 'Yes' : 'No'}
+            accent={approvalRequired}
+          />
+          <StatusMetric
+            icon="i-ph:arrow-right-duotone"
+            label="Next Action"
+            value={nextAction}
+            wide
+            accent={!approvalRequired}
+          />
         </div>
       </div>
 

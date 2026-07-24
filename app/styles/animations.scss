@@ -47,3 +47,54 @@
     transform: translateY(6px);
   }
 }
+
+/* Sprint UX-2 — workflow bar "active stage" glow. A soft, slow breathing ring behind the
+   current stage's node, plus a one-shot ping burst so the eye lands on it immediately. */
+.workflow-node-glow {
+  animation: workflowNodeGlow 2.4s ease-in-out infinite;
+}
+
+@keyframes workflowNodeGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.28);
+  }
+
+  50% {
+    box-shadow: 0 0 0 8px rgba(168, 85, 247, 0);
+  }
+}
+
+.workflow-node-ping {
+  animation: workflowNodePing 1.8s cubic-bezier(0, 0, 0.2, 1) 2;
+}
+
+@keyframes workflowNodePing {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+
+  75%,
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+/* Sprint UX-2 — hero "Current Stage" panel entrance + stat-card hover lift. */
+.hero-panel-enter {
+  animation: heroPanelEnter 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes heroPanelEnter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
