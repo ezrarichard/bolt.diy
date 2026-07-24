@@ -1,4 +1,5 @@
 import type { ProjectBlueprint, RoadmapItem } from '~/lib/blueprints/types';
+import type { BlueprintContent } from '~/lib/blueprints/blueprintContentTypes';
 
 /**
  * BuildersDB row/frontend shape mapping for the Blueprint Foundation — Sprint 59. Mirrors the
@@ -72,6 +73,14 @@ export function fromBlueprintRow(row: BuildersDbBlueprintRow): ProjectBlueprint 
     version: row.version,
     status: row.status as ProjectBlueprint['status'],
     metadata: row.metadata ?? {},
-    content: row.content ?? {},
+
+    /*
+     * Sprint 60 — `content` defaults to `'{}'::jsonb` at the schema level (see the Sprint 59
+     * migration) for every row that hasn't been enriched yet. An empty object has no
+     * `schemaVersion` and isn't a valid `BlueprintContent`, so it maps to `undefined` here —
+     * same "absent means not populated yet" convention `ProjectBlueprint.content` already uses
+     * for the registry fallback (most blueprints still have none).
+     */
+    content: Object.keys(row.content ?? {}).length > 0 ? (row.content as unknown as BlueprintContent) : undefined,
   };
 }

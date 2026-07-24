@@ -1,3 +1,5 @@
+import type { BlueprintContent } from './blueprintContentTypes';
+
 /**
  * Blueprint Engine — types.
  *
@@ -76,11 +78,13 @@ export interface ProjectBlueprint {
   metadata?: Record<string, unknown>;
 
   /**
-   * Structured Blueprint Content (Standard Workflows, Business Rules, Pages & Screens, QA
-   * Scenarios, AI Role Guidance, ...) per the Blueprint Architecture Proposal — empty/absent
-   * and unread by any AI role today. Populating and consuming this is later-sprint work.
+   * Structured Blueprint Content — Sprint 60 (Blueprint Knowledge Foundation). See
+   * `blueprintContentTypes.ts` for the full schema (Executive Summary, Business Domain,
+   * Personas, Business Rules, Data Entities, QA Scenarios, ...). Still unread by any AI role,
+   * prompt, or the existing Builders workflow — populating this is Sprint 60's entire scope;
+   * consuming it is later-sprint work (Blueprint Resolution / AI role integration).
    */
-  content?: Record<string, unknown>;
+  content?: BlueprintContent;
 }
 
 /**

@@ -20,3 +20,25 @@ export type {
   RoadmapItem,
   RoadmapItemStatus,
 } from './types';
+
+// Sprint 60 — Blueprint Knowledge Foundation. See each module's own header comment.
+export {
+  BLUEPRINT_CONTENT_SCHEMA_VERSION,
+  BLUEPRINT_CONTENT_SECTION_KEYS,
+  SUPPORTED_BLUEPRINT_CONTENT_SCHEMA_VERSIONS,
+} from './blueprintContentTypes';
+export type { BlueprintContent, BlueprintContentSectionKey } from './blueprintContentTypes';
+export {
+  REQUIRED_BLUEPRINT_CONTENT_SECTIONS,
+  isSupportedBlueprintContentSchemaVersion,
+  validateBlueprintContent,
+} from './blueprintContentValidation';
+export type { BlueprintContentValidationResult } from './blueprintContentValidation';
+export {
+  BLUEPRINT_EXPORT_FORMAT_VERSION,
+  exportBlueprint,
+  exportBlueprints,
+  importBlueprint,
+  importBlueprints,
+} from './blueprintPortability';
+export type { BlueprintExportEnvelope, BlueprintImportResult } from './blueprintPortability';
