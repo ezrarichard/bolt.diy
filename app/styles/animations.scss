@@ -98,3 +98,23 @@
     transform: translateY(0);
   }
 }
+
+/**
+ * Builders Design System (Sprint 69) — global `prefers-reduced-motion` handling. The audit for
+ * this sprint found no reduced-motion handling anywhere in the codebase; every decorative/
+ * continuous animation above (the workflow-bar glow/ping, dropdown/hero entrances) is neutered
+ * here for users who've asked their OS for reduced motion, without touching each animation's
+ * own definition. State changes still happen instantly — only the *decorative* transition is
+ * removed, per "Motion should clarify state, not decorate the interface."
+ */
+@media (prefers-reduced-motion: reduce) {
+  .animated,
+  .dropdown-animation,
+  .workflow-node-glow,
+  .workflow-node-ping,
+  .hero-panel-enter {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}

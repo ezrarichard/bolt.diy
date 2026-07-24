@@ -1,0 +1,180 @@
+/**
+ * Builders Design System — semantic design tokens (Sprint 69, Design System Foundation).
+ *
+ * ADDITIVE ONLY: every token here is new. Nothing in `variables.scss` is renamed, removed, or
+ * repointed — existing `--bolt-elements-*` consumers are completely unaffected by this file.
+ * `--builders-*` tokens either (a) alias an existing, already-correct `--bolt-elements-*` value
+ * so both systems stay in sync automatically, or (b) introduce a genuinely new concept
+ * (status colors, brand color, focus/selected states, muted/disabled/inverse text, restrained
+ * status surfaces) that had no consistent home before this sprint — see
+ * `docs/design-system/Builders-Design-System.md` for the full audit that motivated each new
+ * token and `App note` comments below for why a given value was chosen.
+ *
+ * Two kinds of blocks:
+ *  1. A theme-agnostic `:root` block — pure aliases. These never need a light/dark split of
+ *     their own because the `--bolt-elements-*` var they point at already resolves correctly
+ *     per `[data-theme]` (see variables.scss).
+ *  2. `:root[data-theme='light']` / `:root[data-theme='dark']` blocks — new concepts that need
+ *     an explicit value per theme (status colors, brand color, focus rings, translucent
+ *     surfaces). Brand-tinted translucent surfaces use `color-mix()` (already used elsewhere in
+ *     this codebase, see `index.scss`'s `.modern-scrollbar-invert`) rather than requiring a new
+ *     generated alpha palette in `uno.config.ts`.
+ */
+
+/* ── Theme-agnostic aliases ────────────────────────────────────────────── */
+:root {
+  /* Background */
+  --builders-bg-app: var(--bolt-elements-bg-depth-1);
+  --builders-bg-sidebar: var(--bolt-elements-bg-depth-2);
+  --builders-surface-primary: var(--bolt-elements-bg-depth-1);
+  --builders-surface-elevated: var(--bolt-elements-bg-depth-2);
+  --builders-surface-recessed: var(--bolt-elements-bg-depth-4);
+
+  /* Text */
+  --builders-text-primary: var(--bolt-elements-textPrimary);
+  --builders-text-secondary: var(--bolt-elements-textSecondary);
+  --builders-text-tertiary: var(--bolt-elements-textTertiary);
+  --builders-text-link: var(--bolt-elements-messages-linkColor);
+
+  /* Borders */
+  --builders-border-default: var(--bolt-elements-borderColor);
+}
+
+/* ── New concepts — Light theme ───────────────────────────────────────── */
+:root,
+:root[data-theme='light'] {
+  --builders-brand-primary: theme('colors.purple.600');
+  --builders-brand-secondary: theme('colors.accent.600');
+  --builders-brand-hover: theme('colors.purple.700');
+  --builders-brand-active: theme('colors.purple.800');
+  --builders-brand-subtle-surface: color-mix(in srgb, var(--builders-brand-primary) 8%, transparent);
+
+  --builders-text-muted: theme('colors.gray.400');
+  --builders-text-disabled: theme('colors.alpha.gray.30');
+  --builders-text-inverse: theme('colors.white');
+
+  --builders-border-subtle: theme('colors.alpha.gray.5');
+  --builders-border-strong: theme('colors.alpha.gray.20');
+  --builders-border-focus: var(--builders-brand-primary);
+  --builders-border-selected: var(--builders-brand-primary);
+
+  --builders-surface-interactive: theme('colors.alpha.gray.3');
+  --builders-surface-hover: theme('colors.alpha.gray.5');
+  --builders-surface-selected: color-mix(in srgb, var(--builders-brand-primary) 8%, transparent);
+  --builders-overlay-backdrop: rgba(15, 15, 22, 0.45);
+
+  /* Status — each carries a text/border/bg trio; components add icon + optional emphasis. */
+  --builders-status-success-text: theme('colors.green.700');
+  --builders-status-success-border: theme('colors.green.600');
+  --builders-status-success-bg: color-mix(in srgb, theme('colors.green.500') 10%, transparent);
+
+  --builders-status-warning-text: theme('colors.orange.700');
+  --builders-status-warning-border: theme('colors.orange.600');
+  --builders-status-warning-bg: color-mix(in srgb, theme('colors.orange.500') 12%, transparent);
+
+  --builders-status-error-text: theme('colors.red.700');
+  --builders-status-error-border: theme('colors.red.600');
+  --builders-status-error-bg: color-mix(in srgb, theme('colors.red.500') 10%, transparent);
+
+  --builders-status-info-text: theme('colors.blue.700');
+  --builders-status-info-border: theme('colors.blue.600');
+  --builders-status-info-bg: color-mix(in srgb, theme('colors.blue.500') 10%, transparent);
+
+  --builders-status-active-text: var(--builders-brand-hover);
+  --builders-status-active-border: var(--builders-brand-primary);
+  --builders-status-active-bg: var(--builders-brand-subtle-surface);
+
+  --builders-status-pending-text: theme('colors.gray.600');
+  --builders-status-pending-border: theme('colors.gray.400');
+  --builders-status-pending-bg: theme('colors.alpha.gray.5');
+
+  /* App note: "Completed" reuses the Success hue (same finished-state meaning) but keeps its
+     own token trio so call sites name their intent ("completed") rather than borrowing
+     "success", and either can be retuned independently later without a rename. */
+  --builders-status-completed-text: theme('colors.green.700');
+  --builders-status-completed-border: theme('colors.green.600');
+  --builders-status-completed-bg: color-mix(in srgb, theme('colors.green.500') 10%, transparent);
+
+  /* App note: "Blocked" is a deliberately deeper/more saturated red than "Error" — both read
+     as red-family, but Blocked (a hard stop) should never look interchangeable with a
+     recoverable Error at a glance; components must also pair it with a label/icon, not color
+     alone (see Accessibility section of the Design System doc). */
+  --builders-status-blocked-text: theme('colors.red.800');
+  --builders-status-blocked-border: theme('colors.red.700');
+  --builders-status-blocked-bg: color-mix(in srgb, theme('colors.red.600') 14%, transparent);
+
+  --builders-status-approval-text: theme('colors.orange.800');
+  --builders-status-approval-border: theme('colors.orange.700');
+  --builders-status-approval-bg: color-mix(in srgb, theme('colors.orange.600') 14%, transparent);
+
+  --builders-status-working-text: var(--builders-brand-hover);
+  --builders-status-working-border: var(--builders-brand-primary);
+  --builders-status-working-bg: var(--builders-brand-subtle-surface);
+}
+
+/* ── New concepts — Dark theme ────────────────────────────────────────── */
+:root,
+:root[data-theme='dark'] {
+  /* App note: brand purple matches the hue already in use for the workflow-bar "active stage"
+     glow (`animations.scss`'s `workflowNodeGlow`, rgba(168,85,247,...) = purple-500) — this
+     token formalizes that existing de facto brand color rather than introducing a new one. */
+  --builders-brand-primary: theme('colors.purple.500');
+  --builders-brand-secondary: theme('colors.accent.400');
+  --builders-brand-hover: theme('colors.purple.400');
+  --builders-brand-active: theme('colors.purple.300');
+  --builders-brand-subtle-surface: color-mix(in srgb, var(--builders-brand-primary) 14%, transparent);
+
+  --builders-text-muted: theme('colors.gray.500');
+  --builders-text-disabled: theme('colors.alpha.white.30');
+  --builders-text-inverse: theme('colors.gray.950');
+
+  --builders-border-subtle: theme('colors.alpha.white.5');
+  --builders-border-strong: theme('colors.alpha.white.20');
+  --builders-border-focus: var(--builders-brand-primary);
+  --builders-border-selected: var(--builders-brand-primary);
+
+  --builders-surface-interactive: theme('colors.alpha.white.3');
+  --builders-surface-hover: theme('colors.alpha.white.5');
+  --builders-surface-selected: color-mix(in srgb, var(--builders-brand-primary) 12%, transparent);
+  --builders-overlay-backdrop: rgba(0, 0, 0, 0.6);
+
+  --builders-status-success-text: theme('colors.green.400');
+  --builders-status-success-border: theme('colors.green.500');
+  --builders-status-success-bg: color-mix(in srgb, theme('colors.green.500') 14%, transparent);
+
+  --builders-status-warning-text: theme('colors.orange.300');
+  --builders-status-warning-border: theme('colors.orange.400');
+  --builders-status-warning-bg: color-mix(in srgb, theme('colors.orange.400') 16%, transparent);
+
+  --builders-status-error-text: theme('colors.red.400');
+  --builders-status-error-border: theme('colors.red.500');
+  --builders-status-error-bg: color-mix(in srgb, theme('colors.red.500') 14%, transparent);
+
+  --builders-status-info-text: theme('colors.blue.300');
+  --builders-status-info-border: theme('colors.blue.400');
+  --builders-status-info-bg: color-mix(in srgb, theme('colors.blue.400') 14%, transparent);
+
+  --builders-status-active-text: theme('colors.purple.300');
+  --builders-status-active-border: var(--builders-brand-primary);
+  --builders-status-active-bg: var(--builders-brand-subtle-surface);
+
+  --builders-status-pending-text: theme('colors.gray.400');
+  --builders-status-pending-border: theme('colors.gray.600');
+  --builders-status-pending-bg: theme('colors.alpha.white.5');
+
+  --builders-status-completed-text: theme('colors.green.400');
+  --builders-status-completed-border: theme('colors.green.500');
+  --builders-status-completed-bg: color-mix(in srgb, theme('colors.green.500') 14%, transparent);
+
+  --builders-status-blocked-text: theme('colors.red.300');
+  --builders-status-blocked-border: theme('colors.red.400');
+  --builders-status-blocked-bg: color-mix(in srgb, theme('colors.red.500') 20%, transparent);
+
+  --builders-status-approval-text: theme('colors.orange.300');
+  --builders-status-approval-border: theme('colors.orange.400');
+  --builders-status-approval-bg: color-mix(in srgb, theme('colors.orange.400') 20%, transparent);
+
+  --builders-status-working-text: theme('colors.purple.300');
+  --builders-status-working-border: var(--builders-brand-primary);
+  --builders-status-working-bg: var(--builders-brand-subtle-surface);
+}

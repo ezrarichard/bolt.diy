@@ -104,6 +104,41 @@ export default defineConfig({
     'transition-theme': 'transition-[background-color,border-color,color] duration-150 bolt-ease-cubic-bezier',
     kdb: 'bg-bolt-elements-code-background text-bolt-elements-code-text py-1 px-1.5 rounded-md',
     'max-w-chat': 'max-w-[var(--chat-max-width)]',
+
+    /*
+     * Builders Design System (Sprint 69) — radius scale. Fixed pixel values rather than Uno's
+     * own rounded-md/lg/xl scale, so the 4-step scale is explicit and documented (see
+     * docs/design-system/Builders-Design-System.md) instead of borrowing a generic preset scale
+     * whose steps aren't named for this app's own surface hierarchy.
+     */
+    'builders-radius-sm': 'rounded-[6px]',
+    'builders-radius-md': 'rounded-[10px]',
+    'builders-radius-lg': 'rounded-[16px]',
+    'builders-radius-pill': 'rounded-full',
+
+    /*
+     * Builders Design System (Sprint 69) — restrained shadows. Never used on large surfaces,
+     * only on floating/elevated elements (dropdowns, popovers, modals) per the sprint's "avoid
+     * large or bright shadows" direction.
+     */
+    'builders-shadow-sm': 'shadow-[0_1px_2px_rgba(0,0,0,0.24)]',
+    'builders-shadow-md': 'shadow-[0_4px_16px_rgba(0,0,0,0.32)]',
+    'builders-shadow-lg': 'shadow-[0_12px_32px_rgba(0,0,0,0.40)]',
+
+    /*
+     * Builders Design System (Sprint 69) — the one focus treatment every interactive primitive
+     * should use. `focus-visible` only (never plain `focus`), so mouse clicks don't show a ring
+     * but keyboard/AT navigation always does. `motion-reduce:transition-none` respects
+     * `prefers-reduced-motion` per the sprint's Motion section.
+     */
+    'builders-focus-ring':
+      'outline-none focus-visible:ring-2 focus-visible:ring-builders-border-focus focus-visible:ring-offset-2 focus-visible:ring-offset-builders-bg-app',
+
+    /*
+     * Builders Design System (Sprint 69) — the one transition treatment for hover/focus/state
+     * changes on interactive primitives. Deliberately short and respects reduced-motion.
+     */
+    'builders-transition': 'transition-all duration-150 bolt-ease-cubic-bezier motion-reduce:transition-none',
   },
   rules: [
     /**
@@ -115,6 +150,108 @@ export default defineConfig({
   theme: {
     colors: {
       ...COLOR_PRIMITIVES,
+
+      /**
+       * Builders Design System (Sprint 69) — semantic tokens, additive alongside `bolt.elements`
+       * above (never a replacement). Every value here is a passthrough to a `--builders-*` CSS
+       * custom property defined in `app/styles/builders-tokens.scss`; this block exists only so
+       * those tokens are usable as ordinary UnoCSS utility classes
+       * (`bg-builders-surface-elevated`, `text-builders-text-secondary`,
+       * `border-builders-status-success-border`, ...) instead of raw `[var(--builders-...)]`
+       * arbitrary values everywhere they're used.
+       */
+      builders: {
+        bg: {
+          app: 'var(--builders-bg-app)',
+          sidebar: 'var(--builders-bg-sidebar)',
+        },
+        surface: {
+          primary: 'var(--builders-surface-primary)',
+          elevated: 'var(--builders-surface-elevated)',
+          recessed: 'var(--builders-surface-recessed)',
+          interactive: 'var(--builders-surface-interactive)',
+          hover: 'var(--builders-surface-hover)',
+          selected: 'var(--builders-surface-selected)',
+        },
+        overlay: {
+          backdrop: 'var(--builders-overlay-backdrop)',
+        },
+        text: {
+          primary: 'var(--builders-text-primary)',
+          secondary: 'var(--builders-text-secondary)',
+          tertiary: 'var(--builders-text-tertiary)',
+          muted: 'var(--builders-text-muted)',
+          disabled: 'var(--builders-text-disabled)',
+          inverse: 'var(--builders-text-inverse)',
+          link: 'var(--builders-text-link)',
+        },
+        border: {
+          subtle: 'var(--builders-border-subtle)',
+          default: 'var(--builders-border-default)',
+          strong: 'var(--builders-border-strong)',
+          focus: 'var(--builders-border-focus)',
+          selected: 'var(--builders-border-selected)',
+        },
+        brand: {
+          primary: 'var(--builders-brand-primary)',
+          secondary: 'var(--builders-brand-secondary)',
+          hover: 'var(--builders-brand-hover)',
+          active: 'var(--builders-brand-active)',
+          subtleSurface: 'var(--builders-brand-subtle-surface)',
+        },
+        status: {
+          success: {
+            text: 'var(--builders-status-success-text)',
+            border: 'var(--builders-status-success-border)',
+            bg: 'var(--builders-status-success-bg)',
+          },
+          warning: {
+            text: 'var(--builders-status-warning-text)',
+            border: 'var(--builders-status-warning-border)',
+            bg: 'var(--builders-status-warning-bg)',
+          },
+          error: {
+            text: 'var(--builders-status-error-text)',
+            border: 'var(--builders-status-error-border)',
+            bg: 'var(--builders-status-error-bg)',
+          },
+          info: {
+            text: 'var(--builders-status-info-text)',
+            border: 'var(--builders-status-info-border)',
+            bg: 'var(--builders-status-info-bg)',
+          },
+          active: {
+            text: 'var(--builders-status-active-text)',
+            border: 'var(--builders-status-active-border)',
+            bg: 'var(--builders-status-active-bg)',
+          },
+          pending: {
+            text: 'var(--builders-status-pending-text)',
+            border: 'var(--builders-status-pending-border)',
+            bg: 'var(--builders-status-pending-bg)',
+          },
+          completed: {
+            text: 'var(--builders-status-completed-text)',
+            border: 'var(--builders-status-completed-border)',
+            bg: 'var(--builders-status-completed-bg)',
+          },
+          blocked: {
+            text: 'var(--builders-status-blocked-text)',
+            border: 'var(--builders-status-blocked-border)',
+            bg: 'var(--builders-status-blocked-bg)',
+          },
+          approval: {
+            text: 'var(--builders-status-approval-text)',
+            border: 'var(--builders-status-approval-border)',
+            bg: 'var(--builders-status-approval-bg)',
+          },
+          working: {
+            text: 'var(--builders-status-working-text)',
+            border: 'var(--builders-status-working-border)',
+            bg: 'var(--builders-status-working-bg)',
+          },
+        },
+      },
       bolt: {
         elements: {
           borderColor: 'var(--bolt-elements-borderColor)',

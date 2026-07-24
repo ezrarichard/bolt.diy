@@ -8,6 +8,7 @@ import { DEFAULT_GENERATION_PROFILE_ID } from '~/lib/generation-profiles/default
 import { saveSelectedProfileForProject } from '~/lib/generation-profiles/generationProfileRepository';
 import { PROJECT_COLOR_CLASSES } from './ProjectListItem';
 import { GenerationProfileSelector } from './GenerationProfileSelector';
+import { BuildersInput } from '~/components/ui/builders';
 
 interface NewProjectDialogProps {
   open: boolean;
@@ -141,34 +142,27 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
 
               {/* Body */}
               <div className="flex-1 overflow-y-auto px-8 py-6 space-y-8">
-                {/* Name + Description */}
+                {/*
+                  Builders Design System (Sprint 69) — Limited Adoption target #5 ("one
+                  representative form control group"). Was two hand-rolled `<label>` +
+                  `<input>` pairs hardcoding `bg-gray-50 dark:bg-gray-900` / `focus:ring-purple-500`;
+                  now the shared BuildersInput primitive — same field order, placeholders, and
+                  controlled value/onChange wiring, so behavior is unchanged.
+                */}
                 <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-medium text-bolt-elements-textTertiary mb-1.5">
-                      Project Name
-                    </label>
-                    <input
-                      autoFocus
-                      className="w-full bg-gray-50 dark:bg-gray-900 px-3 py-2 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500/50 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-500 border border-gray-200 dark:border-gray-800"
-                      type="text"
-                      placeholder="e.g. LocalShop India"
-                      value={name}
-                      onChange={(event) => setName(event.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-bolt-elements-textTertiary mb-1.5">
-                      Description
-                    </label>
-                    <input
-                      className="w-full bg-gray-50 dark:bg-gray-900 px-3 py-2 rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500/50 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-500 border border-gray-200 dark:border-gray-800"
-                      type="text"
-                      placeholder="What is this project for?"
-                      value={description}
-                      onChange={(event) => setDescription(event.target.value)}
-                    />
-                  </div>
+                  <BuildersInput
+                    autoFocus
+                    label="Project Name"
+                    placeholder="e.g. LocalShop India"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                  />
+                  <BuildersInput
+                    label="Description"
+                    placeholder="What is this project for?"
+                    value={description}
+                    onChange={(event) => setDescription(event.target.value)}
+                  />
                 </div>
 
                 {/* Generation Profile — Sprint 39.5 */}

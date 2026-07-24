@@ -9,6 +9,7 @@ import {
 } from '~/lib/projects/projectManagerEngine';
 import { AUTO_ENGINEERING_ESTIMATED_SECONDS } from '~/lib/projects/autoEngineeringEngine';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '~/components/ui/Collapsible';
+import { BuildersButton } from '~/components/ui/builders';
 
 interface ProjectManagerPanelProps {
   project: Project;
@@ -247,15 +248,17 @@ export function ProjectManagerPanel({ project, onContinue }: ProjectManagerPanel
               <div className="text-xs text-bolt-elements-textTertiary mt-0.5">{statusMessage}</div>
             </div>
           </div>
+          {/*
+            Builders Design System (Sprint 69) — Limited Adoption target #3 ("shared buttons
+            used in the Business workflow"). Same visual result as the previous hand-rolled
+            `<button>` (active-scale + shadow kept via className), now via the shared
+            BuildersButton primitive instead of a hardcoded `bg-purple-500`.
+          */}
           {continueLabel && onContinue && (
-            <button
-              type="button"
-              onClick={onContinue}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-purple-500 text-white hover:bg-purple-600 active:scale-[0.98] transition-all duration-150 shadow-sm shrink-0"
-            >
+            <BuildersButton onClick={onContinue} className="active:scale-[0.98] shadow-sm shrink-0">
               {continueLabel}
               <span className="i-ph:arrow-right w-3.5 h-3.5" />
-            </button>
+            </BuildersButton>
           )}
         </div>
 

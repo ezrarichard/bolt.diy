@@ -1,4 +1,5 @@
 import { cloudflareDevProxyVitePlugin as remixCloudflareDevProxy, vitePlugin as remixVitePlugin } from '@remix-run/dev';
+import react from '@vitejs/plugin-react';
 import UnoCSS from 'unocss/vite';
 import { defineConfig, type ViteDevServer } from 'vite';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
@@ -44,14 +45,29 @@ export default defineConfig((config) => {
         },
       },
       config.mode !== 'test' && remixCloudflareDevProxy(),
-      remixVitePlugin({
-        future: {
-          v3_fetcherPersist: true,
-          v3_relativeSplatPath: true,
-          v3_throwAbortReason: true,
-          v3_lazyRouteDiscovery: true,
-        },
-      }),
+
+      /*
+       * Builders Design System (Sprint 69) — Remix's Vite plugin injects a JSX/Fast-Refresh
+       * transform that expects its own dev-server "preamble" and fails ("Remix Vite plugin
+       * can't detect preamble") when Vitest transforms a `.tsx` file directly, which is exactly
+       * what component tests need to do. Vitest's `mode` is `'test'`, so component specs get
+       * the plain `@vitejs/plugin-react` JSX transform instead (already an installed
+       * dependency, previously unused) — dev/build modes are completely unaffected, they still
+       * get the real Remix plugin exactly as before. (A variant that ran both plugins together
+       * in test mode was tried and rejected: Remix's plugin still attempted its Fast-Refresh
+       * transform regardless of array order, since its transform stage isn't ordered the way a
+       * plain array position implies.)
+       */
+      config.mode === 'test'
+        ? react()
+        : remixVitePlugin({
+            future: {
+              v3_fetcherPersist: true,
+              v3_relativeSplatPath: true,
+              v3_throwAbortReason: true,
+              v3_lazyRouteDiscovery: true,
+            },
+          }),
       UnoCSS(),
       tsconfigPaths(),
       chrome129IssuePlugin(),
@@ -83,6 +99,7 @@ export default defineConfig((config) => {
       },
     },
     test: {
+      setupFiles: ['./vitest-setup.ts'],
       exclude: [
         '**/node_modules/**',
         '**/dist/**',

@@ -2,6 +2,14 @@ import { classNames } from '~/utils/classNames';
 import { Tooltip } from '~/components/ui/Tooltip';
 
 /**
+ * Builders Design System (Sprint 69) — Limited Adoption target #1 ("Project workflow header").
+ * `STATUS_META` below and the purple-hardcoded hover/focus/fill classes further down now read
+ * from `--builders-*` tokens (see `app/styles/builders-tokens.scss`) instead of hardcoded
+ * `green-500`/`purple-500` Tailwind classes. This is a token swap only — every size, layout,
+ * animation name, and pixel value is unchanged, so the bar looks and behaves exactly as before.
+ */
+
+/**
  * Product Experience Sprint / Sprint UX-2 — Dashboard Workflow Shell.
  *
  * Builders' pipeline is a customer journey (Business -> Blueprint -> Plan -> Engineering ->
@@ -46,19 +54,20 @@ interface ProjectWorkflowBarProps {
  */
 const STATUS_META: Record<WorkflowStageStatus, { nodeClass: string; labelClass: string; ringClass: string }> = {
   complete: {
-    nodeClass: 'bg-green-500/15 border-green-500/50 text-green-400 shadow-[0_0_0_4px_rgba(34,197,94,0.10)]',
-    labelClass: 'text-green-600 dark:text-green-400',
+    nodeClass:
+      'bg-builders-status-completed-bg border-builders-status-completed-border text-builders-status-completed-text shadow-[0_0_0_4px_rgba(34,197,94,0.10)]',
+    labelClass: 'text-builders-status-completed-text',
     ringClass: '',
   },
   active: {
-    nodeClass: 'bg-purple-500/20 border-purple-500/60 text-purple-300 scale-110 workflow-node-glow',
-    labelClass: 'text-purple-600 dark:text-purple-300',
+    nodeClass:
+      'bg-builders-status-active-bg border-builders-status-active-border text-builders-status-active-text scale-110 workflow-node-glow',
+    labelClass: 'text-builders-status-active-text',
     ringClass: '',
   },
   pending: {
-    nodeClass:
-      'bg-bolt-elements-background-depth-2/80 border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary/70',
-    labelClass: 'text-bolt-elements-textTertiary',
+    nodeClass: 'bg-builders-surface-elevated/80 border-builders-border-default/50 text-builders-text-tertiary/70',
+    labelClass: 'text-builders-text-tertiary',
     ringClass: '',
   },
 };
@@ -107,13 +116,13 @@ function StageNode({
         >
           <span className="relative flex items-center justify-center">
             {stage.status === 'active' && (
-              <span className="absolute inset-0 rounded-full bg-purple-500/50 workflow-node-ping" />
+              <span className="absolute inset-0 rounded-full bg-builders-brand-primary/50 workflow-node-ping" />
             )}
             <span
               className={classNames(
                 'relative flex items-center justify-center w-11 h-11 sm:w-12 sm:h-12 rounded-full border-2 transition-all duration-300',
                 meta.nodeClass,
-                'group-hover:brightness-110 group-focus-visible:ring-2 group-focus-visible:ring-purple-400 group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-bolt-elements-background-depth-1',
+                'group-hover:brightness-110 group-focus-visible:ring-2 group-focus-visible:ring-builders-border-focus group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-bolt-elements-background-depth-1',
               )}
             >
               {nodeIcon}
@@ -124,7 +133,7 @@ function StageNode({
               className={classNames(
                 'text-[12.5px] font-semibold whitespace-nowrap transition-colors',
                 isActiveTab ? 'text-bolt-elements-textPrimary' : meta.labelClass,
-                'group-hover:text-purple-600 dark:group-hover:text-purple-300',
+                'group-hover:text-builders-brand-primary',
               )}
             >
               {stage.label}
@@ -142,7 +151,9 @@ function StageNode({
           <div
             className={classNames(
               'h-full rounded-full transition-[width] duration-700 ease-out',
-              stage.status === 'complete' ? 'w-full bg-green-500' : 'w-0 bg-purple-500',
+              stage.status === 'complete'
+                ? 'w-full bg-builders-status-completed-border'
+                : 'w-0 bg-builders-brand-primary',
             )}
           />
         </div>

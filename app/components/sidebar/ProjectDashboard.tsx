@@ -29,6 +29,7 @@ import { useBlueprintRecommendation } from '~/lib/hooks/useBlueprintRecommendati
 import { BusinessDiscoveryCard } from './BusinessDiscoveryCard';
 import { BlueprintRecommendationCard } from './BlueprintRecommendationCard';
 import { ProjectWorkflowBar, type WorkflowStage, type WorkflowStageStatus } from './ProjectWorkflowBar';
+import { BuildersSurface } from '~/components/ui/builders';
 import {
   ARTIFACT_TYPES,
   getLatestArtifact,
@@ -861,10 +862,20 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                   */}
                   <ProjectWorkflowBar stages={workflowStages} activeTab={activeTab} onSelect={handleTabChange} />
                   <div className="px-6 sm:px-8 pt-6">
-                    <div
+                    {/* Builders Design System (Sprint 69) — Limited Adoption target #2 ("Current
+                        Stage card"): radius now comes from the shared BuildersSurface primitive
+                        (`radius="lg"` = 16px, identical to the previous `rounded-2xl`) instead
+                        of being retyped here. Background/border are intentionally kept as
+                        overrides for now — they're this panel's own bespoke glass tone, not yet
+                        a token — so appearance is pixel-identical to before. */}
+                    <BuildersSurface
                       key={currentWorkflowStageId}
+                      elevation="primary"
+                      border="none"
+                      radius="lg"
+                      shadow="none"
                       className={classNames(
-                        'hero-panel-enter rounded-2xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5 sm:p-6',
+                        'hero-panel-enter border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5 sm:p-6',
                         'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md shadow-sm',
                       )}
                     >
@@ -872,7 +883,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                         project={project}
                         onContinue={() => handleTabChange(currentWorkflowStageId)}
                       />
-                    </div>
+                    </BuildersSurface>
                   </div>
 
                   {/* Sprint 38.5 — Dashboard Simplification: real tabs replace Sprint 30.5's scroll-to-anchor nav. */}

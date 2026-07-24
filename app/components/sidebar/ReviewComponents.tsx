@@ -1,5 +1,6 @@
 import { classNames } from '~/utils/classNames';
 import type { ReviewSummary, ReviewStatus, TaskHistoryEvent, TaskHistoryEventType } from '~/lib/projects/reviewEngine';
+import { BUILDERS_STATUS_META, type BuildersStatus } from '~/components/ui/builders';
 
 /**
  * Sprint 12 — reusable Review & Approval UI pieces (Task 9). Shared by
@@ -8,19 +9,24 @@ import type { ReviewSummary, ReviewStatus, TaskHistoryEvent, TaskHistoryEventTyp
  * defined exactly once rather than duplicated across surfaces.
  */
 
-const REVIEW_BADGE_META: Record<'pending' | ReviewStatus, { label: string; className: string }> = {
-  pending: {
-    label: 'Pending Review',
-    className: 'text-purple-600 dark:text-purple-400 border-purple-500/30 bg-purple-500/10',
-  },
-  approved: {
-    label: 'Approved',
-    className: 'text-green-600 dark:text-green-400 border-green-500/30 bg-green-500/10',
-  },
-  'changes-requested': {
-    label: 'Changes Requested',
-    className: 'text-amber-600 dark:text-amber-400 border-amber-500/30 bg-amber-500/10',
-  },
+/**
+ * Builders Design System (Sprint 69) — Limited Adoption target #4 ("status badges"). This was
+ * one of (at least) five independently hand-rolled status-color maps the audit found; it now
+ * sources its colors from the one shared `BUILDERS_STATUS_META` vocabulary
+ * (`app/components/ui/builders/statusMeta.ts`) instead of its own hardcoded purple/green/amber
+ * values. Structure, sizing, and labels are unchanged — same pill, same three labels — only the
+ * color source changed, so this reads identically to before.
+ */
+const REVIEW_STATUS_TO_BUILDERS: Record<'pending' | ReviewStatus, BuildersStatus> = {
+  pending: 'active',
+  approved: 'success',
+  'changes-requested': 'warning',
+};
+
+const REVIEW_BADGE_LABEL: Record<'pending' | ReviewStatus, string> = {
+  pending: 'Pending Review',
+  approved: 'Approved',
+  'changes-requested': 'Changes Requested',
 };
 
 interface ReviewBadgeProps {
@@ -29,16 +35,18 @@ interface ReviewBadgeProps {
 
 /** A small pill showing a review verdict — Pending Review / Approved / Changes Requested. */
 export function ReviewBadge({ status }: ReviewBadgeProps) {
-  const meta = REVIEW_BADGE_META[status];
+  const meta = BUILDERS_STATUS_META[REVIEW_STATUS_TO_BUILDERS[status]];
 
   return (
     <span
       className={classNames(
         'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0',
-        meta.className,
+        meta.textClass,
+        meta.borderClass,
+        meta.bgClass,
       )}
     >
-      {meta.label}
+      {REVIEW_BADGE_LABEL[status]}
     </span>
   );
 }
