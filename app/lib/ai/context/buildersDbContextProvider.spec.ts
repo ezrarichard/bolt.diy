@@ -371,3 +371,154 @@ describe('buildersDbContextProvider — Sprint 63 Blueprint-Aware Business Analy
     expect(block).not.toContain('Blueprint Guidance');
   });
 });
+
+describe('buildersDbContextProvider — Sprint 64 Blueprint-Aware Product Ownership', () => {
+  beforeEach(() => {
+    isBuildersDbAvailableMock.mockReset().mockReturnValue(true);
+    getRoleOutputsForProjectMock.mockReset().mockResolvedValue([]);
+    getProjectTasksMock.mockReset().mockResolvedValue([]);
+    getTaskReviewsMock.mockReset().mockResolvedValue([]);
+    addProjectActivityMock.mockReset().mockResolvedValue(true);
+    saveContextTraceMock.mockReset().mockResolvedValue(true);
+    getLatestRequirementsSessionMock.mockReset().mockResolvedValue(null);
+    getBusinessUnderstandingModelMock.mockReset();
+    getLatestBlueprintResolutionMock.mockReset();
+    getBlueprintMock.mockReset();
+  });
+
+  it('adds no Blueprint guidance when no resolution has ever been recorded', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(null);
+
+    const block = await buildRoleContextBlock('proj-1', 'product-owner-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).not.toContain('Blueprint Guidance for Product Planning');
+    expect(getBlueprintMock).not.toHaveBeenCalled();
+  });
+
+  it('uses the recommended Blueprint when selected equals recommended', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(makeBlueprint());
+
+    const block = await buildRoleContextBlock('proj-1', 'product-owner-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(getBlueprintMock).toHaveBeenCalledWith('business-website');
+    expect(block).toContain('Blueprint Guidance for Product Planning');
+    expect(block).toContain('the recommended match');
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const blueprintSource = sources.find((s: { type: string }) => s.type === 'blueprint-resolution');
+    expect(blueprintSource).toEqual(
+      expect.objectContaining({
+        blueprintId: 'business-website',
+        blueprintVersion: 2,
+        resolutionId: 'res-1',
+        selectionSource: 'recommendation',
+        contentAvailable: false,
+      }),
+    );
+  });
+
+  it('uses the manually-selected Blueprint even when it differs from the recommendation, and records the override', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(
+      makeResolution({ recommendedBlueprintId: 'business-website', selectedBlueprintId: 'ai-agent' }),
+    );
+    getBlueprintMock.mockReturnValue(makeBlueprint({ id: 'ai-agent', name: 'AI Agent' }));
+
+    const block = await buildRoleContextBlock('proj-1', 'product-owner-draft', 'Build an AI product');
+    await flush();
+
+    expect(getBlueprintMock).toHaveBeenCalledWith('ai-agent');
+    expect(block).toContain('manually selected by the user');
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const blueprintSource = sources.find((s: { type: string }) => s.type === 'blueprint-resolution');
+    expect(blueprintSource).toEqual(
+      expect.objectContaining({ blueprintId: 'ai-agent', selectionSource: 'manual_override' }),
+    );
+  });
+
+  it('includes Product-Owner-relevant sections (business goals, standard/optional features) when available', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(
+      makeBlueprint({
+        content: {
+          schemaVersion: 1,
+          businessGoals: [{ goal: 'Generate enquiries', description: 'Convert visitors', priority: 'high' }],
+          standardFeatures: [{ name: 'Contact form', description: 'Lets visitors reach out' }],
+          optionalFeatures: [{ name: 'Online booking', description: 'Self-serve scheduling' }],
+        },
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'product-owner-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('Generate enquiries');
+    expect(block).toContain('Contact form');
+    expect(block).toContain('Online booking');
+    expect(block).toContain('recommend, never auto-scope');
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const blueprintSource = sources.find((s: { type: string }) => s.type === 'blueprint-resolution');
+    expect(blueprintSource.contentAvailable).toBe(true);
+    expect(blueprintSource.sectionsSupplied).toEqual(['businessGoals', 'standardFeatures', 'optionalFeatures']);
+  });
+
+  it('continues safely when the selected Blueprint has no structured content yet', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(
+      makeResolution({ selectedBlueprintId: 'shopify-app', recommendedBlueprintId: 'shopify-app' }),
+    );
+    getBlueprintMock.mockReturnValue(makeBlueprint({ id: 'shopify-app', name: 'Shopify App', content: undefined }));
+
+    const block = await buildRoleContextBlock('proj-1', 'product-owner-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('No structured Blueprint knowledge is available');
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const blueprintSource = sources.find((s: { type: string }) => s.type === 'blueprint-resolution');
+    expect(blueprintSource.contentAvailable).toBe(false);
+  });
+
+  it('falls back safely when the effective Blueprint id no longer resolves', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution({ selectedBlueprintId: 'deprecated-blueprint' }));
+    getBlueprintMock.mockReturnValue(undefined);
+
+    const block = await buildRoleContextBlock('proj-1', 'product-owner-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).not.toContain('Blueprint Guidance for Product Planning');
+  });
+
+  it('never throws even when the Blueprint Resolution lookup itself fails', async () => {
+    getLatestBlueprintResolutionMock.mockRejectedValue(new Error('BuildersDB unreachable'));
+
+    await expect(buildRoleContextBlock('proj-1', 'product-owner-draft', 'Build a dental clinic site')).resolves.toEqual(
+      expect.any(String),
+    );
+    await flush();
+  });
+
+  it('never adds Product Owner Blueprint guidance for a different role (e.g. requirements-draft uses its own BA guidance)', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(makeBlueprint());
+
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).not.toContain('Blueprint Guidance for Product Planning');
+  });
+
+  it('never adds any Blueprint guidance for an unrelated role (e.g. architecture-draft)', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(makeBlueprint());
+
+    const block = await buildRoleContextBlock('proj-1', 'architecture-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(getLatestBlueprintResolutionMock).not.toHaveBeenCalled();
+    expect(block).not.toContain('Blueprint Guidance');
+  });
+});
