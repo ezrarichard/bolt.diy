@@ -42,3 +42,7 @@ export {
   importBlueprints,
 } from './blueprintPortability';
 export type { BlueprintExportEnvelope, BlueprintImportResult } from './blueprintPortability';
+
+// Sprint 61 — Blueprint Resolution Engine. See its own header comment.
+export { resolveBlueprintCandidates, buildBlueprintMatchSignals } from './blueprintResolutionEngine';
+export type { BlueprintCandidate, BlueprintResolutionResult, BlueprintMatchSignals } from './blueprintResolutionEngine';
