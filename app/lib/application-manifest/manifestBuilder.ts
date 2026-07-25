@@ -1,6 +1,7 @@
 import type { GenerationPlan } from '~/lib/code-generation/codeGenerationTypes';
 import { REACT_VITE_TS_TEMPLATE_ID } from '~/lib/code-generation/templateResolver';
 import { fnv1aHash } from '~/lib/checksum/fnv1a';
+import { backendModuleFilePaths } from '~/lib/backend-generation/backendModuleTypes';
 import type {
   ApplicationManifestFileDraft,
   BuildManifestResult,
@@ -201,6 +202,98 @@ function buildFileDrafts(plan: GenerationPlan): ApplicationManifestFileDraft[] {
         componentName,
         displayName: name,
         featureIds: scopedFeatureIds,
+      }),
+    );
+  }
+
+  /*
+   * Sprint 79 Phase 1 — one vertical slice per planned Backend Module (see
+   * `app/lib/backend-generation/backendModulePlanner.ts`'s `deriveBackendModulePlans`), all six
+   * files tagged with that module's own accumulated `featureIds` (never the whole-MVP
+   * `scopedFeatureIds` above — Backend Generation Architecture §5's "every generated file
+   * retains the complete owning featureIds list" is per-MODULE here, not per-MVP). Dependency
+   * chain matches Backend Generation Architecture §4's layering exactly: validators/repository
+   * depend on types; service depends on repository + validators; routes depends on service +
+   * validators; the thin `api/` adapter depends on routes. Absent entirely for a plan with no
+   * backend modules — every existing manifest (no `backendModules` field, or an empty array)
+   * is completely unaffected by this block.
+   *
+   * Known Sprint 79 Phase 1 scope boundary: `validateManifestFileDrafts` below still validates
+   * EVERY file's `featureIds` (including these) against `plan.scope.inScopeFeatureIds` — the
+   * ACTIVE MVP's own Features only, not a module's full cross-MVP-accumulated history. A module
+   * whose `featureIds` include an OLDER MVP's Feature (the "existing module gains a Feature in a
+   * later MVP" case, Backend Generation Architecture §5's `FEAT-018` example) will have that
+   * older id stripped by `validateFeatureIds` as out-of-scope for THIS run's manifest version —
+   * carry-forward itself (`resolveFileCarryForwardPlan`) is unaffected since it compares whatever
+   * survived validation on both sides consistently. Full cross-MVP accumulation semantics are
+   * out of this sprint's single-module scope; see this module's own header comment.
+   */
+  for (const module of plan.backendModules ?? []) {
+    const paths = backendModuleFilePaths(module.moduleSlug);
+
+    files.push(
+      draft({
+        path: paths.types,
+        category: 'backend',
+        sourceKind: 'ai_generated',
+        generationOrder: order++,
+        displayName: `${module.moduleSlug} — types`,
+        featureIds: module.featureIds,
+      }),
+    );
+    files.push(
+      draft({
+        path: paths.validators,
+        category: 'backend',
+        sourceKind: 'ai_generated',
+        generationOrder: order++,
+        displayName: `${module.moduleSlug} — validators`,
+        dependencies: [paths.types],
+        featureIds: module.featureIds,
+      }),
+    );
+    files.push(
+      draft({
+        path: paths.repository,
+        category: 'backend',
+        sourceKind: 'ai_generated',
+        generationOrder: order++,
+        displayName: `${module.moduleSlug} — repository`,
+        dependencies: [paths.types],
+        featureIds: module.featureIds,
+      }),
+    );
+    files.push(
+      draft({
+        path: paths.service,
+        category: 'backend',
+        sourceKind: 'ai_generated',
+        generationOrder: order++,
+        displayName: `${module.moduleSlug} — service`,
+        dependencies: [paths.repository, paths.validators],
+        featureIds: module.featureIds,
+      }),
+    );
+    files.push(
+      draft({
+        path: paths.routes,
+        category: 'backend',
+        sourceKind: 'ai_generated',
+        generationOrder: order++,
+        displayName: `${module.moduleSlug} — routes`,
+        dependencies: [paths.service, paths.validators],
+        featureIds: module.featureIds,
+      }),
+    );
+    files.push(
+      draft({
+        path: paths.apiAdapter,
+        category: 'backend',
+        sourceKind: 'ai_generated',
+        generationOrder: order++,
+        displayName: `${module.moduleSlug} — api adapter`,
+        dependencies: [paths.routes],
+        featureIds: module.featureIds,
       }),
     );
   }

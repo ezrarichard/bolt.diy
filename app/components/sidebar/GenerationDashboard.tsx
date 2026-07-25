@@ -65,6 +65,7 @@ const CATEGORY_LABELS: Record<ManifestFileCategory, string> = {
   services: 'Services',
   styles: 'Styles',
   documentation: 'Docs',
+  backend: 'Backend',
   other: 'Other',
 };
 

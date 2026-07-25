@@ -133,6 +133,13 @@ describe('resolveCarryForwardPlan — dependency invalidation', () => {
       downgradeToGenerated: false,
     });
   });
+
+  it("Sprint 79 Phase 1 — 'backend' is NOT reusable at the category level (no aggregate fingerprint tracks it; resolveFileCarryForwardPlan's per-file featureIds check is the real signal)", () => {
+    expect(resolveCarryForwardPlan('backend', noInvalidation)).toEqual({
+      reusable: false,
+      downgradeToGenerated: false,
+    });
+  });
 });
 
 describe('resolveFileCarryForwardPlan — module/feature-aware carry-forward (Sprint 78 Phase 0 corrective)', () => {
@@ -177,6 +184,16 @@ describe('resolveFileCarryForwardPlan — module/feature-aware carry-forward (Sp
     const second = resolveFileCarryForwardPlan(previous, next, categoryInvalidatedEverywhere);
 
     expect(first).toEqual(second);
+  });
+
+  it("Sprint 79 Phase 1 — a 'backend' module file with unchanged featureIds is reusable via the per-file check, overriding the category-level 'never reusable' default", () => {
+    const result = resolveFileCarryForwardPlan(
+      { featureIds: ['FEAT-001'] },
+      { category: 'backend', featureIds: ['FEAT-001'] },
+      noCategoryInvalidation,
+    );
+
+    expect(result).toEqual({ reusable: true, downgradeToGenerated: false });
   });
 
   it('falls back to category-level invalidation for files with no Feature ownership at all (scaffold/legacy)', () => {

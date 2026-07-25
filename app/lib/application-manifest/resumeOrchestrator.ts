@@ -132,6 +132,18 @@ export function resolveCarryForwardPlan(
       return invalidation.components
         ? { reusable: false, downgradeToGenerated: false }
         : { reusable: true, downgradeToGenerated: false };
+    case 'backend':
+      /*
+       * Sprint 79 Phase 1 — no aggregate `GenerationPlanFingerprints` field tracks backend
+       * content (see `ManifestFileCategory`'s own comment on `'backend'`), so there is no
+       * category-level signal to check here at all. Conservative default: NOT reusable at this
+       * level. In practice every backend file always carries `featureIds`, so
+       * `resolveFileCarryForwardPlan` below intercepts first and makes the real (correct,
+       * per-file) decision — this branch only matters as the fallback for a hypothetical
+       * backend file with no Feature ownership, where "regenerate rather than silently trust
+       * stale content with nothing to invalidate it" is the safe default.
+       */
+      return { reusable: false, downgradeToGenerated: false };
     default:
       // Scaffold (entry/config/styles/documentation) — deterministic template code, never content-invalidated.
       return { reusable: true, downgradeToGenerated: false };

@@ -24,6 +24,11 @@ import type {
 import type { FileLifecycleHooks, ResumeHooks } from '~/lib/code-generation/generationPipeline';
 import { prepareManifestForGeneration } from '~/lib/application-manifest/resumeOrchestrator';
 import { mvpRepository } from '~/lib/mvp/mvpRepository';
+import { featureRepository } from '~/lib/features/featureRepository';
+import { databaseDesignerEngine } from '~/lib/projects/databaseDesignerEngine';
+import type { BackendDraft } from '~/lib/projects/prompts/backend';
+import { deriveBackendModulePlans } from '~/lib/backend-generation/backendModulePlanner';
+import type { BackendModulePlan } from '~/lib/backend-generation/backendModuleTypes';
 import {
   getActiveApplicationManifest,
   listApplicationManifestFiles,
@@ -90,6 +95,7 @@ const STAGE_GROUP_LABELS: Record<GenerationStage, string> = {
   'generating-services': 'Generating',
   'generating-pages': 'Generating',
   'generating-components': 'Generating',
+  'generating-backend': 'Generating',
   validating: 'Generating',
   assembling: 'Generating',
   'writing-files': 'Writing Files',
@@ -105,6 +111,7 @@ const STAGE_TIMELINE_ID: Record<GenerationStage, string> = {
   'generating-services': 'generating',
   'generating-pages': 'generating',
   'generating-components': 'generating',
+  'generating-backend': 'generating',
   validating: 'generating',
   assembling: 'generating',
   'writing-files': 'writing-files',
@@ -170,6 +177,34 @@ async function resolveMvpScope(project: Project): Promise<GenerationPlanScope> {
     inScopeFeatureIds: currentMvp?.engineeringHandoff?.features.map((feature) => feature.id) ?? [],
     outOfScopeFeatureDescriptions: currentMvp?.engineeringHandoff?.outOfScopeFeatures ?? [],
   };
+}
+
+/**
+ * Sprint 79 Phase 1 — resolves this run's Backend Module plan(s), same "resolve async data
+ * before the synchronous pipeline runs" discipline as `resolveMvpScope` immediately above.
+ * Reads the active MVP's committed Feature rows (`featureRepository.listFeaturesForMvp` — real,
+ * first-class rows, not the draft's own copy), the project's approved `StructuredDatabaseSchema`
+ * (already resolved synchronously from artifacts, no extra DB call), and the approved
+ * `BackendDraft`'s `apiEndpoints`, then groups them deterministically
+ * (`deriveBackendModulePlans`). Degrades to `[]` for a legacy project or one with no active MVP
+ * yet — `buildGenerationPlan`'s `backendModules` param already treats that the same as "omitted"
+ * (see its own comment), so the `'generating-backend'` stage is simply never reached.
+ */
+async function resolveBackendModules(project: Project): Promise<BackendModulePlan[]> {
+  const activeMvpId = await mvpRepository.resolveActiveMvpId(project.id);
+
+  if (!activeMvpId) {
+    return [];
+  }
+
+  const features = await featureRepository.listFeaturesForMvp(activeMvpId);
+  const schema = databaseDesignerEngine.getApprovedStructuredSchema(project);
+  const backendDraft = getApprovedArtifactContent<BackendDraft>(
+    getProjectArtifacts(project),
+    ARTIFACT_TYPES.BACKEND_DRAFT,
+  );
+
+  return deriveBackendModulePlans(features, schema, backendDraft);
 }
 
 /**
@@ -423,6 +458,10 @@ function categoryForRole(role: string): string {
 
   if (role === 'code-gen-services') {
     return 'services';
+  }
+
+  if (role.startsWith('code-gen-backend')) {
+    return 'backend';
   }
 
   return 'other';
@@ -729,6 +768,9 @@ export function useCodeGeneration() {
       // Sprint 48 — resolved once here so the plan itself carries MVP scope (see GenerationPlanScope); createPlanReadyHandler re-resolves it independently at persistence time for Part 7's staleness guard.
       const mvpScope = await resolveMvpScope(project);
 
+      // Sprint 79 Phase 1 — resolved once here, same as mvpScope immediately above; see resolveBackendModules's own comment.
+      const backendModules = await resolveBackendModules(project);
+
       /*
        * Sprint 49, Parts 6/7/9 — resolved BEFORE generation starts (not after) so
        * `createFileLifecycleHooks` already knows which paths to preserve the moment the
@@ -770,6 +812,7 @@ export function useCodeGeneration() {
         createFileLifecycleHooks(project, currentUserId, manifestContext, protectedPaths),
         createResumeHooks(manifestContext),
         mvpScope,
+        backendModules,
       );
 
       if (!result.ok || !result.project) {

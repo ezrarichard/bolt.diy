@@ -8,15 +8,19 @@ import type { BackendDraft } from '~/lib/projects/prompts/backend';
 import type { FrontendDraft } from '~/lib/projects/prompts/frontend';
 import type { ProductAssemblySection, ProductPackage } from '~/lib/product-assembly/assemblyTypes';
 import {
+  buildBackendModulePrompt,
   buildPagePrompt,
   buildServicesPrompt,
   buildSharedComponentsPrompt,
   buildSharedTypesPrompt,
+  BACKEND_GENERATION_SYSTEM_PROMPT,
   CODE_GENERATION_SYSTEM_PROMPT,
 } from './prompts';
 import { REACT_VITE_TS_TEMPLATE_ID, resolveTemplate } from './templateResolver';
 import { scaffoldReactViteProject } from './projectScaffolder';
 import { fnv1aHash } from '~/lib/checksum/fnv1a';
+import { backendModuleFilePathList, backendModuleFilePaths } from '~/lib/backend-generation/backendModuleTypes';
+import type { BackendModulePlan } from '~/lib/backend-generation/backendModuleTypes';
 import type {
   GenerateFn,
   GeneratedFile,
@@ -199,8 +203,17 @@ function toComponentName(name: string): string {
  * give every downstream consumer (the manifest, the resume orchestrator, activity
  * logging) a reliable, structural answer to "which MVP is this generation for" — see
  * manifestBuilder.ts's `buildApplicationManifest`.
+ *
+ * Sprint 79 Phase 1 — `backendModules` (optional, third param) is threaded straight onto the
+ * returned plan's `backendModules`, exactly like `scope` above: resolved ASYNCHRONOUSLY by the
+ * caller (useCodeGeneration.ts, via `deriveBackendModulePlans` against a live Feature-repository
+ * query) before this synchronous function ever runs, never computed in here.
  */
-export function buildGenerationPlan(drafts: ResolvedDrafts, scope?: GenerationPlanScope): GenerationPlan {
+export function buildGenerationPlan(
+  drafts: ResolvedDrafts,
+  scope?: GenerationPlanScope,
+  backendModules?: BackendModulePlan[],
+): GenerationPlan {
   const rawPageNames = dedupePreserveOrder([
     ...(drafts.frontend?.pageHierarchy ?? []),
     ...(drafts.requirements?.pages ?? []),
@@ -252,6 +265,7 @@ export function buildGenerationPlan(drafts: ResolvedDrafts, scope?: GenerationPl
     sharedComponents: resolvedSharedComponents,
     entities,
     apiEndpoints,
+    backendModules,
     scope: {
       mvpId: scope?.mvpId,
       mvpCode: scope?.mvpCode,
@@ -340,11 +354,14 @@ async function callForFiles(
   generate: GenerateFn,
   projectId: string,
   roleKey: string,
+
+  /** Sprint 79 Phase 1 — every existing call site omits this and keeps getting `CODE_GENERATION_SYSTEM_PROMPT` unchanged; only the new `'generating-backend'` stage passes `BACKEND_GENERATION_SYSTEM_PROMPT` (see that constant's own comment on why the frontend-only system prompt is actively wrong for backend code). */
+  systemPrompt: string = CODE_GENERATION_SYSTEM_PROMPT,
 ): Promise<{ ok: true; files: GeneratedFile[] } | { ok: false; error: string }> {
   const outcome = await generateRoleWithRecovery({
     projectId,
     roleKey,
-    system: CODE_GENERATION_SYSTEM_PROMPT,
+    system: systemPrompt,
     prompt,
     contextBlock: '',
     maxOutputTokens: CODE_GENERATION_MAX_OUTPUT_TOKENS,
@@ -535,6 +552,9 @@ export async function runGenerationPipeline(
 
   /** Sprint 48 — resolved by the caller (useCodeGeneration.ts) before this runs, since resolving it requires a BuildersDB call this pipeline deliberately never makes itself (see this file's header on staying provider/DB-agnostic). Omitted entirely for a legacy project — `buildGenerationPlan` degrades to an all-undefined/empty scope, matching pre-Sprint-48 behavior exactly. */
   mvpScope?: GenerationPlanScope,
+
+  /** Sprint 79 Phase 1 — same "caller resolves async data, pipeline stays DB-agnostic" discipline as `mvpScope` immediately above. Omitted entirely for a project with no Backend Modules planned yet — the `'generating-backend'` stage below is then simply never reached. */
+  backendModules?: BackendModulePlan[],
 ): Promise<GenerationResult> {
   const issues: GenerationIssue[] = [];
 
@@ -561,7 +581,7 @@ export async function runGenerationPipeline(
   onProgress({ stage: 'planning' });
 
   const drafts = resolveDraftsFromPackage(project, productPackage);
-  const plan = buildGenerationPlan(drafts, mvpScope);
+  const plan = buildGenerationPlan(drafts, mvpScope, backendModules);
 
   if (plan.pages.length === 0) {
     return {
@@ -779,6 +799,93 @@ export async function runGenerationPipeline(
         'code-gen-components',
         componentsResult.error,
       );
+    }
+  }
+
+  /*
+   * Sprint 79 Phase 1 — one AI call per planned Backend Module (see `GenerationPlan.backendModules`).
+   * Module-atomic resume: unlike the shared-components batch (whose planned paths aren't fully
+   * known until manifestBuilder.ts assigns PascalCase names), a Backend Module's six paths are
+   * FIXED and known up front (`backendModuleFilePathList`) — so if EVERY one of them already has
+   * reusable content, the whole module is skipped with no AI call at all, matching Backend
+   * Generation Architecture §9's "a module is only ever touched by a run whose Selected Features
+   * include a Feature owned by that module." Otherwise the whole module is (re)generated in one
+   * batched call — never a partial regeneration of just one of its six files, since the six
+   * files are one cohesive vertical slice, not independently meaningful on their own.
+   */
+  for (const module of plan.backendModules ?? []) {
+    onProgress({ stage: 'generating-backend', detail: module.moduleSlug });
+
+    const paths = backendModuleFilePaths(module.moduleSlug);
+    const pathList = backendModuleFilePathList(module.moduleSlug);
+    const reusableEntries = await Promise.all(pathList.map(async (path) => [path, await getReusable(path)] as const));
+    const allReusable = reusableEntries.every(([, content]) => content !== undefined);
+
+    if (allReusable) {
+      for (const [path, content] of reusableEntries) {
+        const reusedFile = { path, content: content as string };
+        generatedFiles.push(reusedFile);
+        await safeInvoke(
+          fileHooks?.onFileReady,
+          'generating-backend',
+          reusedFile,
+          `code-gen-backend:${module.moduleSlug}-reused`,
+        );
+      }
+      continue;
+    }
+
+    const backendRole = `code-gen-backend:${module.moduleSlug}`;
+    await safeInvoke(fileHooks?.onFilesStarting, 'generating-backend', backendRole);
+
+    const backendResult = await callForFiles(
+      buildBackendModulePrompt({
+        projectName: project.name,
+        moduleSlug: module.moduleSlug,
+        featureIds: module.featureIds,
+        databaseTables: module.databaseTables,
+        apiEndpoints: module.apiEndpoints,
+        paths,
+      }),
+      generate,
+      project.id,
+      backendRole,
+      BACKEND_GENERATION_SYSTEM_PROMPT,
+    );
+
+    if (!backendResult.ok) {
+      issues.push({
+        severity: 'error',
+        stage: 'generating-backend',
+        message: `${module.moduleSlug}: ${backendResult.error}`,
+      });
+      await safeInvoke(fileHooks?.onStageFailed, 'generating-backend', backendRole, backendResult.error);
+      continue;
+    }
+
+    /*
+     * Conservative on purpose (unlike the pages/components stages, which trust extra AI-returned
+     * files under a prefixed folder): a database Repository is high-stakes enough that only the
+     * six explicitly-requested canonical paths for THIS module are accepted — anything else the
+     * AI returned is dropped and reported, never silently written as an "unplanned" backend file.
+     */
+    const expectedPaths = new Set(pathList);
+    const acceptedFiles = backendResult.files.filter((file) => expectedPaths.has(file.path));
+    const unexpectedFiles = backendResult.files.filter((file) => !expectedPaths.has(file.path));
+
+    for (const unexpected of unexpectedFiles) {
+      issues.push({
+        severity: 'warning',
+        stage: 'generating-backend',
+        message: `${module.moduleSlug}: unexpected file path outside this module's planned set was dropped: ${unexpected.path}`,
+        filePath: unexpected.path,
+      });
+    }
+
+    generatedFiles.push(...acceptedFiles);
+
+    for (const file of acceptedFiles) {
+      await safeInvoke(fileHooks?.onFileReady, 'generating-backend', file, backendRole);
     }
   }
 

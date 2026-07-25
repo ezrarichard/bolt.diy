@@ -7,6 +7,7 @@ import {
   type ResumeHooks,
 } from './generationPipeline';
 import type { GenerateFn, GenerationPlanScope, GenerationResult, OnGenerationProgress } from './codeGenerationTypes';
+import type { BackendModulePlan } from '~/lib/backend-generation/backendModuleTypes';
 
 /**
  * Project Generator — Sprint 38.
@@ -26,6 +27,7 @@ export async function generateProject(
   fileHooks?: FileLifecycleHooks,
   resumeHooks?: ResumeHooks,
   mvpScope?: GenerationPlanScope,
+  backendModules?: BackendModulePlan[],
 ): Promise<GenerationResult> {
   const hasAnySection = productPackage.sections.some(
     (section) => section.id !== 'documentation' && section.files.length > 0,
@@ -54,6 +56,7 @@ export async function generateProject(
     fileHooks,
     resumeHooks,
     mvpScope,
+    backendModules,
   );
 }
 

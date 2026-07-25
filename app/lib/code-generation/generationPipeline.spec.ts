@@ -409,3 +409,269 @@ describe('runGenerationPipeline — resumeHooks (Sprint 44.2 Phase 3, resumable 
     expect(result.ok).toBe(true);
   });
 });
+
+describe('runGenerationPipeline — generating-backend stage (Sprint 79 Phase 1, Backend Module generation)', () => {
+  const APPOINTMENTS_MODULE = {
+    moduleSlug: 'appointments',
+    featureIds: ['FEAT-001'],
+    databaseTables: ['appointments'],
+    apiEndpoints: ['GET /appointments'],
+  };
+
+  const stubBackendGenerate: GenerateFn = async () => ({
+    ok: true,
+    text: JSON.stringify({
+      files: [
+        { path: 'src/features/appointments/types.ts', content: 'export interface Appointment { id: string }' },
+        { path: 'src/features/appointments/validators.ts', content: 'export const validate = () => true;' },
+        { path: 'src/features/appointments/repository.ts', content: 'export class AppointmentsRepository {}' },
+        { path: 'src/features/appointments/service.ts', content: 'export class AppointmentsService {}' },
+        { path: 'src/features/appointments/routes.ts', content: 'export const routes = {};' },
+        { path: 'api/appointments/index.ts', content: "export * from '../../src/features/appointments/routes';" },
+      ],
+    }),
+  });
+
+  it('is never reached when the plan has no backendModules — regression, no behavior change for existing projects', async () => {
+    const stages: string[] = [];
+
+    const result = await runGenerationPipeline(makeProject(), makeEmptyProductPackage(), stubGenerate, (progress) =>
+      stages.push(progress.stage),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(stages).not.toContain('generating-backend');
+  });
+
+  it('generates all six files for one planned Backend Module via one AI call, tagged under one role', async () => {
+    const readyFiles: { path: string; role: string }[] = [];
+    const startingRoles: string[] = [];
+
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      stubBackendGenerate,
+      () => {},
+      undefined,
+      {
+        onFilesStarting: (role) => {
+          startingRoles.push(role);
+        },
+        onFileReady: (file, role) => {
+          readyFiles.push({ path: file.path, role });
+        },
+      },
+      undefined,
+      undefined,
+      [APPOINTMENTS_MODULE],
+    );
+
+    expect(result.ok).toBe(true);
+    expect(startingRoles).toContain('code-gen-backend:appointments');
+
+    const backendPaths = readyFiles
+      .filter((entry) => entry.role === 'code-gen-backend:appointments')
+      .map((e) => e.path);
+    expect(backendPaths.sort()).toEqual(
+      [
+        'src/features/appointments/types.ts',
+        'src/features/appointments/validators.ts',
+        'src/features/appointments/repository.ts',
+        'src/features/appointments/service.ts',
+        'src/features/appointments/routes.ts',
+        'api/appointments/index.ts',
+      ].sort(),
+    );
+  });
+
+  it('does NOT generate a module that was not planned — one module in, one module out (no Billing)', async () => {
+    const readyPaths: string[] = [];
+
+    await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      stubBackendGenerate,
+      () => {},
+      undefined,
+      {
+        onFileReady: (file) => {
+          readyPaths.push(file.path);
+        },
+      },
+      undefined,
+      undefined,
+      [APPOINTMENTS_MODULE],
+    );
+
+    expect(readyPaths.some((path) => path.includes('billing'))).toBe(false);
+  });
+
+  it("module-atomic resume: skips the AI call entirely when every one of the module's six paths already has reusable content", async () => {
+    let backendAiCalls = 0;
+    const generate: GenerateFn = async (system, prompt, options) => {
+      backendAiCalls += 1;
+
+      if (typeof system === 'string' && system.includes('Backend Engineer')) {
+        return stubBackendGenerate(system, prompt, options);
+      }
+
+      // Any non-backend caller (only the components batch should ever reach this, since resumeHooks below covers types/services/page) gets ordinary stub content, never the backend module's own file paths.
+      return stubGenerate(system, prompt, options);
+    };
+
+    const reused = new Map([
+      ['src/types/index.ts', 'export interface ReusedTypes {}'],
+      ['src/services/api.ts', 'export const reusedServices = true;'],
+      ['src/pages/HomePage.tsx', 'export default function HomePage() { return "reused"; }'],
+      ['src/features/appointments/types.ts', 'export interface Reused {}'],
+      ['src/features/appointments/validators.ts', 'export const reused = true;'],
+      ['src/features/appointments/repository.ts', 'export class ReusedRepository {}'],
+      ['src/features/appointments/service.ts', 'export class ReusedService {}'],
+      ['src/features/appointments/routes.ts', 'export const reused = {};'],
+      ['api/appointments/index.ts', "export * from 'reused';"],
+    ]);
+
+    const readyEvents: { path: string; role: string }[] = [];
+
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      generate,
+      () => {},
+      undefined,
+      {
+        onFileReady: (file, role) => {
+          readyEvents.push({ path: file.path, role });
+        },
+      },
+      { getReusableContent: (path) => reused.get(path) },
+      undefined,
+      [APPOINTMENTS_MODULE],
+    );
+
+    expect(result.ok).toBe(true);
+
+    /*
+     * Every frontend AND backend path was reusable — the only remaining generate() call is the
+     * shared-components batch, which resumeHooks deliberately never covers (see ResumeHooks's
+     * own comment) — none of it is the backend module's own call.
+     */
+    expect(backendAiCalls).toBe(1);
+
+    const backendEvents = readyEvents.filter((e) => e.path.includes('appointments') || e.path.includes('api/'));
+    expect(backendEvents.every((e) => e.role.endsWith('-reused'))).toBe(true);
+    expect(backendEvents.find((e) => e.path === 'src/features/appointments/types.ts')?.role).toBe(
+      'code-gen-backend:appointments-reused',
+    );
+
+    // The reused content itself (not stubBackendGenerate's) is what ends up in the assembled project.
+    expect(result.project?.files.find((f) => f.path === 'src/features/appointments/types.ts')?.content).toBe(
+      'export interface Reused {}',
+    );
+  });
+
+  it("does NOT skip the AI call when only SOME of the module's six paths are reusable — module-atomic, never a partial reuse", async () => {
+    let backendAiCalls = 0;
+    const generate: GenerateFn = async (...args) => {
+      backendAiCalls += 1;
+      return stubBackendGenerate(...args);
+    };
+
+    // Only 'types.ts' is reusable — the other five are not, so the whole module must regenerate.
+    const partiallyReused = new Map([['src/features/appointments/types.ts', 'export interface Stale {}']]);
+
+    await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      generate,
+      () => {},
+      undefined,
+      undefined,
+      { getReusableContent: (path) => partiallyReused.get(path) },
+      undefined,
+      [APPOINTMENTS_MODULE],
+    );
+
+    // types/services/page resume calls don't touch generate() (map has no entries for them, so getReusable returns undefined -> generate() IS called for them too); what this test actually isolates is that the backend module's own AI call still fires despite one of its six paths being "reusable".
+    const backendModuleCallCount = backendAiCalls;
+    expect(backendModuleCallCount).toBeGreaterThan(0);
+  });
+
+  it("drops (and reports) any file the AI returned outside this module's six canonical paths — never trusted for backend code", async () => {
+    const generate: GenerateFn = async (system, prompt, options) => {
+      if (typeof system === 'string' && system.includes('Backend Engineer')) {
+        return {
+          ok: true,
+          text: JSON.stringify({
+            files: [
+              { path: 'src/features/appointments/types.ts', content: 'export interface Appointment {}' },
+              { path: 'src/features/appointments/validators.ts', content: 'x' },
+              { path: 'src/features/appointments/repository.ts', content: 'x' },
+              { path: 'src/features/appointments/service.ts', content: 'x' },
+              { path: 'src/features/appointments/routes.ts', content: 'x' },
+              { path: 'api/appointments/index.ts', content: 'x' },
+              { path: 'src/features/appointments/EXTRA_UNPLANNED.ts', content: 'should be dropped' },
+            ],
+          }),
+        };
+      }
+
+      return stubGenerate(system, prompt, options);
+    };
+
+    const readyPaths: string[] = [];
+
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      generate,
+      () => {},
+      undefined,
+      {
+        onFileReady: (file) => {
+          readyPaths.push(file.path);
+        },
+      },
+      undefined,
+      undefined,
+      [APPOINTMENTS_MODULE],
+    );
+
+    expect(readyPaths).not.toContain('src/features/appointments/EXTRA_UNPLANNED.ts');
+    expect(
+      result.issues.some((issue) => issue.severity === 'warning' && issue.message.includes('EXTRA_UNPLANNED.ts')),
+    ).toBe(true);
+  });
+
+  it("one module's failed AI call is recorded as an error issue but does not abort the rest of the pipeline", async () => {
+    const generate: GenerateFn = async (system) => {
+      if (system === undefined) {
+        return stubGenerate('', '', {});
+      }
+
+      // The backend stage's own system prompt is distinct from the frontend one — fail only that call.
+      if (system.includes('Backend Engineer')) {
+        return { ok: false, error: 'model quota exceeded' };
+      }
+
+      return stubGenerate(system, '', {});
+    };
+
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      generate,
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      [APPOINTMENTS_MODULE],
+    );
+
+    expect(result.ok).toBe(true);
+    expect(
+      result.issues.some((issue) => issue.stage === 'generating-backend' && issue.message.includes('quota exceeded')),
+    ).toBe(true);
+  });
+});

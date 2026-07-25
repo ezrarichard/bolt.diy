@@ -77,6 +77,56 @@ ${specSection('UI/UX Notes', input.uiuxNotes)}
 Generate exactly one file, "src/pages/${input.componentName}.tsx", exporting a default React component named "${input.componentName}" for the "${input.pageName}" page (route "${input.routePath}"). Use the shared types ("../types") and API services ("../services/api") where the page's content calls for real(-ish) data. This page should feel complete and usable, not a stub.`;
 }
 
+/**
+ * Sprint 79 Phase 1 — a SEPARATE system prompt for the `'generating-backend'` stage only.
+ * `CODE_GENERATION_SYSTEM_PROMPT` above hard-codes "React + TypeScript + Vite" and "only React,
+ * react-router-dom, and plain TypeScript/CSS" — correct for every existing stage (all genuinely
+ * frontend) but actively wrong instructions for repository/service/route code, which needs
+ * `@supabase/supabase-js` and no React at all. Every existing call site is untouched; only the
+ * new backend stage passes this instead. Encodes Backend Generation Architecture §4/§6/§8's
+ * layering rules directly, since there's no separate lint/type boundary enforcing them yet
+ * (Sprint 79/80 scope) — the prompt itself is the only thing holding the line for now.
+ */
+export const BACKEND_GENERATION_SYSTEM_PROMPT = `You are a Senior Backend Engineer working inside Builders, an AI engineering platform. Your job is to write REAL, working TypeScript backend source files for ONE Feature Slice/Module, based on the specification you are given — never placeholder or "TODO" code.
+
+Rules:
+- Respond with ONLY a single JSON object: { "files": [ { "path": string, "content": string } ] } — no markdown code fences, no commentary before or after it.
+- Generate EXACTLY the file paths you are asked for below, no more, no fewer, no renamed/relocated files.
+- Use TypeScript and "@supabase/supabase-js" only — no React, no JSX, no frontend framework code anywhere in these files.
+- Layering is mandatory and must not be violated:
+  - "repository.ts" is the ONLY file allowed to import "@supabase/supabase-js" or talk to the database. It exposes one small, typed method per query the service layer needs — never a generic "run any query" escape hatch.
+  - "service.ts" contains business logic and calls "repository.ts" only. It must never import "@supabase/supabase-js" and must never know about HTTP requests/responses.
+  - "validators.ts" exports one validation function per operation, derived from the database columns and acceptance criteria given below — used by both "routes.ts" and (in a real app) any UI form.
+  - "routes.ts" contains thin HTTP handlers only: validate the request via "validators.ts", call exactly one "service.ts" method, map the result/error to a response. No business logic and no direct database access in this file.
+  - "types.ts" exports the module's local TypeScript interfaces, matching the database tables given below.
+  - The "api/" adapter file is a one-line passthrough that imports and re-exports "routes.ts" — it must contain no logic of its own.
+- Base your output strictly on the specification given below. Do not invent endpoints, tables, or business rules that aren't implied by it.`;
+
+export interface BackendModulePromptInput {
+  projectName: string;
+  moduleSlug: string;
+  featureIds: string[];
+  databaseTables: string[];
+  apiEndpoints: string[];
+  paths: { types: string; validators: string; repository: string; service: string; routes: string; apiAdapter: string };
+}
+
+export function buildBackendModulePrompt(input: BackendModulePromptInput): string {
+  return `Project: ${input.projectName}
+Module: ${input.moduleSlug} (implements Feature(s): ${formatList(input.featureIds)})
+
+${specSection('Database Tables This Module May Access', formatList(input.databaseTables))}
+${specSection('Planned API Endpoints', formatList(input.apiEndpoints))}
+
+Generate exactly these six files for the "${input.moduleSlug}" module:
+- "${input.paths.types}" — module-local TypeScript interfaces for the tables above.
+- "${input.paths.validators}" — one validation function per endpoint/operation.
+- "${input.paths.repository}" — the ONLY file that imports "@supabase/supabase-js"; one typed method per query the service needs.
+- "${input.paths.service}" — business logic, calling "${input.paths.repository}" only.
+- "${input.paths.routes}" — thin HTTP handlers calling "${input.paths.service}", validated via "${input.paths.validators}".
+- "${input.paths.apiAdapter}" — a one-line passthrough that imports and re-exports "${input.paths.routes}".`;
+}
+
 export interface SharedComponentsPromptInput {
   projectName: string;
   componentNames: string[];

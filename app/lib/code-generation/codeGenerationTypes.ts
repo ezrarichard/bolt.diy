@@ -17,6 +17,8 @@
  * filesystem (see webcontainerWriter.ts).
  */
 
+import type { BackendModulePlan } from '~/lib/backend-generation/backendModuleTypes';
+
 /** One file in the generated project, path relative to the project root (e.g. "src/App.tsx", "package.json") — never includes WORK_DIR; see webcontainerWriter.ts for where that's applied. */
 export interface GeneratedFile {
   path: string;
@@ -50,6 +52,9 @@ export type GenerationStage =
   | 'generating-services'
   | 'generating-pages'
   | 'generating-components'
+
+  /** Sprint 79 Phase 1 — one AI call per planned Backend Module (see `GenerationPlan.backendModules`), after components and before validating. Absent entirely (never reached) for a plan with no backend modules — the deliberate legacy/no-MVP degrade every other MVP-aware addition in this pipeline already follows. */
+  | 'generating-backend'
   | 'validating'
   | 'assembling'
   | 'writing-files'
@@ -173,4 +178,16 @@ export interface GenerationPlan {
 
   /** Sprint 48 — see `GenerationPlanScope`'s own comment. Always present (never undefined) — empty/undefined-valued for a legacy project, so every consumer can destructure it without an extra undefined check. */
   scope: GenerationPlanScope;
+
+  /**
+   * Sprint 79 Phase 1 — the deterministic Backend Module plan(s) for the active MVP's Features
+   * (see `app/lib/backend-generation/backendModulePlanner.ts`'s `deriveBackendModulePlans`),
+   * resolved by the CALLER (useCodeGeneration.ts) — same "pipeline stays DB-agnostic, caller
+   * resolves async data" discipline `scope` above already established — and threaded straight
+   * through `buildGenerationPlan`'s optional third parameter, never computed inside this module.
+   * Optional and omitted (not just empty) for every existing call site/fixture that predates
+   * this field, so no caller anywhere else in this codebase needs updating; every consumer reads
+   * it as `plan.backendModules ?? []`.
+   */
+  backendModules?: BackendModulePlan[];
 }

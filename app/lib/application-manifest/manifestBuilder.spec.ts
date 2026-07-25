@@ -217,3 +217,79 @@ describe('validateManifestFileDrafts', () => {
     expect(missing).toHaveLength(4); // src/main.tsx, src/App.tsx, package.json, index.html
   });
 });
+
+describe('buildApplicationManifest — Sprint 79 Phase 1 Backend Module planning', () => {
+  it('plans exactly the six-file vertical slice for one Backend Module, tagged with its featureIds and dependency-chained', () => {
+    const result = buildApplicationManifest({
+      projectId: 'proj-1',
+      plan: makePlan({
+        scope: { inScopeFeatureIds: ['FEAT-001'], outOfScopeFeatureDescriptions: [] },
+        backendModules: [
+          { moduleSlug: 'appointments', featureIds: ['FEAT-001'], databaseTables: ['appointments'], apiEndpoints: [] },
+        ],
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+
+    const byPath = new Map(result.files.map((file) => [file.path, file]));
+    const backendPaths = [
+      'src/features/appointments/types.ts',
+      'src/features/appointments/validators.ts',
+      'src/features/appointments/repository.ts',
+      'src/features/appointments/service.ts',
+      'src/features/appointments/routes.ts',
+      'api/appointments/index.ts',
+    ];
+
+    for (const path of backendPaths) {
+      const file = byPath.get(path);
+      expect(file, `expected ${path} to be planned`).toBeDefined();
+      expect(file?.category).toBe('backend');
+      expect(file?.sourceKind).toBe('ai_generated');
+      expect(file?.featureIds).toEqual(['FEAT-001']);
+    }
+
+    expect(byPath.get('src/features/appointments/validators.ts')?.dependencies).toEqual([
+      'src/features/appointments/types.ts',
+    ]);
+    expect(byPath.get('src/features/appointments/service.ts')?.dependencies).toEqual([
+      'src/features/appointments/repository.ts',
+      'src/features/appointments/validators.ts',
+    ]);
+    expect(byPath.get('src/features/appointments/routes.ts')?.dependencies).toEqual([
+      'src/features/appointments/service.ts',
+      'src/features/appointments/validators.ts',
+    ]);
+    expect(byPath.get('api/appointments/index.ts')?.dependencies).toEqual(['src/features/appointments/routes.ts']);
+  });
+
+  it('plans only the ONE requested module — does not invent files for a module that was not supplied (no Billing when only Appointments is planned)', () => {
+    const result = buildApplicationManifest({
+      projectId: 'proj-1',
+      plan: makePlan({
+        scope: { inScopeFeatureIds: ['FEAT-001'], outOfScopeFeatureDescriptions: [] },
+        backendModules: [
+          { moduleSlug: 'appointments', featureIds: ['FEAT-001'], databaseTables: [], apiEndpoints: [] },
+        ],
+      }),
+    });
+
+    const billingFiles = result.files.filter((file) => file.path.includes('billing'));
+    expect(billingFiles).toHaveLength(0);
+  });
+
+  it('a plan with no backendModules field produces exactly the same file set as before this sprint — regression', () => {
+    const withoutBackend = buildApplicationManifest({ projectId: 'proj-1', plan: makePlan() });
+    const explicitlyEmpty = buildApplicationManifest({
+      projectId: 'proj-1',
+      plan: makePlan({ backendModules: [] }),
+    });
+
+    const pathsA = withoutBackend.files.map((file) => file.path).sort();
+    const pathsB = explicitlyEmpty.files.map((file) => file.path).sort();
+
+    expect(pathsA).toEqual(pathsB);
+    expect(pathsA.some((path) => path.startsWith('src/features/'))).toBe(false);
+  });
+});

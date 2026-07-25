@@ -46,6 +46,19 @@ export type ManifestFileStatus =
 /** Where a planned file's content will come from — `scaffold`/`ai_generated` are the only kinds Phase 1 produces; `derived`/`copied`/`repair_generated` are reserved for later phases (dependency-derived files, customer-data copies, repair-engine output). */
 export type ManifestFileSourceKind = 'scaffold' | 'ai_generated' | 'derived' | 'copied' | 'repair_generated';
 
+/**
+ * Sprint 79 Phase 1 (Backend Generation Foundation) adds `'backend'` — every file inside a
+ * Backend Module's `src/features/<moduleSlug>/` slice and its `api/<moduleSlug>/` adapter (see
+ * `app/lib/backend-generation/backendModuleTypes.ts`). Deliberately ONE category for the whole
+ * vertical slice (types/validators/repository/service/routes/api-adapter together) rather than
+ * a category per layer — Backend Generation Architecture §9's carry-forward unit is the MODULE,
+ * not the individual file layer, so these files are meant to move together. Unlike
+ * `'pages'`/`'services'`/etc., `'backend'` has no aggregate `GenerationPlanFingerprints` entry —
+ * invalidation for it is driven entirely by `resumeOrchestrator.ts`'s per-file `featureIds`
+ * ownership check (`resolveFileCarryForwardPlan`), which every backend file always carries by
+ * construction (see `resolveCarryForwardPlan`'s own `'backend'` case for the conservative
+ * category-level fallback when that per-file signal isn't available).
+ */
 export type ManifestFileCategory =
   | 'entry'
   | 'config'
@@ -55,6 +68,7 @@ export type ManifestFileCategory =
   | 'services'
   | 'styles'
   | 'documentation'
+  | 'backend'
   | 'other';
 
 export type ApplicationManifestStatus = 'active' | 'superseded';
