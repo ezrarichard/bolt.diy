@@ -16,6 +16,18 @@ interface ProjectManagerPanelProps {
 
   /** Sprint UX-2 — jumps to whichever workflow tab is next-actionable; the hero's "Continue" button only renders when the caller supplies this. Purely a navigation shortcut — never approves, generates, or writes anything itself. */
   onContinue?: () => void;
+
+  /**
+   * Sprint 74 (Product Readiness Audit) — whether the Product Owner's MVP roadmap has been
+   * approved (Gate A; see ProjectDashboard.tsx's own `productOwnerApproved`). This hero's
+   * `stages` list below is `projectManagerEngine`'s 8-role engineering pipeline
+   * (requirements..devops) and has no concept of the Product Owner/Gate A step that sits
+   * between Requirements and Architecture — without this prop, the hero read "Engineering is
+   * in progress" the instant Requirements was approved, even while the customer was still
+   * looking at an unapproved MVP roadmap waiting for their decision. Optional so any other
+   * caller (none exist today) still renders sensibly without it.
+   */
+  productOwnerApproved?: boolean;
 }
 
 /** Extends ARTIFACT_STATUS_META (draft/approved/discarded) with the one status it has no concept of — an artifact that was never generated. */
@@ -139,7 +151,7 @@ function StatusMetric({
  * business-friendly stage naming) is derived in this component from the exact same `health`
  * object — the engine is untouched.
  */
-export function ProjectManagerPanel({ project, onContinue }: ProjectManagerPanelProps) {
+export function ProjectManagerPanel({ project, onContinue, productOwnerApproved }: ProjectManagerPanelProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   const health = projectManagerEngine.analyzeProject(project);
@@ -170,6 +182,16 @@ export function ProjectManagerPanel({ project, onContinue }: ProjectManagerPanel
   const currentStage = stages.find((stage) => stage.status !== 'approved');
   const isComplete = !currentStage;
   const needsRequirements = stages[0].status === 'not-generated';
+
+  /**
+   * Sprint 74 — true once Requirements is approved but before the Product Owner's MVP roadmap
+   * is (Gate A). `stages` has no entry for this step, so without this check the hero would
+   * jump straight to treating Architecture (the next *engine* stage) as "in progress" even
+   * though nothing downstream of Requirements can start until the customer approves the MVP
+   * roadmap. `productOwnerApproved === undefined` (caller didn't pass it) never triggers this,
+   * so callers that don't pass the prop keep the exact prior behavior.
+   */
+  const awaitingMvpApproval = !needsRequirements && productOwnerApproved === false;
   const remaining = stages.length - completedCount;
   const estimatedSeconds = remaining * AUTO_ENGINEERING_ESTIMATED_SECONDS;
   const estimatedLabel = isComplete
@@ -187,30 +209,36 @@ export function ProjectManagerPanel({ project, onContinue }: ProjectManagerPanel
    * label, since Business Mode has no per-role screen for the customer to land on anyway
    * (see ProjectDashboard.tsx's Engineering tab).
    */
-  const currentStageLabel = !currentStage
-    ? 'Complete'
-    : currentStage.id === 'requirements'
-      ? 'Business Analysis'
-      : 'Engineering';
+  const currentStageLabel = awaitingMvpApproval
+    ? 'MVP Planning'
+    : !currentStage
+      ? 'Complete'
+      : currentStage.id === 'requirements'
+        ? 'Business Analysis'
+        : 'Engineering';
 
-  /** Sprint UX-2 — "Approval Required" stat: true exactly when there's a generated draft sitting in front of the customer waiting for a decision (same condition the old "Review your ... work" copy used). */
-  const approvalRequired = currentStage?.status === 'draft';
+  /** Sprint UX-2 — "Approval Required" stat: true exactly when there's a generated draft sitting in front of the customer waiting for a decision (same condition the old "Review your ... work" copy used). Sprint 74 — also true while awaiting the Product Owner's Gate A approval, the one other customer-facing decision point this hero can land on. */
+  const approvalRequired = awaitingMvpApproval || currentStage?.status === 'draft';
 
   const nextAction = isComplete
     ? 'Generate your prototype'
     : needsRequirements
       ? 'Add your requirements to begin'
-      : approvalRequired
-        ? `Review your ${currentStageLabel} output`
-        : `${currentStageLabel} is in progress`;
+      : awaitingMvpApproval
+        ? 'Approve your MVP roadmap to begin engineering'
+        : approvalRequired
+          ? `Review your ${currentStageLabel} output`
+          : `${currentStageLabel} is in progress`;
 
   const statusMessage = isComplete
     ? 'Your product is ready to preview.'
     : needsRequirements
       ? 'Add your requirements so your AI team can start.'
-      : approvalRequired
-        ? 'Your review is needed to continue.'
-        : 'Your AI team is building your product.';
+      : awaitingMvpApproval
+        ? 'Review and approve your MVP roadmap to start engineering.'
+        : approvalRequired
+          ? 'Your review is needed to continue.'
+          : 'Your AI team is building your product.';
   const statusTone: 'amber' | 'purple' | 'green' = needsRequirements
     ? 'amber'
     : approvalRequired
@@ -223,11 +251,13 @@ export function ProjectManagerPanel({ project, onContinue }: ProjectManagerPanel
 
   const continueLabel = needsRequirements
     ? 'Add Your Requirements'
-    : approvalRequired
-      ? 'Review & Approve'
-      : isComplete
-        ? 'Generate Your App'
-        : undefined;
+    : awaitingMvpApproval
+      ? 'Review MVP Roadmap'
+      : approvalRequired
+        ? 'Review & Approve'
+        : isComplete
+          ? 'Generate Your App'
+          : undefined;
 
   return (
     <div className="space-y-5">
