@@ -12,6 +12,7 @@ const {
   getLatestBlueprintResolutionMock,
   getBlueprintMock,
   getEffectiveRegionalSelectionMock,
+  getEffectivePackageSelectionMock,
 } = vi.hoisted(() => ({
   isBuildersDbAvailableMock: vi.fn(),
   getRoleOutputsForProjectMock: vi.fn(),
@@ -24,6 +25,7 @@ const {
   getLatestBlueprintResolutionMock: vi.fn(),
   getBlueprintMock: vi.fn(),
   getEffectiveRegionalSelectionMock: vi.fn(),
+  getEffectivePackageSelectionMock: vi.fn(),
 }));
 
 vi.mock('~/lib/builders-db/repositories/buildersDbRepository', () => ({
@@ -57,6 +59,10 @@ vi.mock('~/lib/regional/regionalResolutionService', () => ({
   getEffectiveRegionalSelection: getEffectiveRegionalSelectionMock,
 }));
 
+vi.mock('~/lib/package-intelligence/packageResolutionService', () => ({
+  getEffectivePackageSelection: getEffectivePackageSelectionMock,
+}));
+
 /*
  * Sprint 71 — module-level default (never reset by any pre-existing describe block's own
  * beforeEach, since none of them reference this mock): every Blueprint-only test written
@@ -72,6 +78,24 @@ getEffectiveRegionalSelectionMock.mockResolvedValue({
   sourceValue: null,
   matchedCountry: null,
   unresolvedReason: 'No manual regional selection has been made for this project.',
+  resolvedAt: '2026-01-01T00:00:00.000Z',
+  contentAvailable: false,
+});
+
+/*
+ * Sprint 73 — module-level default (never reset by any pre-existing describe block's own
+ * beforeEach, since none of them reference this mock): every pre-Sprint-73 test gets a
+ * consistent "no package profile resolved" result, so `buildPackageGuidance` returns null
+ * exactly like it did before this mock existed. Tests that actually exercise Package Guidance
+ * override this per-test.
+ */
+getEffectivePackageSelectionMock.mockResolvedValue({
+  packageProfileId: null,
+  packageProfileCode: null,
+  packageProfileVersion: null,
+  selectionSource: 'none',
+  sourceValue: null,
+  unresolvedReason: 'No manual package selection has been made for this project.',
   resolvedAt: '2026-01-01T00:00:00.000Z',
   contentAvailable: false,
 });
@@ -2423,5 +2447,320 @@ describe('buildersDbContextProvider — Sprint 71 Regional Intelligence scope co
     if (block.includes('Data-residency considerations')) {
       expect(block).toContain('advisory only');
     }
+  });
+});
+
+/*
+ * Sprint 73 — Package Intelligence Foundation. `makePackageResolution` mirrors
+ * `makeRegionalResolution` above: a shared fixture builder for `PackageResolutionResult`
+ * (packageResolutionService.ts), reused across every describe block below.
+ */
+function makePackageResolution(overrides: Record<string, unknown> = {}) {
+  return {
+    packageProfileId: 'package-professional',
+    packageProfileCode: 'PROFESSIONAL',
+    packageProfileVersion: 1,
+    selectionSource: 'manual_override',
+    sourceValue: 'PROFESSIONAL',
+    resolvedAt: '2026-07-25T00:00:00.000Z',
+    contentAvailable: true,
+    ...overrides,
+  };
+}
+
+const UNRESOLVED_PACKAGE = {
+  packageProfileId: null,
+  packageProfileCode: null,
+  packageProfileVersion: null,
+  selectionSource: 'none',
+  sourceValue: null,
+  unresolvedReason: 'No manual package selection has been made for this project.',
+  resolvedAt: '2026-01-01T00:00:00.000Z',
+  contentAvailable: false,
+};
+
+describe('buildersDbContextProvider — Sprint 73 Package Intelligence Foundation', () => {
+  beforeEach(() => {
+    isBuildersDbAvailableMock.mockReset().mockReturnValue(true);
+    getRoleOutputsForProjectMock.mockReset().mockResolvedValue([]);
+    getProjectTasksMock.mockReset().mockResolvedValue([]);
+    getTaskReviewsMock.mockReset().mockResolvedValue([]);
+    addProjectActivityMock.mockReset().mockResolvedValue(true);
+    saveContextTraceMock.mockReset().mockResolvedValue(true);
+    getLatestRequirementsSessionMock.mockReset();
+    getBusinessUnderstandingModelMock.mockReset();
+    getLatestBlueprintResolutionMock.mockReset().mockResolvedValue(null);
+    getBlueprintMock.mockReset();
+    getEffectiveRegionalSelectionMock.mockReset().mockResolvedValue(UNRESOLVED_REGIONAL);
+    getEffectivePackageSelectionMock.mockReset().mockResolvedValue(UNRESOLVED_PACKAGE);
+  });
+
+  it('adds no Package Guidance when no package profile is resolved', async () => {
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).not.toContain('Package Guidance');
+  });
+
+  it('adds Package Guidance once a manual selection resolves a profile — Starter', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(
+      makePackageResolution({
+        packageProfileCode: 'STARTER',
+        packageProfileId: 'package-starter',
+        sourceValue: 'STARTER',
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('### Package Guidance');
+    expect(block).toContain('Starter');
+  });
+
+  it('adds Package Guidance once a manual selection resolves a profile — Professional', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(makePackageResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'architecture-draft', 'Build a booking system');
+    await flush();
+
+    expect(block).toContain('### Package Guidance');
+    expect(block).toContain('Professional');
+  });
+
+  it('adds Package Guidance once a manual selection resolves a profile — Premium', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(
+      makePackageResolution({
+        packageProfileCode: 'PREMIUM',
+        packageProfileId: 'package-premium',
+        sourceValue: 'PREMIUM',
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'qa-draft', 'Build an e-commerce product');
+    await flush();
+
+    expect(block).toContain('### Package Guidance');
+    expect(block).toContain('Premium');
+  });
+
+  it('renders the Package Guidance heading distinctly from Blueprint and Regional Guidance — never merged', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(makeBlueprint());
+    getEffectiveRegionalSelectionMock.mockResolvedValue(makeRegionalResolution());
+    getEffectivePackageSelectionMock.mockResolvedValue(makePackageResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('### Blueprint Guidance');
+    expect(block).toContain('### Regional Guidance');
+    expect(block).toContain('### Package Guidance');
+
+    const blueprintIndex = block.indexOf('### Blueprint Guidance');
+    const regionalIndex = block.indexOf('### Regional Guidance');
+    const packageIndex = block.indexOf('### Package Guidance');
+
+    expect(new Set([blueprintIndex, regionalIndex, packageIndex]).size).toBe(3);
+    expect(regionalIndex).toBeGreaterThan(blueprintIndex);
+    expect(packageIndex).toBeGreaterThan(regionalIndex);
+  });
+
+  it('records correct Package traceability metadata, separate from Blueprint and Regional traceability', async () => {
+    getEffectiveRegionalSelectionMock.mockResolvedValue(makeRegionalResolution());
+    getEffectivePackageSelectionMock.mockResolvedValue(makePackageResolution());
+
+    await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const packageSource = sources.find((s: { type: string }) => s.type === 'package-resolution');
+    const regionalSource = sources.find((s: { type: string }) => s.type === 'regional-resolution');
+
+    expect(packageSource).toEqual(
+      expect.objectContaining({
+        type: 'package-resolution',
+        packageProfileId: 'package-professional',
+        packageProfileCode: 'PROFESSIONAL',
+        packageProfileVersion: 1,
+        selectionSource: 'manual_override',
+        contentAvailable: true,
+      }),
+    );
+    expect(regionalSource).not.toBe(packageSource);
+  });
+
+  it('never throws when package content is missing/sparse', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(makePackageResolution({ contentAvailable: false }));
+
+    await expect(buildRoleContextBlock('proj-1', 'architecture-draft', 'Build a US SaaS app')).resolves.toEqual(
+      expect.any(String),
+    );
+  });
+
+  it('never blocks generation when the package lookup itself fails', async () => {
+    getEffectivePackageSelectionMock.mockRejectedValue(new Error('lookup failed'));
+
+    await expect(buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site')).resolves.toEqual(
+      expect.any(String),
+    );
+  });
+
+  it('each role receives its correct family guidance — business/product for requirements-draft', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(makePackageResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('Delivery positioning');
+  });
+
+  it('each role receives its correct family guidance — architecture/engineering for devops-draft', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(makePackageResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'devops-draft', 'Build a booking system');
+    await flush();
+
+    expect(block).toContain('### Package Guidance');
+  });
+
+  it('each role receives its correct family guidance — design/quality for uiux-draft', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(makePackageResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'uiux-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('### Package Guidance');
+  });
+
+  it('an unrecognized role key never receives Package Guidance', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(makePackageResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'code-reviewer', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).not.toContain('### Package Guidance');
+  });
+
+  it('existing Blueprint-aware and Regional behaviour remains unchanged when no package is selected', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(makeBlueprint());
+    getEffectiveRegionalSelectionMock.mockResolvedValue(makeRegionalResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('### Blueprint Guidance');
+    expect(block).toContain('### Regional Guidance');
+    expect(block).not.toContain('### Package Guidance');
+  });
+});
+
+describe('buildersDbContextProvider — Sprint 73 Package Intelligence scope control', () => {
+  beforeEach(() => {
+    isBuildersDbAvailableMock.mockReset().mockReturnValue(true);
+    getRoleOutputsForProjectMock.mockReset().mockResolvedValue([]);
+    getProjectTasksMock.mockReset().mockResolvedValue([]);
+    getTaskReviewsMock.mockReset().mockResolvedValue([]);
+    addProjectActivityMock.mockReset().mockResolvedValue(true);
+    saveContextTraceMock.mockReset().mockResolvedValue(true);
+    getLatestRequirementsSessionMock.mockReset();
+    getBusinessUnderstandingModelMock.mockReset();
+    getLatestBlueprintResolutionMock.mockReset().mockResolvedValue(null);
+    getBlueprintMock.mockReset();
+    getEffectiveRegionalSelectionMock.mockReset().mockResolvedValue(UNRESOLVED_REGIONAL);
+  });
+
+  it('Starter never drops below the minimum quality floor', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(
+      makePackageResolution({
+        packageProfileCode: 'STARTER',
+        packageProfileId: 'package-starter',
+        sourceValue: 'STARTER',
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'qa-draft', 'Build a basic informational website');
+    await flush();
+
+    expect(block).toContain('Minimum quality floor');
+    expect(block).toContain('Automated tests covering the critical user-facing paths');
+  });
+
+  it('Professional package guidance never instructs adding analytics — only ever "does not add" phrasing', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(makePackageResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a booking system');
+    await flush();
+
+    const text = block.toLowerCase();
+
+    if (text.includes('add analytics')) {
+      expect(text).toContain('does not add analytics');
+    }
+  });
+
+  it('Premium package guidance never instructs adding authentication, SSO, or multi-tenancy', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(
+      makePackageResolution({
+        packageProfileCode: 'PREMIUM',
+        packageProfileId: 'package-premium',
+        sourceValue: 'PREMIUM',
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'architecture-draft', 'Build a US SaaS product');
+    await flush();
+
+    const sentences = block.toLowerCase().split(/[.\n]/);
+
+    for (const sentence of sentences) {
+      for (const phrase of ['add authentication', 'add sso', 'add multi-tenancy']) {
+        if (sentence.includes(phrase)) {
+          expect(sentence).toMatch(/not/);
+        }
+      }
+    }
+  });
+
+  it('Premium package guidance never automatically requires microservices or Kubernetes', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(
+      makePackageResolution({
+        packageProfileCode: 'PREMIUM',
+        packageProfileId: 'package-premium',
+        sourceValue: 'PREMIUM',
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'devops-draft', 'Build a US SaaS product');
+    await flush();
+
+    expect(block.toLowerCase()).toContain('does not automatically require microservices, kubernetes');
+  });
+
+  it('Package Guidance never mentions payments, new user roles, integrations, or mobile apps as additions', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(makePackageResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'backend-draft', 'Build a booking system');
+    await flush();
+
+    const text = block.toLowerCase();
+
+    for (const phrase of ['add payments', 'add mobile apps', 'add integrations']) {
+      if (text.includes(phrase)) {
+        expect(text).toContain(`does not ${phrase}`);
+      }
+    }
+  });
+
+  it('Package Guidance is always scope-controlled: it only changes implementation depth', async () => {
+    getEffectivePackageSelectionMock.mockResolvedValue(makePackageResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a booking system');
+    await flush();
+
+    expect(block).toContain(
+      'Package Guidance controls implementation depth and delivery maturity for already-approved product scope.',
+    );
   });
 });

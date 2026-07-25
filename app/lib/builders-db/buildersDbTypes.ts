@@ -79,6 +79,9 @@ const METADATA_FIELDS = [
 
   /** Sprint 71 — the project's manual Regional Profile selection. See Project.regionalSelection's own comment; no migration needed, same metadata-folding convention as every other field in this list. */
   'regionalSelection',
+
+  /** Sprint 73 — the project's manual Package Profile selection. See Project.packageSelection's own comment; no migration needed, same metadata-folding convention as every other field in this list. */
+  'packageSelection',
 ] as const;
 
 /**
@@ -406,7 +409,8 @@ export interface ContextTraceSource {
     | 'original-prompt'
     | 'business-understanding-section'
     | 'blueprint-resolution'
-    | 'regional-resolution';
+    | 'regional-resolution'
+    | 'package-resolution';
   label: string;
   roleKey?: string;
   version?: number;
@@ -429,11 +433,14 @@ export interface ContextTraceSource {
 
   /**
    * Widened in Sprint 71 (Regional Intelligence Foundation) to also cover
-   * `RegionalResolutionResult['selectionSource']` (see regionalResolutionTypes.ts) — the two
+   * `RegionalResolutionResult['selectionSource']` (see regionalResolutionTypes.ts), and again in
+   * Sprint 73 (Package Intelligence Foundation) to also cover
+   * `PackageResolutionResult['selectionSource']` (see packageResolutionTypes.ts) — all three
    * systems share this field rather than each defining their own, since `'manual_override'` is
-   * meaningful in both and duplicating the field would fragment traceability. `'recommendation'`
-   * is Blueprint-only; `'business_discovery' | 'project_metadata' | 'workspace_default' |
-   * 'none'` are Regional-only.
+   * meaningful across all of them and duplicating the field would fragment traceability.
+   * `'recommendation'` is Blueprint-only; `'business_discovery' | 'project_metadata' |
+   * 'workspace_default' | 'none'` are shared by Regional and Package; `'project_selection'` and
+   * `'system_default'` are Package-only.
    */
   selectionSource?:
     | 'recommendation'
@@ -441,6 +448,8 @@ export interface ContextTraceSource {
     | 'business_discovery'
     | 'project_metadata'
     | 'workspace_default'
+    | 'project_selection'
+    | 'system_default'
     | 'none';
   sectionsSupplied?: string[];
   contentAvailable?: boolean;
@@ -456,6 +465,16 @@ export interface ContextTraceSource {
   regionalProfileCode?: string;
   regionalProfileVersion?: number;
   resolvedAt?: string;
+
+  /**
+   * Sprint 73 (Package Intelligence Foundation) — populated only for `type:
+   * 'package-resolution'` sources. Mirrors the Regional fields above one-for-one:
+   * `packageProfileId`/`packageProfileCode`/`packageProfileVersion` identify the effective
+   * profile. Reuses `resolvedAt` above rather than duplicating it.
+   */
+  packageProfileId?: string;
+  packageProfileCode?: string;
+  packageProfileVersion?: number;
 }
 
 /** builders_context_traces row. */

@@ -10,6 +10,8 @@ import type { RoadmapItemStatus } from '~/lib/blueprints';
 import type { ProjectKnowledge } from '~/lib/projects/knowledge';
 import type { RegionalSelection } from '~/lib/regional/regionalResolutionTypes';
 import { regionalEngine } from '~/lib/regional/regionalProfileRegistry';
+import type { PackageSelection } from '~/lib/package-intelligence/packageResolutionTypes';
+import { packageEngine } from '~/lib/package-intelligence/packageProfileRegistry';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
 import type { ProjectDefinitionApproval, ProjectDefinitionChatMessage } from '~/lib/projects/projectDefinition';
 import type { ProjectTaskStatus } from '~/lib/projects/executionEngine';
@@ -72,6 +74,19 @@ export interface Project {
    * table like Blueprint Resolution's isn't justified here).
    */
   regionalSelection?: RegionalSelection;
+
+  /**
+   * Sprint 73 — the project's manually-selected Package Profile (see
+   * app/lib/package-intelligence/packageProfileTypes.ts), if any. A completely separate system
+   * from `blueprintId` and `regionalSelection` above: Package Intelligence answers "how deeply
+   * and robustly should approved scope be implemented," never "what should be built" or "how
+   * should it behave in this market." Undefined means no manual selection has been made —
+   * `packageResolutionService.ts`'s `resolveEffectivePackageSelection` is the only place this
+   * should be read from; nothing else should branch on `packageCode` directly. Persisted via
+   * BuildersDB's `builders_projects.metadata` (see buildersDbTypes.ts's `METADATA_FIELDS`) —
+   * same convention as `regionalSelection` above; deliberately NOT a new table.
+   */
+  packageSelection?: PackageSelection;
 
   /**
    * Sprint 39.7 — which Builders workflow drives this project (see
@@ -1361,6 +1376,66 @@ export function clearProjectRegionalSelection(projectId: string): void {
     }
 
     const { regionalSelection: _removed, ...rest } = project;
+
+    return rest as Project;
+  });
+  projectsStore.set(next);
+  projectRepository.saveProjects(next);
+
+  const updated = next.find((project) => project.id === projectId);
+
+  if (updated) {
+    mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
+  }
+}
+
+/**
+ * Sprint 73 (Package Intelligence Foundation) — sets (or replaces) a project's manual Package
+ * Profile selection, through the reactive `projectsStore` (same store + BuildersDB-mirror
+ * pattern as `setProjectRegionalSelection` above) so the Workspace tab's package control
+ * re-renders immediately and the selection survives a refresh. `packageResolutionService.ts`'s
+ * own `setManualPackageSelection` intentionally stays BuildersDB-only (for non-UI callers); this
+ * is the UI-facing counterpart. Returns `false` (never throws) for an unknown package code,
+ * without persisting anything — same safety discipline as the BuildersDB-only function.
+ */
+export function setProjectPackageSelection(projectId: string, packageCode: string): boolean {
+  if (!packageEngine.getPackageProfile(packageCode)) {
+    console.error(`[Package Selection] setProjectPackageSelection: unknown package code "${packageCode}"`);
+    return false;
+  }
+
+  const selection: PackageSelection = {
+    packageCode: packageCode as PackageSelection['packageCode'],
+    selectedAt: new Date().toISOString(),
+  };
+
+  const next = projectsStore
+    .get()
+    .map((project) => (project.id === projectId ? { ...project, packageSelection: selection } : project));
+  projectsStore.set(next);
+  projectRepository.saveProjects(next);
+
+  const updated = next.find((project) => project.id === projectId);
+
+  if (updated) {
+    mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
+  }
+
+  return true;
+}
+
+/**
+ * Sprint 73 (Package Intelligence Foundation) — clears a project's manual Package Profile
+ * selection, restoring "no package resolved" (no automatic source is reachable yet). Same
+ * store + BuildersDB-mirror pattern as `setProjectPackageSelection` above.
+ */
+export function clearProjectPackageSelection(projectId: string): void {
+  const next = projectsStore.get().map((project) => {
+    if (project.id !== projectId) {
+      return project;
+    }
+
+    const { packageSelection: _removed, ...rest } = project;
 
     return rest as Project;
   });

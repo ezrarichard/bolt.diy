@@ -28,6 +28,8 @@ const {
   projectsStore,
   setProjectRegionalSelection,
   clearProjectRegionalSelection,
+  setProjectPackageSelection,
+  clearProjectPackageSelection,
 } = await import('./projects');
 
 describe('Quick Build project persistence', () => {
@@ -169,5 +171,57 @@ describe('Sprint 72 — setProjectRegionalSelection / clearProjectRegionalSelect
     clearProjectRegionalSelection(project.id);
 
     expect(projectsStore.get().find((p) => p.id === project.id)?.regionalSelection).toBeUndefined();
+  });
+});
+
+describe('Sprint 73 — setProjectPackageSelection / clearProjectPackageSelection', () => {
+  beforeEach(() => {
+    isBuildersDbAvailableMock.mockReset().mockReturnValue(false);
+    projectsStore.set([]);
+  });
+
+  it('persists a valid manual selection immediately in the reactive store', () => {
+    const project = addProject({
+      name: 'Package Test Project',
+      icon: '📦',
+      color: 'purple',
+      projectType: 'guided_engineering',
+      createdFrom: 'guided_engineering',
+    });
+
+    const ok = setProjectPackageSelection(project.id, 'PROFESSIONAL');
+
+    expect(ok).toBe(true);
+    expect(projectsStore.get().find((p) => p.id === project.id)?.packageSelection?.packageCode).toBe('PROFESSIONAL');
+  });
+
+  it('rejects an unknown package code without persisting anything', () => {
+    const project = addProject({
+      name: 'Package Test Project',
+      icon: '📦',
+      color: 'purple',
+      projectType: 'guided_engineering',
+      createdFrom: 'guided_engineering',
+    });
+
+    const ok = setProjectPackageSelection(project.id, 'ENTERPRISE');
+
+    expect(ok).toBe(false);
+    expect(projectsStore.get().find((p) => p.id === project.id)?.packageSelection).toBeUndefined();
+  });
+
+  it('clearing the selection removes the field and survives being re-read from the store', () => {
+    const project = addProject({
+      name: 'Package Test Project',
+      icon: '📦',
+      color: 'purple',
+      projectType: 'guided_engineering',
+      createdFrom: 'guided_engineering',
+    });
+
+    setProjectPackageSelection(project.id, 'PREMIUM');
+    clearProjectPackageSelection(project.id);
+
+    expect(projectsStore.get().find((p) => p.id === project.id)?.packageSelection).toBeUndefined();
   });
 });

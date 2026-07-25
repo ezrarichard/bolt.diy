@@ -78,6 +78,26 @@ import {
   hasDesignQualityRegionalContent,
   formatDesignQualityRegionalGuidanceSection,
 } from '~/lib/regional/regionalDesignQualityProjection';
+import { getEffectivePackageSelection } from '~/lib/package-intelligence/packageResolutionService';
+import { packageEngine } from '~/lib/package-intelligence/packageProfileRegistry';
+import {
+  projectPackageProfileForBusinessProduct,
+  describeBusinessProductPackageSuppliedSections,
+  hasBusinessProductPackageContent,
+  formatBusinessProductPackageGuidanceSection,
+} from '~/lib/package-intelligence/packageBusinessProductProjection';
+import {
+  projectPackageProfileForArchitectureEngineering,
+  describeArchitectureEngineeringPackageSuppliedSections,
+  hasArchitectureEngineeringPackageContent,
+  formatArchitectureEngineeringPackageGuidanceSection,
+} from '~/lib/package-intelligence/packageArchitectureEngineeringProjection';
+import {
+  projectPackageProfileForDesignQuality,
+  describeDesignQualityPackageSuppliedSections,
+  hasDesignQualityPackageContent,
+  formatDesignQualityPackageGuidanceSection,
+} from '~/lib/package-intelligence/packageDesignQualityProjection';
 import {
   projectBlueprintForQa,
   describeSuppliedSections as describeQaSuppliedSections,
@@ -1069,6 +1089,107 @@ async function buildRegionalGuidance(
 }
 
 /**
+ * Sprint 73 (Package Intelligence Foundation) — which role-family projection
+ * (`app/lib/package-intelligence/package*Projection.ts`) each pipeline role reads from. A
+ * completely separate system from the Blueprint and Regional guidance above: Package
+ * Intelligence answers "how deeply and robustly should approved scope be implemented," never
+ * "what should be built" or "how should it behave in this market." Every pipeline role gets
+ * SOME package family (same discipline as `REGIONAL_ROLE_FAMILY` above) because implementation
+ * depth/maturity is relevant to every role in some form, per PART 7 of the Sprint 73 brief.
+ */
+const PACKAGE_ROLE_FAMILY: Record<string, 'business-product' | 'architecture-engineering' | 'design-quality'> = {
+  [ARTIFACT_TYPES.REQUIREMENTS_DRAFT]: 'business-product',
+  [ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT]: 'business-product',
+  [ARTIFACT_TYPES.ARCHITECTURE_DRAFT]: 'architecture-engineering',
+  [ARTIFACT_TYPES.DATABASE_DRAFT]: 'architecture-engineering',
+  [ARTIFACT_TYPES.BACKEND_DRAFT]: 'architecture-engineering',
+  [ARTIFACT_TYPES.FRONTEND_DRAFT]: 'architecture-engineering',
+  [ARTIFACT_TYPES.DEVOPS_DRAFT]: 'architecture-engineering',
+  [ARTIFACT_TYPES.UIUX_DRAFT]: 'design-quality',
+  [ARTIFACT_TYPES.QA_DRAFT]: 'design-quality',
+};
+
+/**
+ * Sprint 73 (Package Intelligence Foundation) — the Package Guidance sibling of
+ * `buildRegionalGuidance` above, following the exact same pattern: ONE shared function (not
+ * nine), never throws, resolves to `null` on an unrecognized `roleKey`, no manual package
+ * selection, or a lookup failure.
+ *
+ * Deliberately renders under its OWN "### Package Guidance" heading, never merged into
+ * "### Blueprint Guidance" or "### Regional Guidance" — PART 10 of the Sprint 73 brief.
+ * `buildRoleContextBlock` pushes this as its own section, after Regional guidance.
+ */
+async function buildPackageGuidance(
+  projectId: string,
+  roleKey: string,
+): Promise<{ text: string; source: ContextTraceSource } | null> {
+  const family = PACKAGE_ROLE_FAMILY[roleKey];
+
+  if (!family) {
+    return null;
+  }
+
+  try {
+    const resolution = await getEffectivePackageSelection(projectId);
+
+    if (resolution.selectionSource === 'none' || !resolution.packageProfileCode) {
+      return null;
+    }
+
+    const profile = packageEngine.getPackageProfile(resolution.packageProfileCode);
+
+    if (!profile) {
+      return null;
+    }
+
+    const { text, sectionsSupplied, contentAvailable } =
+      family === 'business-product'
+        ? (() => {
+            const projection = projectPackageProfileForBusinessProduct(profile);
+            return {
+              text: formatBusinessProductPackageGuidanceSection(profile, resolution, projection),
+              sectionsSupplied: describeBusinessProductPackageSuppliedSections(projection),
+              contentAvailable: hasBusinessProductPackageContent(projection),
+            };
+          })()
+        : family === 'architecture-engineering'
+          ? (() => {
+              const projection = projectPackageProfileForArchitectureEngineering(profile);
+              return {
+                text: formatArchitectureEngineeringPackageGuidanceSection(profile, resolution, projection),
+                sectionsSupplied: describeArchitectureEngineeringPackageSuppliedSections(projection),
+                contentAvailable: hasArchitectureEngineeringPackageContent(projection),
+              };
+            })()
+          : (() => {
+              const projection = projectPackageProfileForDesignQuality(profile);
+              return {
+                text: formatDesignQualityPackageGuidanceSection(profile, resolution, projection),
+                sectionsSupplied: describeDesignQualityPackageSuppliedSections(projection),
+                contentAvailable: hasDesignQualityPackageContent(projection),
+              };
+            })();
+
+    const source: ContextTraceSource = {
+      type: 'package-resolution',
+      label: `Package: ${profile.name} (${resolution.selectionSource === 'manual_override' ? 'manual override' : resolution.selectionSource})`,
+      packageProfileId: profile.id,
+      packageProfileCode: profile.code,
+      packageProfileVersion: profile.version,
+      selectionSource: resolution.selectionSource,
+      resolvedAt: resolution.resolvedAt,
+      sectionsSupplied,
+      contentAvailable,
+    };
+
+    return { text, source };
+  } catch (error) {
+    console.error('[BuildersDB Context] buildPackageGuidance failed, continuing without Package context:', error);
+    return null;
+  }
+}
+
+/**
  * Best-effort, fire-and-forget: records WHY a role's context looked the way it did (see
  * requirement #3/#4, "Context Source Traceability"/"Context Explanation"). Never awaited
  * by `buildRoleContextBlock` — a failure here must never affect the AI generation it's
@@ -1082,11 +1203,16 @@ async function recordContextTrace(
   projectPromptText: string | undefined,
   blueprintSource?: ContextTraceSource,
   regionalSource?: ContextTraceSource,
+  packageSource?: ContextTraceSource,
 ): Promise<void> {
   const sources = buildContextTraceSources(roleOutputs, tasks, projectPromptText);
 
   if (regionalSource) {
     sources.push(regionalSource);
+  }
+
+  if (packageSource) {
+    sources.push(packageSource);
   }
 
   if (blueprintSource) {
@@ -1208,12 +1334,21 @@ export async function buildRoleContextBlock(
      */
     const regionalGuidance = await buildRegionalGuidance(projectId, roleKey);
 
+    /*
+     * Sprint 73 (Package Intelligence Foundation) — a completely separate source from Blueprint
+     * and Regional guidance above (see buildPackageGuidance's own header comment). Reaches every
+     * pipeline role via one of three role-family projections, never merged into either other
+     * section.
+     */
+    const packageGuidance = await buildPackageGuidance(projectId, roleKey);
+
     if (
       roleOutputs.length === 0 &&
       tasks.length === 0 &&
       !projectPromptText &&
       !blueprintGuidance &&
-      !regionalGuidance
+      !regionalGuidance &&
+      !packageGuidance
     ) {
       return '';
     }
@@ -1240,6 +1375,10 @@ export async function buildRoleContextBlock(
       sections.push(regionalGuidance.text);
     }
 
+    if (packageGuidance) {
+      sections.push(packageGuidance.text);
+    }
+
     sections.push(
       '### Important Instruction\nUse this context as the source of truth. Do not contradict approved outputs unless clearly explaining why.',
     );
@@ -1253,6 +1392,7 @@ export async function buildRoleContextBlock(
       projectPromptText,
       blueprintGuidance?.source,
       regionalGuidance?.source,
+      packageGuidance?.source,
     ).catch((error) => console.error('[BuildersDB Context] recordContextTrace failed:', error));
 
     return sections.join('\n\n');
