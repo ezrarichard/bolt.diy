@@ -3,6 +3,7 @@ import { toast } from 'react-toastify';
 import { addProjectArtifact, getProjectArtifacts, updateProjectArtifact, type Project } from '~/lib/stores/projects';
 import {
   ARTIFACT_STATUS_META,
+  getArtifactByVersion,
   getResumableArtifact,
   parseArtifactContent,
   type ProjectArtifact,
@@ -42,6 +43,20 @@ export interface DraftPanelConfig<TDraft extends object, TContext> {
   buildPrompt: (context: TContext) => { system: string; prompt: string };
   parseDraft: (rawText: string) => ParsedDraftResult<TDraft>;
   createDraftArtifact: (draft: TDraft, version: number) => ProjectArtifact;
+
+  /**
+   * Sprint 75 — optional lockstep-paired artifact type (e.g. Database
+   * Engineer's DATABASE_SCHEMA alongside its primary DATABASE_DRAFT).
+   * Omitted by every role except Database Design, so every other
+   * "*DraftPanel" caller is entirely unaffected: generate/approve/discard
+   * only ever touch `artifactType` when these two fields are undefined.
+   * When provided, the paired artifact is created/updated at the exact same
+   * version as the primary artifact on every generation, and approved/
+   * discarded/resumed in the same action as the primary artifact — there is
+   * no separate entry point that can move one without the other.
+   */
+  pairedArtifactType?: string;
+  createPairedArtifact?: (draft: TDraft, version: number) => ProjectArtifact;
 }
 
 export interface DraftPanelState<TDraft> {
@@ -86,6 +101,8 @@ export function useDraftPanel<TDraft extends object, TContext>(
     buildPrompt,
     parseDraft,
     createDraftArtifact,
+    pairedArtifactType,
+    createPairedArtifact,
   } = config;
 
   const [phase, setPhase] = useState<DraftPanelPhase>('idle');
@@ -152,8 +169,10 @@ export function useDraftPanel<TDraft extends object, TContext>(
       return;
     }
 
+    let nextVersion: number;
+
     if (regenerateArtifact) {
-      const nextVersion = (regenerateArtifact.version ?? 1) + 1;
+      nextVersion = (regenerateArtifact.version ?? 1) + 1;
       updateProjectArtifact(project.id, regenerateArtifact.id, {
         title: `${titlePrefix} v${nextVersion}`,
         content: JSON.stringify(parsed.draft, null, 2),
@@ -161,8 +180,28 @@ export function useDraftPanel<TDraft extends object, TContext>(
         status: 'draft',
       });
     } else {
-      const nextVersion = (latest?.version ?? 0) + 1;
+      nextVersion = (latest?.version ?? 0) + 1;
       addProjectArtifact(project.id, createDraftArtifact(parsed.draft, nextVersion));
+    }
+
+    /*
+     * Sprint 75 — keeps a paired artifact (e.g. DATABASE_SCHEMA) at the exact same version as
+     * the primary artifact just written above. No-op for every role that doesn't configure pairing.
+     */
+    if (pairedArtifactType && createPairedArtifact) {
+      const existingPaired = getResumableArtifact(getProjectArtifacts(project), pairedArtifactType);
+      const pairedArtifact = createPairedArtifact(parsed.draft, nextVersion);
+
+      if (existingPaired && existingPaired.status !== 'discarded') {
+        updateProjectArtifact(project.id, existingPaired.id, {
+          title: pairedArtifact.title,
+          content: pairedArtifact.content,
+          version: nextVersion,
+          status: 'draft',
+        });
+      } else {
+        addProjectArtifact(project.id, { ...pairedArtifact, version: nextVersion });
+      }
     }
 
     setPhase('idle');
@@ -174,6 +213,15 @@ export function useDraftPanel<TDraft extends object, TContext>(
     }
 
     updateProjectArtifact(project.id, latest.id, { status: 'approved' });
+
+    if (pairedArtifactType && latest.version !== undefined) {
+      const paired = getArtifactByVersion(getProjectArtifacts(project), pairedArtifactType, latest.version);
+
+      if (paired) {
+        updateProjectArtifact(project.id, paired.id, { status: 'approved' });
+      }
+    }
+
     toast.success(`${titlePrefix} approved`);
   };
 
@@ -183,6 +231,15 @@ export function useDraftPanel<TDraft extends object, TContext>(
     }
 
     updateProjectArtifact(project.id, latest.id, { status: 'discarded' });
+
+    if (pairedArtifactType && latest.version !== undefined) {
+      const paired = getArtifactByVersion(getProjectArtifacts(project), pairedArtifactType, latest.version);
+
+      if (paired) {
+        updateProjectArtifact(project.id, paired.id, { status: 'discarded' });
+      }
+    }
+
     toast.info(`${titlePrefix} discarded`);
   };
 

@@ -62,6 +62,7 @@ import { SharedProviderStatusCard } from './SharedProviderStatusCard';
 import { GenerationProfileSelector } from './GenerationProfileSelector';
 import { RegionalProfileCard } from './RegionalProfileCard';
 import { PackageProfileCard } from './PackageProfileCard';
+import { DatabaseActivationCard } from './DatabaseActivationCard';
 import { DEFAULT_GENERATION_PROFILE_ID, DEFAULT_GENERATION_PROFILES } from '~/lib/generation-profiles/defaultProfiles';
 import { saveSelectedProfileForProject } from '~/lib/generation-profiles/generationProfileRepository';
 
@@ -884,6 +885,7 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       <ProjectManagerPanel
                         project={project}
                         onContinue={() => handleTabChange(currentWorkflowStageId)}
+                        productOwnerApproved={productOwnerApproved}
                       />
                     </BuildersSurface>
                   </div>
@@ -1487,6 +1489,9 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
 
                             {/* Sprint 73 — Package Profile card, same footprint as the two cards above. */}
                             <PackageProfileCard project={project} />
+
+                            {/* Sprint 75 — Database Activation card, same footprint as the cards above. */}
+                            <DatabaseActivationCard project={project} />
                           </div>
 
                           {/* Sprint 38.5 — Shared AI Provider status, reads /api/shared-key-status (see SharedProviderStatusCard.tsx) — booleans only, never a key value. */}

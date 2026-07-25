@@ -3,7 +3,12 @@ import { executionEngine } from './executionEngine';
 import { projectKnowledgeEngine } from './projectKnowledgeEngine';
 import type { ProjectKnowledge } from './knowledge';
 import { ARTIFACT_TYPES, createArtifact, getApprovedArtifactContent, type ProjectArtifact } from './artifacts';
-import { parseStructuredDraft, type ParsedDraftResult } from './draftParsing';
+import { extractJsonPayload, parseStructuredDraft, type ParsedDraftResult } from './draftParsing';
+import {
+  EMPTY_STRUCTURED_SCHEMA,
+  parseStructuredDatabaseSchema,
+  type StructuredDatabaseSchema,
+} from '~/lib/database-activation/schemaTypes';
 import {
   gatherAIDecisions,
   gatherEngineeringNotes,
@@ -179,28 +184,80 @@ function buildDatabasePrompt(context: DatabaseContext): { system: string; prompt
 /**
  * Parses the AI's raw text response into a `DatabaseDraft` via the shared
  * generic parser (app/lib/projects/draftParsing.ts), validated field-by-field
- * against DATABASE_DRAFT_FIELDS.
+ * against DATABASE_DRAFT_FIELDS, PLUS (Sprint 75) the separate
+ * `structuredSchema` block from the same JSON response, validated via
+ * `parseStructuredDatabaseSchema` (which never throws/fails — malformed or
+ * missing input just degrades to `EMPTY_STRUCTURED_SCHEMA`, so an old-shape
+ * response never breaks the narrative draft's approval flow).
  */
 function parseDraft(rawText: string): ParsedDatabaseDraft {
-  return parseStructuredDraft<DatabaseDraft>(rawText, DATABASE_DRAFT_FIELDS);
+  const result = parseStructuredDraft<DatabaseDraft>(rawText, DATABASE_DRAFT_FIELDS);
+
+  if (!result.ok) {
+    return result;
+  }
+
+  let rawSchema: unknown;
+
+  try {
+    rawSchema = (JSON.parse(extractJsonPayload(rawText)) as Record<string, unknown>).structuredSchema;
+  } catch {
+    rawSchema = undefined;
+  }
+
+  return { ok: true, draft: { ...result.draft, structuredSchema: parseStructuredDatabaseSchema(rawSchema) } };
 }
 
 /**
- * Builds a Database Design Draft artifact holding the parsed draft as JSON.
- * Approving this artifact only ever changes its own `status` — it never
- * generates SQL, never connects to Supabase, and never mutates Project
- * Knowledge or the Architecture Draft.
+ * Builds a Database Design Draft artifact holding the parsed NARRATIVE draft
+ * as JSON — `structuredSchema` is deliberately stripped here (it is
+ * persisted separately via `createSchemaArtifact` below) so this artifact's
+ * shape never changes size/content based on Sprint 75's addition. Approving
+ * this artifact only ever changes its own `status` — it never generates SQL,
+ * never connects to Supabase, and never mutates Project Knowledge or the
+ * Architecture Draft.
  */
 function createDraftArtifact(draft: DatabaseDraft, version: number): ProjectArtifact {
+  const { structuredSchema: _structuredSchema, ...narrative } = draft;
+
   return createArtifact({
     taskId: ARTIFACT_TASK_ID,
     title: `Database Design Draft v${version}`,
     type: ARTIFACT_TYPE,
-    content: JSON.stringify(draft, null, 2),
+    content: JSON.stringify(narrative, null, 2),
     status: 'draft',
     generatedBy: GENERATOR_NAME,
     version,
   });
+}
+
+/**
+ * Sprint 75 — builds the paired, machine-readable DATABASE_SCHEMA artifact
+ * from the same parsed draft's `structuredSchema` field. Passed to
+ * useDraftPanel.ts as `createPairedArtifact` so it's created/approved/
+ * discarded in lockstep with `createDraftArtifact` above, always at the
+ * exact same version — never a separate action.
+ */
+function createSchemaArtifact(draft: DatabaseDraft, version: number): ProjectArtifact {
+  const schema: StructuredDatabaseSchema = draft.structuredSchema ?? EMPTY_STRUCTURED_SCHEMA;
+
+  return createArtifact({
+    taskId: ARTIFACT_TASK_ID,
+    title: `Database Schema v${version}`,
+    type: ARTIFACT_TYPES.DATABASE_SCHEMA,
+    content: JSON.stringify(schema, null, 2),
+    status: 'draft',
+    generatedBy: GENERATOR_NAME,
+    version,
+  });
+}
+
+/** Reads the latest approved DATABASE_SCHEMA artifact — undefined content parses to EMPTY_STRUCTURED_SCHEMA's shape (zero tables) rather than undefined, so callers can always check `schema.tables.length`. */
+function getApprovedStructuredSchema(project: Project): StructuredDatabaseSchema | undefined {
+  return getApprovedArtifactContent<StructuredDatabaseSchema>(
+    getProjectArtifacts(project),
+    ARTIFACT_TYPES.DATABASE_SCHEMA,
+  );
 }
 
 export const databaseDesignerEngine = {
@@ -209,4 +266,6 @@ export const databaseDesignerEngine = {
   buildDatabasePrompt,
   parseDraft,
   createDraftArtifact,
+  createSchemaArtifact,
+  getApprovedStructuredSchema,
 };

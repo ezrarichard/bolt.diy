@@ -43,6 +43,15 @@ export const ACTIVITY_ICON: Record<string, string> = {
   repair_patch_applied: 'i-ph:check-circle-duotone text-green-500',
   repair_failed: 'i-ph:x-circle-duotone text-red-500',
   manual_attention_required: 'i-ph:warning-duotone text-red-500',
+
+  // Sprint 75 (Real Backend Activation, Phase 1) — see app/lib/database-activation/databaseActivationService.ts, the only writer of these.
+  database_schema_generated: 'i-ph:database-duotone text-blue-500',
+  database_validation_passed: 'i-ph:check-circle-duotone text-green-500',
+  database_validation_failed: 'i-ph:x-circle-duotone text-red-500',
+  database_provisioning_started: 'i-ph:hourglass-duotone text-amber-500',
+  database_provisioning_finished: 'i-ph:check-circle-duotone text-green-500',
+  database_provisioning_failed: 'i-ph:x-circle-duotone text-red-500',
+  database_connection_verified: 'i-ph:plugs-connected-duotone text-green-500',
 };
 
 const REPAIR_STATUS_ICON: Record<RepairAttemptRecord['status'], string> = {

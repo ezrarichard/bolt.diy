@@ -82,6 +82,9 @@ const METADATA_FIELDS = [
 
   /** Sprint 73 — the project's manual Package Profile selection. See Project.packageSelection's own comment; no migration needed, same metadata-folding convention as every other field in this list. */
   'packageSelection',
+
+  /** Sprint 75 — the project's Database Schema generation/validation/provisioning/connection status. See Project.databaseActivation's own comment; no migration needed, same metadata-folding convention as every other field in this list. */
+  'databaseActivation',
 ] as const;
 
 /**

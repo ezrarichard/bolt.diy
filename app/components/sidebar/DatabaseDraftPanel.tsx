@@ -63,6 +63,13 @@ export function DatabaseDraftPanel({ project }: DatabaseDraftPanelProps) {
     buildPrompt: databaseDesignerEngine.buildDatabasePrompt,
     parseDraft: databaseDesignerEngine.parseDraft,
     createDraftArtifact: databaseDesignerEngine.createDraftArtifact,
+
+    /*
+     * Sprint 75 — keeps the machine-readable DATABASE_SCHEMA artifact in lockstep with this
+     * narrative draft (same version, approved/discarded/resumed together). See useDraftPanel.ts.
+     */
+    pairedArtifactType: ARTIFACT_TYPES.DATABASE_SCHEMA,
+    createPairedArtifact: databaseDesignerEngine.createSchemaArtifact,
   });
 
   if (!canGenerate && !latest) {

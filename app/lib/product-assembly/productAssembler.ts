@@ -15,6 +15,7 @@ import { FRONTEND_DRAFT_FIELDS, type FrontendDraft } from '~/lib/projects/prompt
 import { QA_DRAFT_FIELDS, type QADraft } from '~/lib/projects/prompts/qa';
 import { DEVOPS_DRAFT_FIELDS, type DevOpsDraft } from '~/lib/projects/prompts/devops';
 import { buildProductSummaryMarkdown } from './assemblyMarkdown';
+import { renderValidationReportMarkdown } from '~/lib/database-activation/schemaValidator';
 import type {
   MissingSection,
   ProductAssemblySection,
@@ -240,6 +241,94 @@ function getSectionBuilders(
 }
 
 /**
+ * Sprint 75 — the Database section's additional generated files, built from
+ * `project.databaseActivation` (see app/lib/database-activation/databaseActivationService.ts,
+ * the only writer of that state) rather than another AI role artifact. Zero files when nothing
+ * has been generated yet — this never turns "database" into a non-missing section on its own;
+ * the narrative Database Schema Plan (schema-plan.md, via buildRoleFile above) still governs
+ * that, and schema generation itself requires the same approved artifact, so these two can never
+ * disagree about whether the Database section has content.
+ */
+function buildDatabaseActivationFiles(project: Project): ProductPackageFile[] {
+  const activation = project.databaseActivation;
+
+  if (!activation?.schema) {
+    return [];
+  }
+
+  const now = new Date().toISOString();
+  const files: ProductPackageFile[] = [
+    {
+      id: `pkg-file-${project.id}-database-schema-sql`,
+      projectId: project.id,
+      path: 'Database/schema.sql',
+      filename: 'schema.sql',
+      section: 'database',
+      title: 'Database Schema (SQL)',
+      content: activation.schema.schemaSql,
+      sourceStatus: 'approved',
+      createdAt: now,
+      updatedAt: now,
+      metadata: { generated: 'deterministic', generatedAt: activation.schema.generatedAt },
+    },
+    {
+      id: `pkg-file-${project.id}-database-migration-sql`,
+      projectId: project.id,
+      path: 'Database/migration.sql',
+      filename: 'migration.sql',
+      section: 'database',
+      title: 'Database Migration (SQL)',
+      content: activation.schema.migrationSql,
+      sourceStatus: 'approved',
+      createdAt: now,
+      updatedAt: now,
+      metadata: { generated: 'deterministic', generatedAt: activation.schema.generatedAt },
+    },
+  ];
+
+  if (activation.validation) {
+    files.push({
+      id: `pkg-file-${project.id}-database-validation-report`,
+      projectId: project.id,
+      path: 'Database/validation-report.md',
+      filename: 'validation-report.md',
+      section: 'database',
+      title: 'Database Schema Validation Report',
+      content: renderValidationReportMarkdown(activation.validation.report),
+      sourceStatus: 'approved',
+      createdAt: now,
+      updatedAt: now,
+      metadata: { generated: 'deterministic', validatedAt: activation.validation.validatedAt },
+    });
+  }
+
+  const summaryLines = [
+    '# Database Activation Summary',
+    '',
+    `- Schema generated: ${activation.schema.tableCount} table(s) at ${activation.schema.generatedAt}`,
+    `- Validation: ${activation.validation ? (activation.validation.report.passed ? 'PASSED' : 'FAILED') : 'not run yet'}`,
+    `- Provisioning: ${activation.provisioning ? `${activation.provisioning.status} (${activation.provisioning.provider})` : 'not started'}`,
+    `- Connection: ${activation.connection ? (activation.connection.verified ? 'verified' : 'not verified') : 'not checked'}`,
+  ];
+
+  files.push({
+    id: `pkg-file-${project.id}-database-summary`,
+    projectId: project.id,
+    path: 'Database/database-summary.md',
+    filename: 'database-summary.md',
+    section: 'database',
+    title: 'Database Activation Summary',
+    content: summaryLines.join('\n'),
+    sourceStatus: 'approved',
+    createdAt: now,
+    updatedAt: now,
+    metadata: { generated: 'deterministic' },
+  });
+
+  return files;
+}
+
+/**
  * Assembles the full Product Package for a project — always succeeds (requirement #6):
  * any role without usable output becomes a `missingSections` entry rather than
  * aborting assembly. Pure and synchronous; see assemblyRepository.ts for persisting the
@@ -260,6 +349,18 @@ export function assembleProductPackage(project: Project): ProductPackage {
         label,
         reason: `No approved or draft output yet for this section.`,
       });
+    }
+  }
+
+  const databaseActivationFiles = buildDatabaseActivationFiles(project);
+
+  if (databaseActivationFiles.length > 0) {
+    const databaseSection = sections.find((section) => section.id === 'database');
+
+    if (databaseSection) {
+      databaseSection.files.push(...databaseActivationFiles);
+    } else {
+      sections.push({ id: 'database', label: 'Database', files: databaseActivationFiles });
     }
   }
 

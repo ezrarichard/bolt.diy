@@ -96,6 +96,18 @@ export const ARTIFACT_TYPES = {
   PRODUCT_OWNER_DRAFT: 'product-owner-draft',
   ARCHITECTURE_DRAFT: 'architecture-draft',
   DATABASE_DRAFT: 'database-draft',
+
+  /**
+   * Sprint 75 — the Database Engineer's machine-readable counterpart to
+   * DATABASE_DRAFT above, produced by the same LLM call but persisted as its
+   * own first-class artifact (see app/lib/database-activation/schemaTypes.ts's
+   * `StructuredDatabaseSchema`) so SQL generation/validation/provisioning
+   * never has to re-interpret the narrative draft's prose. Kept in lockstep
+   * with DATABASE_DRAFT by databaseDesignerEngine.ts + useDraftPanel.ts's
+   * `pairedArtifactType` — same version number, approved/discarded/resumed
+   * together, never independently.
+   */
+  DATABASE_SCHEMA: 'database-schema',
   UIUX_DRAFT: 'uiux-draft',
   BACKEND_DRAFT: 'backend-draft',
   FRONTEND_DRAFT: 'frontend-draft',
@@ -119,6 +131,21 @@ export function getLatestArtifact(artifacts: ProjectArtifact[], type: string): P
   return matching.reduce((latest, candidate) =>
     (candidate.version ?? 0) > (latest.version ?? 0) ? candidate : latest,
   );
+}
+
+/**
+ * Sprint 75 — finds the artifact of `type` at an exact `version`, used to
+ * look up a paired artifact (e.g. DATABASE_SCHEMA) that must match the
+ * primary artifact's (e.g. DATABASE_DRAFT) version exactly, rather than
+ * "whichever is numerically latest" (getLatestArtifact) which could drift if
+ * the two ever got out of sync.
+ */
+export function getArtifactByVersion(
+  artifacts: ProjectArtifact[],
+  type: string,
+  version: number,
+): ProjectArtifact | undefined {
+  return artifacts.find((artifact) => artifact.type === type && artifact.version === version);
 }
 
 /** Sprint 14 — parses an artifact's JSON `content` back into its draft shape. Returns undefined rather than throwing on malformed content. */

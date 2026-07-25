@@ -12,6 +12,7 @@ import type { RegionalSelection } from '~/lib/regional/regionalResolutionTypes';
 import { regionalEngine } from '~/lib/regional/regionalProfileRegistry';
 import type { PackageSelection } from '~/lib/package-intelligence/packageResolutionTypes';
 import { packageEngine } from '~/lib/package-intelligence/packageProfileRegistry';
+import type { DatabaseActivationState } from '~/lib/database-activation/databaseActivationTypes';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
 import type { ProjectDefinitionApproval, ProjectDefinitionChatMessage } from '~/lib/projects/projectDefinition';
 import type { ProjectTaskStatus } from '~/lib/projects/executionEngine';
@@ -87,6 +88,18 @@ export interface Project {
    * same convention as `regionalSelection` above; deliberately NOT a new table.
    */
   packageSelection?: PackageSelection;
+
+  /**
+   * Sprint 75 (Real Backend Activation, Phase 1) — the project's Database Schema
+   * generation/validation/provisioning/connection status (see
+   * app/lib/database-activation/databaseActivationTypes.ts). Undefined means no schema has
+   * been generated from the approved DATABASE_SCHEMA artifact yet. Written only by
+   * app/lib/database-activation/databaseActivationService.ts via
+   * `updateProjectDatabaseActivation` below. Persisted via BuildersDB's
+   * `builders_projects.metadata` — same metadata-folding convention as `regionalSelection`/
+   * `packageSelection` above; deliberately NOT a new table.
+   */
+  databaseActivation?: DatabaseActivationState;
 
   /**
    * Sprint 39.7 — which Builders workflow drives this project (see
@@ -1447,6 +1460,52 @@ export function clearProjectPackageSelection(projectId: string): void {
   if (updated) {
     mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
   }
+}
+
+/**
+ * Sprint 75 (Real Backend Activation, Phase 1) — merges a partial update into a project's
+ * `databaseActivation` state (schema generation, validation, provisioning, connection). Same
+ * store + BuildersDB-mirror pattern as `setProjectRegionalSelection`/`setProjectPackageSelection`
+ * above; the only writer is app/lib/database-activation/databaseActivationService.ts, which is
+ * itself only ever invoked from an explicit user action in DatabaseActivationCard.tsx — never
+ * automatically.
+ */
+export function updateProjectDatabaseActivation(projectId: string, partial: Partial<DatabaseActivationState>): void {
+  const next = projectsStore
+    .get()
+    .map((project) =>
+      project.id === projectId
+        ? { ...project, databaseActivation: { ...project.databaseActivation, ...partial } }
+        : project,
+    );
+  projectsStore.set(next);
+  projectRepository.saveProjects(next);
+
+  const updated = next.find((project) => project.id === projectId);
+
+  if (updated) {
+    mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
+  }
+}
+
+/**
+ * Sprint 75 — the one place that logs a custom (non-`role_output_saved`) BuildersDB activity
+ * entry, extracted so `databaseActivationService.ts` doesn't need its own copy of the
+ * `mirrorToBuildersDb` + `getCurrentActor` + `addProjectActivity` sequence every other activity
+ * write in this file repeats inline. Fire-and-forget, same as every other activity write here —
+ * never throws, never blocks the caller.
+ */
+export function logProjectActivity(projectId: string, activityType: string, description: string): void {
+  mirrorToBuildersDb(async () => {
+    const actor = await getCurrentActor();
+    await buildersDbRepository.addProjectActivity({
+      projectId,
+      activityType,
+      description,
+      actorId: actor?.id ?? null,
+      actorDisplayName: actor?.displayName ?? null,
+    });
+  });
 }
 
 /**

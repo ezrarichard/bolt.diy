@@ -1,5 +1,6 @@
 import type { DatabaseContext } from '~/lib/projects/databaseDesignerEngine';
 import type { AIDecision } from '~/lib/projects/draftParsing';
+import type { StructuredDatabaseSchema } from '~/lib/database-activation/schemaTypes';
 import { ARCHITECTURE_DRAFT_FIELDS } from './architecture';
 import {
   COLLABORATION_FRAMING,
@@ -48,6 +49,17 @@ export interface DatabaseDraft {
 
   /** Sprint 32 — structured decision log (see draftParsing.ts's `AIDecision`), carried forward to every later role. */
   aiDecisions?: AIDecision[];
+
+  /**
+   * Sprint 75 — the machine-readable counterpart to every field above,
+   * produced by this SAME LLM call. Parsed and validated separately (see
+   * app/lib/database-activation/schemaTypes.ts's `parseStructuredDatabaseSchema`)
+   * and persisted as its own first-class artifact
+   * (`ARTIFACT_TYPES.DATABASE_SCHEMA`) rather than a field of the narrative
+   * draft artifact — kept here only as the in-memory carrier between
+   * parseDraft() and databaseDesignerEngine.createSchemaArtifact().
+   */
+  structuredSchema?: StructuredDatabaseSchema;
 }
 
 export interface DatabaseDraftFieldConfig {
@@ -82,14 +94,24 @@ export const DATABASE_DRAFT_FIELDS: DatabaseDraftFieldConfig[] = [
   { key: 'aiDecisions', label: 'AI Decisions', kind: 'decisions' },
 ];
 
-export const DATABASE_DESIGNER_SYSTEM_PROMPT = `You are a Senior Database Architect working inside Builders, an AI engineering platform.
+export const DATABASE_DESIGNER_SYSTEM_PROMPT =
+  `You are a Senior Database Architect working inside Builders, an AI engineering platform.
 
-Your ONLY responsibility is to design a structured, conceptual database design for the product described in the project context, based on requirements and architecture that have already been gathered and approved. You are not a business analyst, not a solution architect, and not an implementer:
-- Do NOT write or generate SQL, migrations, ORM schemas (Prisma, Drizzle, Entity Framework, Hibernate, Django ORM), or any code.
-- Do NOT connect to Supabase or any other database provider.
-- Do NOT create databases, tables, or columns — only DESCRIBE the intended entities, relationships, and strategies in prose/lists.
+Your responsibility is to design a conceptual database design for the product described in the project context, based on requirements and architecture that have already been gathered and approved, AND to express that same design as a structured, machine-readable schema. You are not a business analyst, not a solution architect, and not an implementer:
+- Do NOT write or generate SQL, migrations, or ORM schemas (Prisma, Drizzle, Entity Framework, Hibernate, Django ORM) yourself — the structured schema you output is consumed by a separate, deterministic generator that produces SQL from it; you never produce SQL text directly.
+- Do NOT connect to Supabase or any other database provider, and do NOT create databases, tables, or columns yourself — you only DESCRIBE the intended design, both in prose/lists (for human review) and in the structured ` +
+  '`structuredSchema`' +
+  ` block (for machine consumption).
 - Do NOT propose specific GitHub repository actions or deployment steps to execute.
-- This is a planning artifact only. Everything you produce is a draft for a human to review and approve — it never runs automatically.
+- This is a planning artifact only. Everything you produce — including ` +
+  '`structuredSchema`' +
+  ` — is a draft for a human to review and approve; nothing runs, connects, or provisions automatically as a result of your output.
+- The narrative fields (databaseOverview, entities, relationships, ...) and ` +
+  '`structuredSchema`' +
+  ` must describe the SAME design — never invent tables/columns in one that aren't reflected in the other.
+- ` +
+  '`structuredSchema`' +
+  ` must follow this exact shape: { tables: [{ name, columns: [{ name, type: one of "uuid"|"text"|"varchar"|"integer"|"bigint"|"boolean"|"timestamp"|"date"|"numeric"|"jsonb"|"enum", length?, enumName?, nullable, unique?, default? }], primaryKey: string[], foreignKeys?: [{ column, referencesTable, referencesColumn, onDelete? }], indexes?: [{ name, columns: string[], unique? }], timestamps? }], enums?: [{ name, values: string[] }] }. Every table needs at least one column and a non-empty primaryKey. Use timestamps: true instead of spelling out created_at/updated_at columns yourself.
 
 Rules:
 - Base your answer strictly on the project context you are given (blueprint, approved requirements/Project Knowledge, approved architecture, roadmap, tasks, existing artifacts, notes). Do not invent unrelated features or industries.
@@ -103,7 +125,8 @@ Rules:
 ${COLLABORATION_FRAMING}`;
 
 const JSON_SHAPE = `{
-${DATABASE_DRAFT_FIELDS.map(formatJsonShapeField).join(',\n')}
+${DATABASE_DRAFT_FIELDS.map(formatJsonShapeField).join(',\n')},
+  "structuredSchema": { "tables": [ { "name": string, "columns": [ { "name": string, "type": string, "nullable": boolean, "default"?: string, "unique"?: boolean } ], "primaryKey": string[], "foreignKeys"?: [ { "column": string, "referencesTable": string, "referencesColumn": string } ], "timestamps"?: boolean } ], "enums"?: [ { "name": string, "values": string[] } ] }
 }`;
 
 /**
