@@ -2249,6 +2249,37 @@ describe('buildersDbContextProvider — Sprint 71 Regional Intelligence Foundati
     );
   });
 
+  it('Sprint 72 — a Business Discovery-resolved region produces Regional Guidance, traced as business_discovery', async () => {
+    getEffectiveRegionalSelectionMock.mockResolvedValue(
+      makeRegionalResolution({
+        selectionSource: 'business_discovery',
+        regionalProfileCode: 'AE',
+        matchedCountry: 'United Arab Emirates',
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a booking app');
+    await flush();
+
+    expect(block).toContain('### Regional Guidance');
+    expect(block).toContain('from Business Discovery');
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const regionalSource = sources.find((s: { type: string }) => s.type === 'regional-resolution');
+
+    expect(regionalSource).toEqual(expect.objectContaining({ selectionSource: 'business_discovery' }));
+  });
+
+  it('Sprint 72 — a manual override replaces Business Discovery-sourced guidance', async () => {
+    getEffectiveRegionalSelectionMock.mockResolvedValue(makeRegionalResolution({ selectionSource: 'manual_override' }));
+
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('manually selected by the user');
+    expect(block).not.toContain('from Business Discovery');
+  });
+
   it('gives the Business/Product family (requirements-draft) business-facing regional terminology', async () => {
     getEffectiveRegionalSelectionMock.mockResolvedValue(makeRegionalResolution());
 

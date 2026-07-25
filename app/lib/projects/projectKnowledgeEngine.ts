@@ -1,6 +1,6 @@
 import { blueprintEngine } from '~/lib/blueprints';
 import { getProjectArtifacts, getProjectKnowledge, getRoadmapItemStatus, type Project } from '~/lib/stores/projects';
-import type { ProjectKnowledge } from './knowledge';
+import { PRIMARY_MARKET_OPTIONS, type ProjectKnowledge } from './knowledge';
 import { ARTIFACT_TYPES, getLatestArtifact } from './artifacts';
 
 /**
@@ -23,16 +23,32 @@ import { ARTIFACT_TYPES, getLatestArtifact } from './artifacts';
  * `blueprintEngine` for blueprint data.
  */
 
-export type KnowledgeFieldKind = 'text' | 'textarea' | 'list';
+export type KnowledgeFieldKind = 'text' | 'textarea' | 'list' | 'select';
 
 /** Every ProjectKnowledge field the Requirements dialog can edit. */
 export type KnowledgeFieldKey = keyof ProjectKnowledge;
+
+/** Sprint 72 — one option in a `kind: 'select'` field, e.g. `primaryMarketCode`'s market list. */
+export interface KnowledgeFieldOption {
+  value: string;
+  label: string;
+}
 
 export interface KnowledgeFieldConfig {
   key: KnowledgeFieldKey;
   label: string;
   kind: KnowledgeFieldKind;
   placeholder?: string;
+
+  /** Required when `kind === 'select'`; ignored otherwise. */
+  options?: KnowledgeFieldOption[];
+
+  /**
+   * Sprint 72 — short explanatory copy shown under the field label (compact helper text, not a
+   * tooltip — see Sprint 72 brief PART 6's "restrained UI" guidance). Currently only set for
+   * `primaryMarketCode`.
+   */
+  helpText?: string;
 }
 
 export type KnowledgeSectionId = 'business' | 'product' | 'technical' | 'businessOperations' | 'brand' | 'notes';
@@ -73,6 +89,14 @@ export const KNOWLEDGE_SECTIONS: KnowledgeSectionConfig[] = [
       { key: 'targetUsers', label: 'Target Users', kind: 'text', placeholder: 'Who is this for?' },
       { key: 'languages', label: 'Languages', kind: 'list', placeholder: 'e.g. English, Hindi, Tamil, Malayalam' },
       { key: 'location', label: 'Region', kind: 'text', placeholder: 'e.g. India, Tamil Nadu, Global' },
+      {
+        key: 'primaryMarketCode',
+        label: 'Primary operating market',
+        kind: 'select',
+        options: [...PRIMARY_MARKET_OPTIONS],
+        helpText:
+          'The main country where this product will initially operate. This helps Builders apply appropriate currency, formatting and compliance-aware guidance.',
+      },
     ],
   },
   {

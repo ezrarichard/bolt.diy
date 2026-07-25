@@ -235,9 +235,11 @@ export function ProjectRequirementsDialog({
     onClose();
   };
 
-  const update = (key: KnowledgeFieldKey) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setForm((prev) => ({ ...prev, [key]: event.target.value }));
-  };
+  const update =
+    (key: KnowledgeFieldKey) =>
+    (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+      setForm((prev) => ({ ...prev, [key]: event.target.value }));
+    };
 
   function renderField(field: KnowledgeFieldConfig) {
     const hintText = (hints as Partial<Record<KnowledgeFieldKey, string>>)[field.key];
@@ -248,6 +250,9 @@ export function ProjectRequirementsDialog({
     return (
       <div key={field.key} className={field.kind === 'textarea' ? 'sm:col-span-2' : undefined}>
         <FieldLabel label={field.label} hint={listHint} recommended={isRecommended} />
+        {field.helpText && (
+          <p className="text-[11px] leading-snug text-bolt-elements-textTertiary/80 -mt-1 mb-1.5">{field.helpText}</p>
+        )}
         {field.kind === 'textarea' ? (
           <textarea
             className={classNames(textInputClasses, 'min-h-[72px] resize-y')}
@@ -255,6 +260,18 @@ export function ProjectRequirementsDialog({
             value={form[field.key] ?? ''}
             onChange={update(field.key)}
           />
+        ) : field.kind === 'select' ? (
+          <select
+            className={classNames(textInputClasses, 'cursor-pointer')}
+            value={form[field.key] ?? ''}
+            onChange={update(field.key)}
+          >
+            {(field.options ?? []).map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         ) : (
           <input
             className={textInputClasses}

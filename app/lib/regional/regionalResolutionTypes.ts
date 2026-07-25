@@ -24,23 +24,23 @@ export interface RegionalSelection {
 
 /**
  * Every source `resolveEffectiveRegionalSelection` could in principle report, matching PART 5
- * of the Sprint 71 brief's suggested list exactly. **Only `'manual_override'` and `'none'` are
- * actually reachable in this foundation sprint** — the other three are reserved for real
- * future signals that don't exist yet in this codebase (confirmed during Sprint 71's own
- * architecture research: no structured country/region field exists anywhere in Business
- * Discovery, and no workspace/organization-default concept exists at all):
+ * of the Sprint 71 brief's suggested list exactly. As of Sprint 72 (Regional Selection
+ * Activation), `'manual_override'`, `'business_discovery'`, and `'none'` are reachable —
+ * `'project_metadata'` and `'workspace_default'` remain reserved for signals that still don't
+ * exist in this codebase:
  *
- * - `'manual_override'` — `Project.regionalSelection` is set. Reachable today.
- * - `'business_discovery'` — would mean Business Discovery captured a structured country/market
- *   field and this resolver read it. Reserved: `BusinessUnderstandingModel` has no such field
- *   yet (see `docs/regional-intelligence/Regional-Intelligence.md`'s "Known limitations").
+ * - `'manual_override'` — `Project.regionalSelection` is set. Reachable, and always wins over
+ *   `'business_discovery'` below (see `resolveEffectiveRegionalSelection`'s priority order).
+ * - `'business_discovery'` — no manual override, but `Project.projectKnowledge.primaryMarketCode`
+ *   (see app/lib/projects/knowledge.ts, added Sprint 72) names a supported region code. Reachable.
  * - `'project_metadata'` — would mean a region was present in project metadata but NOT through
- *   the manual-override write path (e.g. a future bulk-import/programmatic set). Reserved:
- *   today the only writer of `Project.regionalSelection` IS the manual-override path, so this
- *   value is never produced — kept in the union so a future writer doesn't need a type change.
+ *   the manual-override or Business Discovery read paths (e.g. a future bulk-import/programmatic
+ *   set). Reserved: today only those two paths ever produce a resolved region, so this value is
+ *   never produced — kept in the union so a future writer doesn't need a type change.
  * - `'workspace_default'` — would mean an organization/workspace-level default region existed.
  *   Reserved: no workspace/organization concept exists in this codebase at all yet.
- * - `'none'` — nothing resolved. Reachable today (the common case until a project sets one).
+ * - `'none'` — nothing resolved: no manual override, and no supported market captured in
+ *   Business Discovery either (undefined, or `'OTHER'`/unsupported). Reachable today.
  */
 export type RegionalSelectionSource =
   | 'manual_override'

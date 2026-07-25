@@ -17,12 +17,18 @@ vi.mock('~/lib/builders-db/repositories/buildersDbRepository', () => ({
     createProject: vi.fn(),
     createProjectWithResult: createProjectWithResultMock,
     addProjectActivity: addProjectActivityMock,
+    updateProject: vi.fn().mockResolvedValue(true),
   },
 }));
 
-const { createQuickBuildLocalProject, persistQuickBuildProject, addProject, projectsStore } = await import(
-  './projects'
-);
+const {
+  createQuickBuildLocalProject,
+  persistQuickBuildProject,
+  addProject,
+  projectsStore,
+  setProjectRegionalSelection,
+  clearProjectRegionalSelection,
+} = await import('./projects');
 
 describe('Quick Build project persistence', () => {
   beforeEach(() => {
@@ -111,5 +117,57 @@ describe('Quick Build project persistence', () => {
     // addProject() returns synchronously without awaiting the BuildersDB mirror.
     expect(project.projectType).toBe('guided_engineering');
     expect(projectsStore.get()).toHaveLength(1);
+  });
+});
+
+describe('Sprint 72 — setProjectRegionalSelection / clearProjectRegionalSelection', () => {
+  beforeEach(() => {
+    isBuildersDbAvailableMock.mockReset().mockReturnValue(false);
+    projectsStore.set([]);
+  });
+
+  it('persists a valid manual override immediately in the reactive store', () => {
+    const project = addProject({
+      name: 'Regional Test Project',
+      icon: '🌍',
+      color: 'purple',
+      projectType: 'guided_engineering',
+      createdFrom: 'guided_engineering',
+    });
+
+    const ok = setProjectRegionalSelection(project.id, 'AE');
+
+    expect(ok).toBe(true);
+    expect(projectsStore.get().find((p) => p.id === project.id)?.regionalSelection?.regionCode).toBe('AE');
+  });
+
+  it('rejects an unknown region code without persisting anything', () => {
+    const project = addProject({
+      name: 'Regional Test Project',
+      icon: '🌍',
+      color: 'purple',
+      projectType: 'guided_engineering',
+      createdFrom: 'guided_engineering',
+    });
+
+    const ok = setProjectRegionalSelection(project.id, 'ZZ');
+
+    expect(ok).toBe(false);
+    expect(projectsStore.get().find((p) => p.id === project.id)?.regionalSelection).toBeUndefined();
+  });
+
+  it('clearing the override removes the field and survives being re-read from the store', () => {
+    const project = addProject({
+      name: 'Regional Test Project',
+      icon: '🌍',
+      color: 'purple',
+      projectType: 'guided_engineering',
+      createdFrom: 'guided_engineering',
+    });
+
+    setProjectRegionalSelection(project.id, 'GB');
+    clearProjectRegionalSelection(project.id);
+
+    expect(projectsStore.get().find((p) => p.id === project.id)?.regionalSelection).toBeUndefined();
   });
 });

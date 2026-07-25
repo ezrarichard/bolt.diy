@@ -93,6 +93,113 @@ describe('resolveEffectiveRegionalSelection (pure, no I/O)', () => {
   });
 });
 
+describe('resolveEffectiveRegionalSelection — Sprint 72 Business Discovery resolution', () => {
+  it('discovery India resolves the India profile', () => {
+    const result = resolveEffectiveRegionalSelection(makeProject({ projectKnowledge: { primaryMarketCode: 'IN' } }));
+
+    expect(result.selectionSource).toBe('business_discovery');
+    expect(result.regionalProfileCode).toBe('IN');
+    expect(result.sourceValue).toBe('IN');
+    expect(result.matchedCountry).toBe('India');
+  });
+
+  it('discovery UAE resolves the UAE profile', () => {
+    const result = resolveEffectiveRegionalSelection(makeProject({ projectKnowledge: { primaryMarketCode: 'AE' } }));
+    expect(result.selectionSource).toBe('business_discovery');
+    expect(result.regionalProfileCode).toBe('AE');
+  });
+
+  it('discovery UK resolves the UK profile', () => {
+    const result = resolveEffectiveRegionalSelection(makeProject({ projectKnowledge: { primaryMarketCode: 'GB' } }));
+    expect(result.selectionSource).toBe('business_discovery');
+    expect(result.regionalProfileCode).toBe('GB');
+  });
+
+  it('discovery US resolves the US profile', () => {
+    const result = resolveEffectiveRegionalSelection(makeProject({ projectKnowledge: { primaryMarketCode: 'US' } }));
+    expect(result.selectionSource).toBe('business_discovery');
+    expect(result.regionalProfileCode).toBe('US');
+  });
+
+  it('manual override wins over a discovery market (Scenario A)', () => {
+    const project = makeProject({
+      projectKnowledge: { primaryMarketCode: 'IN' },
+      regionalSelection: { regionCode: 'AE', selectedAt: '2026-07-25T00:00:00.000Z' },
+    });
+    const result = resolveEffectiveRegionalSelection(project);
+
+    expect(result.selectionSource).toBe('manual_override');
+    expect(result.regionalProfileCode).toBe('AE');
+  });
+
+  it('clearing the override restores discovery resolution (Scenario B)', () => {
+    const withOverride = makeProject({
+      projectKnowledge: { primaryMarketCode: 'IN' },
+      regionalSelection: { regionCode: 'AE', selectedAt: '2026-07-25T00:00:00.000Z' },
+    });
+    const { regionalSelection: _removed, ...cleared } = withOverride;
+    const result = resolveEffectiveRegionalSelection(cleared);
+
+    expect(result.selectionSource).toBe('business_discovery');
+    expect(result.regionalProfileCode).toBe('IN');
+  });
+
+  it('a discovery change under manual override does not change the effective profile (Scenario C)', () => {
+    const project = makeProject({
+      projectKnowledge: { primaryMarketCode: 'GB' },
+      regionalSelection: { regionCode: 'AE', selectedAt: '2026-07-25T00:00:00.000Z' },
+    });
+    const result = resolveEffectiveRegionalSelection(project);
+
+    expect(result.selectionSource).toBe('manual_override');
+    expect(result.regionalProfileCode).toBe('AE');
+  });
+
+  it('clearing the override after a discovery change uses the latest discovery value (Scenario D)', () => {
+    const project = makeProject({ projectKnowledge: { primaryMarketCode: 'GB' } });
+    const result = resolveEffectiveRegionalSelection(project);
+
+    expect(result.selectionSource).toBe('business_discovery');
+    expect(result.regionalProfileCode).toBe('GB');
+  });
+
+  it('an unsupported discovery market remains unresolved (Scenario E)', () => {
+    const result = resolveEffectiveRegionalSelection(makeProject({ projectKnowledge: { primaryMarketCode: 'OTHER' } }));
+
+    expect(result.selectionSource).toBe('none');
+    expect(result.regionalProfileId).toBeNull();
+    expect(result.unresolvedReason).toContain('OTHER');
+  });
+
+  it('an undefined/not-specified discovery market remains unresolved', () => {
+    const result = resolveEffectiveRegionalSelection(makeProject({ projectKnowledge: {} }));
+
+    expect(result.selectionSource).toBe('none');
+  });
+
+  it('records business_discovery as the selection source and the raw code as sourceValue', () => {
+    const result = resolveEffectiveRegionalSelection(makeProject({ projectKnowledge: { primaryMarketCode: 'US' } }));
+
+    expect(result.selectionSource).toBe('business_discovery');
+    expect(result.sourceValue).toBe('US');
+  });
+
+  it('never reads free-text location as a regional signal', () => {
+    const result = resolveEffectiveRegionalSelection(
+      makeProject({ projectKnowledge: { location: 'India, Tamil Nadu' } }),
+    );
+
+    expect(result.selectionSource).toBe('none');
+  });
+
+  it('existing projects without projectKnowledge remain backward compatible', () => {
+    const result = resolveEffectiveRegionalSelection(makeProject());
+
+    expect(result.selectionSource).toBe('none');
+    expect(result.contentAvailable).toBe(false);
+  });
+});
+
 describe('getEffectiveRegionalSelection (async, I/O)', () => {
   beforeEach(() => {
     getProjectByIdMock.mockReset();

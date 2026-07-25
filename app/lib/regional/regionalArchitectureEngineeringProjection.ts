@@ -94,7 +94,11 @@ export function formatArchitectureEngineeringRegionalGuidanceSection(
   projection: ArchitectureEngineeringRegionalContext | undefined,
 ): string {
   const selectionLabel =
-    resolution.selectionSource === 'manual_override' ? 'manually selected by the user' : resolution.selectionSource;
+    resolution.selectionSource === 'manual_override'
+      ? 'manually selected by the user'
+      : resolution.selectionSource === 'business_discovery'
+        ? 'from Business Discovery'
+        : resolution.selectionSource;
 
   const header = `### Regional Guidance (Advisory) — ${profileName} (${selectionLabel})`;
 

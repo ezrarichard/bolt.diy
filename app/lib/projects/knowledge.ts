@@ -74,6 +74,21 @@ export interface ProjectKnowledge {
   /** Primary region/location the product targets. */
   location?: string;
 
+  /**
+   * Sprint 72 (Regional Selection Activation) — the primary country/market where this product
+   * will initially operate, as STRUCTURED discovery input: `'IN' | 'AE' | 'GB' | 'US'` for a
+   * supported market (see `PRIMARY_MARKET_OPTIONS` below and `RegionCode` in
+   * app/lib/regional/regionalProfileTypes.ts, which this deliberately does not import — Business
+   * Discovery capturing a market is a separate concept from Regional Intelligence resolving an
+   * effective profile, see docs/regional-intelligence/Regional-Intelligence.md), `'OTHER'` for an
+   * explicitly-unsupported market, or undefined when not specified. `regionalResolutionService.ts`
+   * reads this field (never writes it) as the `'business_discovery'` resolution source, only when
+   * no manual `Project.regionalSelection` override exists. Deliberately a separate field from
+   * `location` above (free-text business address/region) — this field is never derived from or
+   * migrated to/from it.
+   */
+  primaryMarketCode?: string;
+
   /** Brand tone/voice guidance. */
   brandTone?: string;
 
@@ -179,6 +194,25 @@ export function getProjectKnowledgeHints(blueprintId: string | undefined): Proje
 }
 
 /**
+ * Sprint 72 — the fixed option list for `ProjectKnowledge.primaryMarketCode`'s select field in
+ * the Requirements dialog (see projectKnowledgeEngine.ts's `primaryMarketCode` field config).
+ * `value: ''` renders as "Not specified" and is normalized to `undefined` on save (same
+ * empty-string-to-undefined convention every other text field in this form already uses — see
+ * ProjectRequirementsDialog.tsx's `formStateToKnowledge`). Kept as a small static list (not
+ * derived from `regionalEngine.getAllRegionalProfiles()`) so Business Discovery's capture step
+ * never depends on the Regional Profile registry — these are separate concepts on purpose (see
+ * `primaryMarketCode`'s own doc comment above).
+ */
+export const PRIMARY_MARKET_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: '', label: 'Not specified' },
+  { value: 'IN', label: 'India' },
+  { value: 'AE', label: 'United Arab Emirates' },
+  { value: 'GB', label: 'United Kingdom' },
+  { value: 'US', label: 'United States' },
+  { value: 'OTHER', label: 'Other / unsupported market' },
+];
+
+/**
  * Sprint 9 (Phase 2) — whether a project has any meaningful requirements
  * captured yet. Used to show "Requirements captured" vs "Requirements
  * missing" in the Project Dashboard (Task 7) and to decide whether to show
@@ -207,6 +241,7 @@ export function isRequirementsCaptured(knowledge: ProjectKnowledge | undefined):
     hasList(knowledge.shippingNeeds) ||
     hasList(knowledge.languages) ||
     hasText(knowledge.location) ||
+    hasText(knowledge.primaryMarketCode) ||
     hasText(knowledge.brandTone) ||
     hasText(knowledge.designPreferences) ||
     hasText(knowledge.technicalPreferences) ||

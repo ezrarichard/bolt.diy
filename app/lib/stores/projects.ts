@@ -9,6 +9,7 @@ import {
 import type { RoadmapItemStatus } from '~/lib/blueprints';
 import type { ProjectKnowledge } from '~/lib/projects/knowledge';
 import type { RegionalSelection } from '~/lib/regional/regionalResolutionTypes';
+import { regionalEngine } from '~/lib/regional/regionalProfileRegistry';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
 import type { ProjectDefinitionApproval, ProjectDefinitionChatMessage } from '~/lib/projects/projectDefinition';
 import type { ProjectTaskStatus } from '~/lib/projects/executionEngine';
@@ -1310,6 +1311,66 @@ export function updateProjectKnowledge(projectId: string, partialKnowledge: Part
   if (updated) {
     mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
     syncRequirementsArtifact(projectId, updated);
+  }
+}
+
+/**
+ * Sprint 72 (Regional Selection Activation) — sets (or replaces) a project's manual Regional
+ * Profile override, through the reactive `projectsStore` (same store + BuildersDB-mirror pattern
+ * as `updateProjectKnowledge` above) so the Workspace tab's regional control re-renders
+ * immediately and the selection survives a refresh. `regionalResolutionService.ts`'s own
+ * `setManualRegionalSelection` intentionally stays BuildersDB-only (for non-UI callers); this is
+ * the UI-facing counterpart. Returns `false` (never throws) for an unknown region code, without
+ * persisting anything — same safety discipline as the BuildersDB-only function.
+ */
+export function setProjectRegionalSelection(projectId: string, regionCode: string): boolean {
+  if (!regionalEngine.getRegionalProfile(regionCode)) {
+    console.error(`[Regional Selection] setProjectRegionalSelection: unknown region code "${regionCode}"`);
+    return false;
+  }
+
+  const selection: RegionalSelection = {
+    regionCode: regionCode as RegionalSelection['regionCode'],
+    selectedAt: new Date().toISOString(),
+  };
+
+  const next = projectsStore
+    .get()
+    .map((project) => (project.id === projectId ? { ...project, regionalSelection: selection } : project));
+  projectsStore.set(next);
+  projectRepository.saveProjects(next);
+
+  const updated = next.find((project) => project.id === projectId);
+
+  if (updated) {
+    mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
+  }
+
+  return true;
+}
+
+/**
+ * Sprint 72 (Regional Selection Activation) — clears a project's manual Regional Profile
+ * override, restoring automatic resolution from Business Discovery (or unresolved). Same
+ * store + BuildersDB-mirror pattern as `setProjectRegionalSelection` above.
+ */
+export function clearProjectRegionalSelection(projectId: string): void {
+  const next = projectsStore.get().map((project) => {
+    if (project.id !== projectId) {
+      return project;
+    }
+
+    const { regionalSelection: _removed, ...rest } = project;
+
+    return rest as Project;
+  });
+  projectsStore.set(next);
+  projectRepository.saveProjects(next);
+
+  const updated = next.find((project) => project.id === projectId);
+
+  if (updated) {
+    mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
   }
 }
 

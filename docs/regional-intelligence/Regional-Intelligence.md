@@ -1,13 +1,14 @@
 # Regional Intelligence
 
-**Sprint 71 — Regional Intelligence Foundation.** This document describes what actually exists
-in the codebase today. Nothing here is aspirational — if a field, source, or behavior isn't
-listed, it hasn't been built yet.
+**Sprint 71 — Regional Intelligence Foundation. Sprint 72 — Regional Selection Activation.** This
+document describes what actually exists in the codebase today. Nothing here is aspirational — if
+a field, source, or behavior isn't listed, it hasn't been built yet.
 
-Status: **Foundation established for India, UAE, UK, and US.** Architecture is extensible to
-more regions without a pipeline rewrite (see [Adding a New Region](#adding-a-new-region)), but
-only these four are seeded, and the only reachable resolution source today is manual selection
-(see [Known Limitations](#known-limitations)).
+Status: **Foundation established for India, UAE, UK, and US, and activated through the normal
+Builders workflow.** Architecture is extensible to more regions without a pipeline rewrite (see
+[Adding a New Region](#adding-a-new-region)). Two resolution sources are reachable today: an
+explicit manual override, and a structured "primary operating market" captured during Business
+Discovery (see [Known Limitations](#known-limitations) for what's still not built).
 
 ---
 
@@ -114,37 +115,101 @@ resolver reads exactly one thing: `Project.regionalSelection`.
 ### Selection sources
 
 `RegionalSelectionSource` is `'manual_override' | 'business_discovery' | 'project_metadata' |
-'workspace_default' | 'none'` — matching PART 5 of the brief's suggested list exactly, but
-**only `'manual_override'` and `'none'` are reachable today**:
+'workspace_default' | 'none'` — matching PART 5 of the Sprint 71 brief's suggested list exactly.
+As of Sprint 72, **`'manual_override'`, `'business_discovery'`, and `'none'` are reachable**:
 
-- `'manual_override'` — `Project.regionalSelection` is set. **Reachable.**
-- `'business_discovery'` — would mean Business Discovery captured a structured country/market
-  field. **Reserved** — `BusinessUnderstandingModel` has no such field (confirmed by this
-  sprint's own architecture research; see [Known Limitations](#known-limitations)).
-- `'project_metadata'` — would mean a region was set through a path other than manual override
-  (e.g. a future bulk-import). **Reserved** — today the only writer of
-  `Project.regionalSelection` is the manual-override path itself.
+- `'manual_override'` — `Project.regionalSelection` is set. **Reachable**, and always wins over
+  `'business_discovery'` below.
+- `'business_discovery'` — `Project.projectKnowledge.primaryMarketCode` (see
+  [Structured Discovery Market](#structured-discovery-market)) names a supported region code, and
+  no manual override exists. **Reachable** (Sprint 72).
+- `'project_metadata'` — would mean a region was present in project metadata but NOT through
+  either read path above (e.g. a future bulk-import). **Reserved** — today only manual override
+  and Business Discovery ever produce a resolved region.
 - `'workspace_default'` — would mean an organization/workspace-level default existed.
   **Reserved** — no workspace/organization concept exists in this codebase at all.
-- `'none'` — nothing resolved. **Reachable** (the default state for every project today).
+- `'none'` — nothing resolved: no manual override, and no supported market captured in Business
+  Discovery either (undefined, or `'OTHER'`/unsupported). **Reachable.**
+
+### Resolution priority
+
+`resolveEffectiveRegionalSelection(project)` checks, in order:
+
+1. `project.regionalSelection` (manual override) — always wins if present, even if
+   `projectKnowledge.primaryMarketCode` names a different market.
+2. `project.projectKnowledge.primaryMarketCode` — only consulted when no manual override exists.
+3. Unresolved (`selectionSource: 'none'`).
+
+Clearing the manual override (`clearProjectRegionalSelection`/`clearManualRegionalSelection`)
+falls through to whatever Business Discovery *currently* holds, not whatever it held when the
+override was set — there is no hidden "remembered" automatic value; it's recomputed fresh each
+time.
 
 ## 7. Manual Override Behaviour
 
 `setManualRegionalSelection(projectId, regionCode)` and `clearManualRegionalSelection(projectId)`
-in `regionalResolutionService.ts` implement the domain-layer capability (PART 11):
+in `regionalResolutionService.ts` remain the BuildersDB-only domain-layer functions from Sprint
+71 (PART 11). Sprint 72 adds a UI-facing, store-reactive counterpart in
+`app/lib/stores/projects.ts`: `setProjectRegionalSelection(projectId, regionCode)` and
+`clearProjectRegionalSelection(projectId)`, which write through the same reactive `projectsStore`
++ BuildersDB-mirror pattern every other project mutator uses (e.g. `updateProjectKnowledge`) so
+the Workspace tab's control re-renders immediately and the change survives a refresh.
 
-- Manual selection always wins — it is the only source this resolver reads.
-- `setManualRegionalSelection` rejects an unknown region code without persisting anything (never
-  stores a selection that can't resolve).
-- `clearManualRegionalSelection` removes the field, returning the project to `'none'` — "return
-  to automatic resolution" means unresolved today, since no automatic source is reachable yet.
-- Both are `false`-returning, never-throwing on failure (project not found, BuildersDB
-  unavailable), matching every other BuildersDB-backed write in this codebase.
+- Manual selection always wins over a Business Discovery market (see
+  [Resolution priority](#resolution-priority)).
+- Both setters reject an unknown region code without persisting anything (never store a
+  selection that can't resolve).
+- Clearing removes the field, restoring whatever Business Discovery currently resolves (or
+  `'none'` if that's also unset/unsupported) — "return to automatic resolution."
 
-**No UI was added.** No existing settings/edit-flow convention was found that a minimal control
-could safely attach to without touching Dashboard layout (PART 11: "do not redesign project
-settings" / "do not force a new Dashboard feature") — the domain layer is implemented and fully
-tested; wiring a control is future work (see [Remaining Work](#remaining-regional-intelligence-work)).
+### Regional Profile card (Sprint 72 UI)
+
+`app/components/sidebar/RegionalProfileCard.tsx`, rendered in `ProjectDashboard.tsx`'s Workspace
+tab immediately next to the existing Generation Profile card (Sprint 39.5) — same footprint, no
+new Dashboard page, no custom settings framework. Shows:
+
+- A `<select>` of `Use automatic selection` plus every registered Regional Profile (built from
+  `regionalEngine.getAllRegionalProfiles()`, never hardcoded).
+- **Effective region** and **Source** (`Manual override` / `Business Discovery` / `Not set`),
+  read via `resolveEffectiveRegionalSelection(project)` — pure and synchronous over the same
+  in-memory `Project` already in the reactive `projectsStore`, no extra network round trip per
+  render.
+- A short, restrained explanatory line: *"Regional guidance adapts approved product scope to the
+  selected market. It does not add product features or guarantee legal compliance."*
+
+Selecting a market calls `setProjectRegionalSelection`; selecting "Use automatic selection" calls
+`clearProjectRegionalSelection`.
+
+## 7.5. Structured Discovery Market
+
+`ProjectKnowledge.primaryMarketCode?: string` (`app/lib/projects/knowledge.ts`, Sprint 72) — the
+customer's stated primary operating market, captured as structured discovery input. Deliberately
+**separate** from the effective Regional Profile selection and from the pre-existing free-text
+`location` field:
+
+- Discovery market: *"The customer says the product will operate primarily in the UAE."*
+- Effective Regional Profile: *"The Regional Intelligence system selected profile UAE v1 using
+  Business Discovery."*
+
+Values: `'IN' | 'AE' | 'GB' | 'US'` for a supported market, `'OTHER'` for an explicitly-marked
+unsupported market, or `undefined` for "not specified." Never a display label — always the
+ISO-style code. `PRIMARY_MARKET_OPTIONS` (same file) is the fixed option list the Requirements
+dialog's select renders.
+
+### Business Discovery integration
+
+`app/lib/projects/projectKnowledgeEngine.ts`'s `KNOWLEDGE_SECTIONS` "Business" section gained one
+new `kind: 'select'` field — "Primary operating market" — right after the existing free-text
+"Region" field. `KnowledgeFieldKind` widened to include `'select'`, and `KnowledgeFieldConfig`
+gained optional `options`/`helpText`. `ProjectRequirementsDialog.tsx`'s `renderField` renders it
+as a native `<select>` (no shared Select primitive exists yet in the Sprint 69 Builders Design
+System — see that sprint's own research), with the help text *"The main country where this
+product will initially operate. This helps Builders apply appropriate currency, formatting and
+compliance-aware guidance."* shown underneath the label. Saved the same way every other
+Requirements field is: `updateProjectKnowledge(projectId, knowledge)`.
+
+The pre-existing free-text `location` field ("Region") is untouched — no silent migration from
+one to the other.
 
 ## 8. Persistence Decision
 
@@ -152,18 +217,24 @@ tested; wiring a control is future work (see [Remaining Work](#remaining-regiona
 `builders_projects.metadata` via `METADATA_FIELDS` in
 `app/lib/builders-db/buildersDbTypes.ts` — **no migration**.
 
-This was a deliberate choice per PART 6 of the brief, which explicitly prefers metadata storage
-over a new table unless lifecycle/versioning genuinely justifies one. `METADATA_FIELDS` is an
-existing, already-used mechanism (`projectDefinitionApproval`, `projectKnowledge`, and 9 other
-fields already persist this way) — adding `'regionalSelection'` to that array required editing
-exactly one array literal, no DDL. Existing projects with no `regionalSelection` field simply
-resolve to `'none'` — fully backward compatible.
+This was a deliberate choice per PART 6 of the Sprint 71 brief, which explicitly prefers metadata
+storage over a new table unless lifecycle/versioning genuinely justifies one. `METADATA_FIELDS`
+is an existing, already-used mechanism (`projectDefinitionApproval`, `projectKnowledge`, and 9
+other fields already persist this way) — adding `'regionalSelection'` to that array required
+editing exactly one array literal, no DDL. Existing projects with no `regionalSelection` field
+simply resolve to `'none'` — fully backward compatible.
+
+**`ProjectKnowledge.primaryMarketCode` needed no persistence change at all** (Sprint 72, PART 8):
+`projectKnowledge` was already in `METADATA_FIELDS` before this sprint, and `updateProjectKnowledge`
+already does a shallow merge — adding one more optional field to the `ProjectKnowledge` interface
+and its `KNOWLEDGE_SECTIONS` config was sufficient. Confirmed: **no BuildersDB migration was
+required for Sprint 72.**
 
 A dedicated table (mirroring `builders_blueprint_resolutions`) was considered and rejected: that
 table exists to store a *scoring engine's* history (candidates, confidence, explanation) across
-Business Understanding updates. Regional resolution in this foundation sprint has no scoring
-engine — the only persisted fact is an explicit manual choice, which a single field fully
-represents.
+Business Understanding updates. Regional resolution has no scoring engine — the only two
+persisted facts are an explicit manual choice and a structured discovery value, each of which a
+single field fully represents.
 
 ## 9. Role-Family Projections
 
@@ -257,8 +328,11 @@ the Regional-only values. Every Regional Guidance build records: Regional Profil
 version, selection source, sections supplied, content available, and resolution timestamp — via
 the same `recordContextTrace`/`saveContextTrace` mechanism Blueprint guidance already uses.
 
-**No IP or device-location data is ever traced** — the source is always "this project's stored
-manual selection," nothing about where a request came from.
+**No IP or device-location data is ever traced** — the source is always either "this project's
+stored manual selection" or "this project's stored Business Discovery market," never anything
+about where a request came from. Sprint 72 records `selectionSource: 'business_discovery'` and
+`sourceValue` (the stored `primaryMarketCode`) exactly the same way `'manual_override'` already
+was — no free-text address is ever traced.
 
 ## 15. Adding a New Region
 
@@ -279,27 +353,32 @@ historical profile-version lookup (matching PART 13's "does not require a comple
 
 ## 17. Known Limitations
 
-- **Only `manual_override` and `none` are reachable selection sources.** No structured
-  country/market field exists anywhere in `BusinessUnderstandingModel` or Business Discovery
-  today (confirmed via this sprint's own architecture research) — `'business_discovery'` is
-  defined in the type union for forward compatibility but never produced by the current
-  resolver.
-- **No UI control exists** for setting/clearing a manual regional selection — only the tested
-  domain-layer functions (`setManualRegionalSelection`/`clearManualRegionalSelection`).
-- **No workspace/organization-default concept exists** in this codebase, so
-  `'workspace_default'` is unreachable.
+- **`project_metadata` and `workspace_default` remain unreachable.** No path other than manual
+  override or Business Discovery ever produces a resolved region, and no
+  workspace/organization-default concept exists in this codebase at all.
+- The structured `primaryMarketCode` field is only captured through the **Form-mode** Requirements
+  dialog (`ProjectRequirementsDialog.tsx`). Interview Mode and Document Import (Sprint 56/57's
+  other two Business Discovery entry points) do not yet ask for it — a project discovered purely
+  through those modes has no structured market until a user opens the Form dialog and sets one, or
+  sets a manual override directly.
 - Only 4 country-level profiles exist — no state/emirate/nation-level sub-profiles (explicitly
-  out of scope per PART 13).
+  out of scope per PART 13 of the Sprint 71 brief, and PART "Out of Scope" of the Sprint 72 brief).
+- No workspace/organization-level default region exists (PART "Out of Scope" of the Sprint 72
+  brief — only add one if that concept exists elsewhere in the codebase first).
 - Regional guidance is advisory text, not enforced/validated data — an AI role could still, in
   principle, ignore the "only where already approved" qualifiers; this system informs, it does
   not gate generation programmatically.
+- No live tax rates, tax calculation, legal advice, compliance certification, IP geolocation,
+  browser-locale inference, translation/i18n, currency conversion, or payment-gateway automation
+  — all explicitly out of scope for both sprints.
 
 ## 18. Remaining Regional Intelligence Work
 
-- Capture a structured country/market field in Business Discovery and wire it as the
-  `'business_discovery'` resolution source.
-- Wire a minimal manual-override UI control once a suitable settings surface exists.
+- Extend structured market capture to Interview Mode and Document Import, so every Business
+  Discovery entry point can produce a `'business_discovery'` resolution, not just the Form dialog.
 - Consider a workspace/organization-level default once that concept exists elsewhere in the
   codebase.
 - Expand `paymentGuidance`/`commerceGuidance`-style detail as real product needs surface — kept
-  intentionally light in this foundation sprint.
+  intentionally light in both sprints.
+- Package Intelligence, Customer Intelligence, Blueprint Studio, and a Regional Profile Studio
+  remain explicitly out of scope — not started by either Sprint 71 or Sprint 72.

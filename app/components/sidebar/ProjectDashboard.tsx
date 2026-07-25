@@ -60,6 +60,7 @@ import { ProductPackagePanel } from './ProductPackagePanel';
 import { ProjectHistoryPanel } from './ProjectHistoryPanel';
 import { SharedProviderStatusCard } from './SharedProviderStatusCard';
 import { GenerationProfileSelector } from './GenerationProfileSelector';
+import { RegionalProfileCard } from './RegionalProfileCard';
 import { DEFAULT_GENERATION_PROFILE_ID, DEFAULT_GENERATION_PROFILES } from '~/lib/generation-profiles/defaultProfiles';
 import { saveSelectedProfileForProject } from '~/lib/generation-profiles/generationProfileRepository';
 
@@ -1479,6 +1480,9 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                 onChange={(profileId) => saveSelectedProfileForProject(project.id, profileId)}
                               />
                             </div>
+
+                            {/* Sprint 72 — Regional Profile card, same footprint as Generation Profile above. */}
+                            <RegionalProfileCard project={project} />
                           </div>
 
                           {/* Sprint 38.5 — Shared AI Provider status, reads /api/shared-key-status (see SharedProviderStatusCard.tsx) — booleans only, never a key value. */}
