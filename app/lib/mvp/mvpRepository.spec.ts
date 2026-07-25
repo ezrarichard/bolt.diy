@@ -10,7 +10,9 @@ vi.mock('~/lib/builders-db/client', () => ({
   isBuildersDbConfigured: () => true,
 }));
 
-const { createMvp, listMvpsForProject, recordMvpApproval } = await import('./mvpRepository');
+const { createMvp, listMvpsForProject, recordMvpApproval, updateMvpStatus, releaseMvp } = await import(
+  './mvpRepository'
+);
 
 function makeDraft(overrides: Partial<MvpDraft> = {}): MvpDraft {
   return {
@@ -171,6 +173,28 @@ describe('listMvpsForProject', () => {
   });
 });
 
+/** Sprint 78 Phase 0 — `updateMvpStatus` now reads the MVP's current status via `getMvpById` before writing (transition validation), so every test exercising an 'approved' decision must also mock the `select` query that read comes from, returning a row whose `status` is a valid predecessor of the expected target status. */
+function mockMvpRow(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+  return {
+    id: 'mvp-1',
+    project_id: 'proj-1',
+    code: 'MVP-001',
+    sequence: 1,
+    theme: null,
+    status: 'planned',
+    scope_artifact_id: null,
+    target_release: null,
+    estimated_effort: null,
+    business_priority: null,
+    blocked_reason: null,
+    created_by: null,
+    created_at: '2026-07-20T00:00:00.000Z',
+    updated_at: '2026-07-20T00:00:00.000Z',
+    approved_at: null,
+    ...overrides,
+  };
+}
+
 describe('recordMvpApproval', () => {
   beforeEach(() => {
     getBuildersDbClientMock.mockReset();
@@ -179,6 +203,7 @@ describe('recordMvpApproval', () => {
   it('inserts a Gate A ("scope") approval and flips the MVP status to "scoped", not "approved"', async () => {
     const insertApproval = vi.fn(() => Promise.resolve({ error: null }));
     const updateMvp = vi.fn(() => ({ eq: () => Promise.resolve({ error: null }) }));
+    const currentRow = mockMvpRow({ status: 'planned' });
 
     const from = vi.fn((table: string) => {
       if (table === 'builders_mvp_approvals') {
@@ -186,7 +211,10 @@ describe('recordMvpApproval', () => {
       }
 
       if (table === 'builders_mvps') {
-        return { update: updateMvp };
+        return {
+          select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: currentRow, error: null }) }) }),
+          update: updateMvp,
+        };
       }
 
       throw new Error(`unexpected table ${table}`);
@@ -212,6 +240,7 @@ describe('recordMvpApproval', () => {
   it('inserts a Gate B ("delivery") approval and flips the MVP status to "approved"', async () => {
     const insertApproval = vi.fn(() => Promise.resolve({ error: null }));
     const updateMvp = vi.fn(() => ({ eq: () => Promise.resolve({ error: null }) }));
+    const currentRow = mockMvpRow({ status: 'ready_for_review' });
 
     const from = vi.fn((table: string) => {
       if (table === 'builders_mvp_approvals') {
@@ -219,7 +248,10 @@ describe('recordMvpApproval', () => {
       }
 
       if (table === 'builders_mvps') {
-        return { update: updateMvp };
+        return {
+          select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: currentRow, error: null }) }) }),
+          update: updateMvp,
+        };
       }
 
       throw new Error(`unexpected table ${table}`);
@@ -267,5 +299,176 @@ describe('recordMvpApproval', () => {
 
     expect(ok).toBe(true);
     expect(updateMvp).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateMvpStatus — Sprint 78 Phase 0 transition validation', () => {
+  beforeEach(() => {
+    getBuildersDbClientMock.mockReset();
+  });
+
+  function mockFrom(
+    currentRow: Record<string, unknown> | null,
+    updateMvp = vi.fn(() => ({ eq: () => Promise.resolve({ error: null }) })),
+  ) {
+    return vi.fn((table: string) => {
+      if (table === 'builders_mvps') {
+        return {
+          select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: currentRow, error: null }) }) }),
+          update: updateMvp,
+        };
+      }
+
+      throw new Error(`unexpected table ${table}`);
+    });
+  }
+
+  it('allows a legal transition (planned -> scoped)', async () => {
+    const updateMvp = vi.fn(() => ({ eq: () => Promise.resolve({ error: null }) }));
+    getBuildersDbClientMock.mockReturnValue({ from: mockFrom(mockMvpRow({ status: 'planned' }), updateMvp) });
+
+    const ok = await updateMvpStatus('mvp-1', 'scoped');
+
+    expect(ok).toBe(true);
+    expect(updateMvp).toHaveBeenCalledWith(expect.objectContaining({ status: 'scoped' }));
+  });
+
+  it('refuses an illegal transition (planned -> released) without writing anything', async () => {
+    const updateMvp = vi.fn();
+    getBuildersDbClientMock.mockReturnValue({ from: mockFrom(mockMvpRow({ status: 'planned' }), updateMvp) });
+
+    const ok = await updateMvpStatus('mvp-1', 'released');
+
+    expect(ok).toBe(false);
+    expect(updateMvp).not.toHaveBeenCalled();
+  });
+
+  it('refuses a backwards transition (approved -> planned)', async () => {
+    const updateMvp = vi.fn();
+    getBuildersDbClientMock.mockReturnValue({ from: mockFrom(mockMvpRow({ status: 'approved' }), updateMvp) });
+
+    const ok = await updateMvpStatus('mvp-1', 'planned');
+
+    expect(ok).toBe(false);
+    expect(updateMvp).not.toHaveBeenCalled();
+  });
+
+  it('treats a no-op (same status) as always valid — safe for an idempotent retry', async () => {
+    const updateMvp = vi.fn(() => ({ eq: () => Promise.resolve({ error: null }) }));
+    getBuildersDbClientMock.mockReturnValue({ from: mockFrom(mockMvpRow({ status: 'scoped' }), updateMvp) });
+
+    const ok = await updateMvpStatus('mvp-1', 'scoped');
+
+    expect(ok).toBe(true);
+  });
+
+  it('allows blocked from any pre-released state, and resuming from blocked back into a pre-released state', async () => {
+    const updateMvp = vi.fn(() => ({ eq: () => Promise.resolve({ error: null }) }));
+    getBuildersDbClientMock.mockReturnValue({ from: mockFrom(mockMvpRow({ status: 'generating' }), updateMvp) });
+
+    expect(await updateMvpStatus('mvp-1', 'blocked')).toBe(true);
+
+    getBuildersDbClientMock.mockReturnValue({ from: mockFrom(mockMvpRow({ status: 'blocked' }), updateMvp) });
+
+    expect(await updateMvpStatus('mvp-1', 'generating')).toBe(true);
+  });
+
+  it('refuses to update a nonexistent MVP', async () => {
+    getBuildersDbClientMock.mockReturnValue({ from: mockFrom(null) });
+
+    const ok = await updateMvpStatus('mvp-missing', 'scoped');
+
+    expect(ok).toBe(false);
+  });
+});
+
+describe('releaseMvp — Sprint 78 Phase 0 auto-supersede rule', () => {
+  beforeEach(() => {
+    getBuildersDbClientMock.mockReset();
+  });
+
+  it('releases the target MVP and supersedes whichever OTHER MVP in the project currently holds "released"', async () => {
+    const targetMvp = mockMvpRow({ id: 'mvp-2', sequence: 2, status: 'approved' });
+    const previouslyReleased = mockMvpRow({ id: 'mvp-1', sequence: 1, status: 'released' });
+
+    const updateCalls: { id: string; status: string }[] = [];
+
+    const from = vi.fn((table: string) => {
+      if (table !== 'builders_mvps') {
+        throw new Error(`unexpected table ${table}`);
+      }
+
+      return {
+        select: () => ({
+          eq: (_col: string, value: string) => ({
+            maybeSingle: () =>
+              Promise.resolve({
+                data: value === 'mvp-2' ? targetMvp : value === 'mvp-1' ? previouslyReleased : null,
+                error: null,
+              }),
+            order: () => Promise.resolve({ data: [targetMvp, previouslyReleased], error: null }),
+          }),
+        }),
+        update: (payload: { status: string }) => ({
+          eq: (_col: string, value: string) => {
+            updateCalls.push({ id: value, status: payload.status });
+            return Promise.resolve({ error: null });
+          },
+        }),
+      };
+    });
+
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const ok = await releaseMvp('mvp-2');
+
+    expect(ok).toBe(true);
+    expect(updateCalls).toContainEqual({ id: 'mvp-2', status: 'released' });
+    expect(updateCalls).toContainEqual({ id: 'mvp-1', status: 'superseded' });
+  });
+
+  it('does nothing extra when there is no previously-released MVP to supersede', async () => {
+    const targetMvp = mockMvpRow({ id: 'mvp-1', sequence: 1, status: 'approved' });
+    const updateCalls: { id: string; status: string }[] = [];
+
+    const from = vi.fn((table: string) => {
+      if (table !== 'builders_mvps') {
+        throw new Error(`unexpected table ${table}`);
+      }
+
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: () => Promise.resolve({ data: targetMvp, error: null }),
+            order: () => Promise.resolve({ data: [targetMvp], error: null }),
+          }),
+        }),
+        update: (payload: { status: string }) => ({
+          eq: (_col: string, value: string) => {
+            updateCalls.push({ id: value, status: payload.status });
+            return Promise.resolve({ error: null });
+          },
+        }),
+      };
+    });
+
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const ok = await releaseMvp('mvp-1');
+
+    expect(ok).toBe(true);
+    expect(updateCalls).toEqual([{ id: 'mvp-1', status: 'released' }]);
+  });
+
+  it('refuses to release an MVP that does not exist', async () => {
+    const from = vi.fn(() => ({
+      select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }),
+    }));
+
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const ok = await releaseMvp('mvp-missing');
+
+    expect(ok).toBe(false);
   });
 });

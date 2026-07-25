@@ -12,7 +12,7 @@ import { productOwnerEngine, type ProductOwnerContext } from '~/lib/projects/pro
 import type { ProductOwnerDraft } from '~/lib/projects/prompts/productOwner';
 import { useDraftPanel } from '~/lib/hooks/useDraftPanel';
 import { useAuth } from '~/lib/auth/AuthProvider';
-import { mvpRepository } from '~/lib/mvp/mvpRepository';
+import { approveGateA } from '~/lib/mvp/gateAApproval';
 
 interface ProductOwnerDraftPanelProps {
   project: Project;
@@ -133,17 +133,23 @@ export function ProductOwnerDraftPanel({ project }: ProductOwnerDraftPanelProps)
   });
 
   /**
-   * Gate A: creates (or reuses, if a prior approve already created it — e.g. after a
-   * "changes requested" cycle) MVP 1 in BuildersDB, then records this Scope Approval
-   * decision against it. `handleApprove()` itself is untouched shared logic — this only
-   * adds the MVP side effect on top of it, so the shared `useDraftPanel` hook stays generic.
+   * Gate A — Sprint 78 Phase 0 corrective: unlike every other role's approval (a local artifact
+   * status flip, effectively can't fail), Gate A's persistence (MVP creation, the Scope Approval
+   * decision, and Feature promotion) is NOT optional fire-and-forget here — the review explicitly
+   * requires Gate A never report success while it failed. So this now runs `approveGateA`
+   * (`app/lib/mvp/gateAApproval.ts`, ordered, idempotent, every step checked) BEFORE
+   * `handleApprove()`, and only calls `handleApprove()` — the thing that actually marks the draft
+   * `'approved'` and unblocks Engineering — if that persistence succeeded (or BuildersDB was never
+   * configured at all, a legitimate no-op deployment mode `approveGateA` itself distinguishes from
+   * a real failure). A failure leaves the draft exactly where it was — still pending approval —
+   * so the customer sees an explicit error and can simply press Approve again; every step
+   * `approveGateA` performs is independently safe to repeat.
    */
   const handleApproveAndCreateMvp = async () => {
-    handleApprove();
-
     const draft = latestDraft;
 
     if (!draft?.currentMvp) {
+      handleApprove();
       return;
     }
 
@@ -152,46 +158,23 @@ export function ProductOwnerDraftPanel({ project }: ProductOwnerDraftPanelProps)
     try {
       const roadmapEntry = draft.roadmapSkeleton?.find((entry) => entry.sequence === draft.currentMvp!.sequence);
 
-      let mvpId: string | undefined;
-      const existing = await mvpRepository.listMvpsForProject(project.id);
-      const existingMvp = existing.find((mvp) => mvp.sequence === draft.currentMvp!.sequence);
+      const result = await approveGateA({
+        projectId: project.id,
+        sequence: draft.currentMvp.sequence,
+        code: draft.currentMvp.id,
+        theme: roadmapEntry?.theme,
+        targetRelease: roadmapEntry?.targetRelease,
+        estimatedEffort: roadmapEntry?.estimatedEffort,
+        decidedBy: user?.id ?? undefined,
+        features: draft.currentMvp.features,
+      });
 
-      if (existingMvp) {
-        mvpId = existingMvp.id;
-      } else {
-        const created = await mvpRepository.createMvp({
-          projectId: project.id,
-          sequence: draft.currentMvp.sequence,
-          code: draft.currentMvp.id,
-          theme: roadmapEntry?.theme,
-          targetRelease: roadmapEntry?.targetRelease,
-          estimatedEffort: roadmapEntry?.estimatedEffort,
-          createdBy: user?.id ?? undefined,
-        });
-
-        if (created.ok && created.mvp) {
-          mvpId = created.mvp.id;
-        }
+      if (!result.ok) {
+        toast.error(result.error ?? 'Gate A approval failed — the MVP/Feature record could not be saved.');
+        return;
       }
 
-      if (mvpId) {
-        await mvpRepository.recordMvpApproval({
-          mvpId,
-          projectId: project.id,
-          stage: 'scope',
-          decision: 'approved',
-          decidedBy: user?.id ?? undefined,
-        });
-      }
-    } catch {
-      /*
-       * BuildersDB is a best-effort mirror for this — the Product Owner artifact itself is
-       * already approved (handleApprove above), which is what actually unblocks Engineering
-       * (see solutionArchitectEngine.canGenerateArchitecture). A failure here never blocks
-       * the pipeline; it's surfaced quietly rather than with a toast, matching this
-       * codebase's existing fire-and-forget BuildersDB mirroring philosophy.
-       */
-      toast.info('MVP 1 record could not be saved to BuildersDB — Engineering will still proceed.');
+      handleApprove();
     } finally {
       setIsCreatingMvp(false);
     }

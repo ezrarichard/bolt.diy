@@ -1084,7 +1084,13 @@ export function addProjectArtifact(
 
   mirrorToBuildersDb(async () => {
     const actor = await getCurrentActor();
-    await buildersDbRepository.createOrUpdateRoleOutput(projectId, artifact, generationType, actor?.id ?? null);
+    await buildersDbRepository.createOrUpdateRoleOutput(
+      projectId,
+      artifact,
+      generationType,
+      actor?.id ?? null,
+      artifact.mvpId ?? null,
+    );
     await buildersDbRepository.addProjectActivity({
       projectId,
       activityType: 'role_output_saved',
@@ -1142,6 +1148,7 @@ export function updateProjectArtifact(
         updatedArtifact,
         generationType,
         actor?.id ?? null,
+        updatedArtifact.mvpId ?? null,
       );
       await buildersDbRepository.addProjectActivity({
         projectId,
@@ -1229,7 +1236,13 @@ export function applyReviewDecision(projectId: string, decision: ReviewDecision)
     });
 
     if (decision.artifact) {
-      await buildersDbRepository.createOrUpdateRoleOutput(projectId, decision.artifact, 'manual', actor?.id ?? null);
+      await buildersDbRepository.createOrUpdateRoleOutput(
+        projectId,
+        decision.artifact,
+        'manual',
+        actor?.id ?? null,
+        decision.artifact.mvpId ?? null,
+      );
     }
 
     const updatedProject = next.find((project) => project.id === projectId);

@@ -239,6 +239,7 @@ export function fromRoleOutputRow(row: BuildersDbRoleOutputRow): ProjectArtifact
     content: row.content ?? '',
     generatedBy: row.role_name ?? undefined,
     version: row.version ?? undefined,
+    mvpId: row.mvp_id ?? undefined,
   };
 }
 

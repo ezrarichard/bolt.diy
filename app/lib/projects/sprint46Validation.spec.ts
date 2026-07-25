@@ -342,7 +342,18 @@ describe('Sprint 46D — full planning pipeline, end to end', () => {
 
     const from = vi.fn((table: string) => {
       if (table === 'builders_mvps') {
-        return { insert: insertMvp, update: updateMvp };
+        return {
+          insert: insertMvp,
+          update: updateMvp,
+
+          /*
+           * Sprint 78 Phase 0 — updateMvpStatus now reads the MVP's current status via getMvpById
+           * (transition validation) before writing; this MVP is 'planned' until Gate A approval.
+           */
+          select: () => ({
+            eq: () => ({ maybeSingle: () => Promise.resolve({ data: insertedMvpRow, error: null }) }),
+          }),
+        };
       }
 
       if (table === 'builders_mvp_approvals') {

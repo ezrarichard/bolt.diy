@@ -14,7 +14,18 @@
 /**
  * Free text, matching this codebase's existing convention of unconstrained status
  * columns validated at the application layer (see ApplicationManifestFile['status'],
- * ProjectArtifactStatus). Not yet enforced by any UI or pipeline code this sprint.
+ * ProjectArtifactStatus).
+ *
+ * Sprint 78 Phase 0 — `released`/`superseded` are now enforced transitions (see
+ * `lifecycleTransitions.ts`'s `isValidMvpStatusTransition`, the single place every write to this
+ * field is validated). `released` means this MVP is the product's current, live, customer-facing
+ * state; the moment a LATER MVP itself reaches `released`, this one moves to `superseded` — see
+ * `mvpRepository.ts`'s `releaseMvp` for that auto-supersede rule. Per
+ * docs/product-lifecycle/Product-Lifecycle-Architecture.md §2's revision, this remains the
+ * ONLY status field in the whole lifecycle — "provisioned"/"generated"/"qa_passed"/
+ * "ready for deployment" are deliberately NOT values here; they are derived, read live from
+ * `Project.databaseActivation`, the `ApplicationManifest`, and this MVP's `Feature` rows'
+ * `status`, never duplicated into a second stored state machine.
  */
 export type MvpStatus =
   | 'planned'
@@ -23,6 +34,7 @@ export type MvpStatus =
   | 'ready_for_review'
   | 'approved'
   | 'blocked'
+  | 'released'
   | 'superseded';
 
 /**

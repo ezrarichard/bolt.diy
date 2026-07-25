@@ -28,6 +28,13 @@ import type {
  * `GenerationPlanFingerprints`), not a per-file/per-import graph. See this file's
  * `determineCategoryInvalidation` and its own comment for exactly what "conservative"
  * means here and why.
+ *
+ * Sprint 78 Phase 0 — `resolveFileCarryForwardPlan` layers a per-file refinement on top of that
+ * category-level check, using each file's existing `featureIds` (Sprint 49) as its module/Feature
+ * ownership signal: a file whose owning Feature set is unchanged carries forward even when its
+ * category's aggregate fingerprint changed elsewhere (e.g. a sibling module's pages were added),
+ * so an unrelated module is never invalidated just because it shares a `ManifestFileCategory`
+ * with a module that actually changed. See that function's own comment for the exact rule.
  */
 
 /**
@@ -129,6 +136,58 @@ export function resolveCarryForwardPlan(
       // Scaffold (entry/config/styles/documentation) — deterministic template code, never content-invalidated.
       return { reusable: true, downgradeToGenerated: false };
   }
+}
+
+/**
+ * Sprint 78 Phase 0 — module/feature-granular carry-forward, addressing the corrective review's
+ * requirement that carry-forward be evaluated at "module/file ownership granularity rather than
+ * invalidating every file in an aggregate category."
+ *
+ * `resolveCarryForwardPlan` above answers "did THIS CATEGORY change" from one fingerprint shared
+ * by every file in it — correct for scaffold/legacy files, but too coarse once a category (e.g.
+ * `pages`) contains files owned by more than one Feature/Module: today's single `pages`
+ * fingerprint (`GenerationPlanFingerprints`, deliberately one hash over ALL pages content, see
+ * `manifestTypes.ts`) changing because a NEW module's pages were added would otherwise invalidate
+ * an UNRELATED, unchanged module's pages too.
+ *
+ * This function adds a finer-grained check that takes precedence when it can: `featureIds`
+ * already exists on every `ApplicationManifestFile`/`Draft` (Sprint 49) — the exact "which
+ * Feature(s) does this file belong to" ownership data the review asked to reuse rather than
+ * inventing a parallel model. If a file's owning Feature set is IDENTICAL between the previous
+ * and the newly-built manifest, that file's own ownership is unaffected by whatever else changed
+ * in its category, so it is carried forward regardless of the category-level fingerprint —
+ * exactly "Appointments carried forward, Billing marked for generation" when both share the
+ * `pages` category. If the set changed (a Feature was added to — or removed from — this exact
+ * file's ownership, e.g. an existing module gaining a new Feature), the file is NOT reusable —
+ * conservative, since content for the new ownership doesn't exist yet.
+ *
+ * Falls back to the existing category-level `resolveCarryForwardPlan` for any file with no
+ * Feature ownership at all (every scaffold file, and every file in a legacy/no-MVP project) —
+ * there is no finer-grained ownership signal to prefer for those, so behavior for them is
+ * completely unchanged.
+ */
+export function resolveFileCarryForwardPlan(
+  previous: Pick<ApplicationManifestFile, 'featureIds'>,
+  next: Pick<ApplicationManifestFile, 'category' | 'featureIds'>,
+  invalidation: CategoryInvalidation,
+): { reusable: boolean; downgradeToGenerated: boolean } {
+  const previousFeatureIds = previous.featureIds ?? [];
+  const nextFeatureIds = next.featureIds ?? [];
+
+  if (nextFeatureIds.length === 0 && previousFeatureIds.length === 0) {
+    return resolveCarryForwardPlan(next.category, invalidation);
+  }
+
+  const previousOwners = new Set(previousFeatureIds);
+  const nextOwners = new Set(nextFeatureIds);
+  const ownershipUnchanged =
+    previousOwners.size === nextOwners.size && [...previousOwners].every((id) => nextOwners.has(id));
+
+  if (ownershipUnchanged) {
+    return { reusable: true, downgradeToGenerated: false };
+  }
+
+  return { reusable: false, downgradeToGenerated: false };
 }
 
 export interface PrepareManifestResult {
@@ -321,7 +380,7 @@ export async function prepareManifestForGeneration(input: {
       continue; // A genuinely new path — nothing to carry forward, stays 'pending'.
     }
 
-    const { reusable, downgradeToGenerated } = resolveCarryForwardPlan(newFile.category, invalidation);
+    const { reusable, downgradeToGenerated } = resolveFileCarryForwardPlan(previous, newFile, invalidation);
 
     if (!reusable) {
       continue;

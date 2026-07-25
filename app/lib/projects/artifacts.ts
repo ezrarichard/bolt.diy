@@ -34,6 +34,17 @@ export interface ProjectArtifact {
 
   /** Sprint 13 — regeneration counter, starting at 1. Undefined for the empty placeholders created on task approval. */
   version?: number;
+
+  /**
+   * Sprint 78 Phase 0 — which MVP this artifact belongs to (Sprint 77 recommendation #1). The
+   * `builders_role_outputs.mvp_id` column has existed since Sprint 45
+   * (supabase/migrations/20260720100000_mvp_foundation.sql) but nothing populated or read it back
+   * until now — see `app/lib/stores/projects.ts`'s `addProjectArtifact`/`updateProjectArtifact`
+   * (the write side) and `app/lib/builders-db/buildersDbTypes.ts`'s `fromRoleOutputRow` (the read
+   * side). Undefined for project-level artifact types (Requirements, Product Vision) and for
+   * every artifact created before this field existed — never backfilled, never required.
+   */
+  mvpId?: string;
 }
 
 /** Builds an empty placeholder artifact for a task. Content is always '' — nothing generates real output yet. */

@@ -9,6 +9,7 @@ import type {
   MvpStatus,
   MvpWriteResult,
 } from './mvpTypes';
+import { isValidMvpStatusTransition } from './lifecycleTransitions';
 
 /**
  * MVP Repository — Sprint 45 (foundation), extended Sprint 46B (AI Product Owner: adds
@@ -243,7 +244,17 @@ export async function getMvpById(mvpId: string): Promise<Mvp | null> {
   }
 }
 
-/** Updates an MVP's status (and, once the Product Owner exists, its scope_artifact_id). Does not touch approval history — see recordMvpApproval for that. */
+/**
+ * Updates an MVP's status (and, once the Product Owner exists, its scope_artifact_id). Does not
+ * touch approval history — see recordMvpApproval for that.
+ *
+ * Sprint 78 Phase 0 — every write is checked against `isValidMvpStatusTransition`
+ * (`lifecycleTransitions.ts`) first; an illegal transition (or a request for an MVP that no
+ * longer exists) is refused (logged, `false` returned) rather than silently written, per the
+ * sprint's "enforce valid parent-MVP and Feature status transitions" guardrail. A no-op
+ * (`status` already equal to the MVP's current status) is always treated as valid — an idempotent
+ * retry of an already-applied write must never fail.
+ */
 export async function updateMvpStatus(
   mvpId: string,
   status: MvpStatus,
@@ -253,6 +264,18 @@ export async function updateMvpStatus(
 
   if (!isAvailable() || !client) {
     unavailable('updateMvpStatus');
+    return false;
+  }
+
+  const current = await getMvpById(mvpId);
+
+  if (!current) {
+    logError('updateMvpStatus', new Error(`MVP ${mvpId} not found`));
+    return false;
+  }
+
+  if (!isValidMvpStatusTransition(current.status, status)) {
+    logError('updateMvpStatus', new Error(`Invalid MVP status transition: ${current.status} -> ${status}`));
     return false;
   }
 
@@ -359,6 +382,44 @@ export async function listMvpApprovals(mvpId: string): Promise<MvpApproval[]> {
   }
 }
 
+/**
+ * Sprint 78 Phase 0 — moves an MVP to `released` and applies the Product Lifecycle
+ * Architecture's auto-supersede rule (§2): the moment this MVP reaches `released`, whichever
+ * OTHER MVP in the same project currently holds `released` (there is at most one) moves to
+ * `superseded`. Not at the new MVP's Gate A — the previous MVP stays the live, `released` product
+ * throughout this one's entire engineering, only stepping aside once its successor actually
+ * ships. Both writes go through `updateMvpStatus`, so both are still transition-validated; if
+ * this MVP's own `approved -> released` move is illegal, nothing else happens.
+ */
+export async function releaseMvp(mvpId: string): Promise<boolean> {
+  if (!isAvailable()) {
+    unavailable('releaseMvp');
+    return false;
+  }
+
+  const mvp = await getMvpById(mvpId);
+
+  if (!mvp) {
+    logError('releaseMvp', new Error(`MVP ${mvpId} not found`));
+    return false;
+  }
+
+  const released = await updateMvpStatus(mvpId, 'released');
+
+  if (!released) {
+    return false;
+  }
+
+  const siblings = await listMvpsForProject(mvp.projectId);
+  const previouslyReleased = siblings.find((candidate) => candidate.id !== mvpId && candidate.status === 'released');
+
+  if (previouslyReleased) {
+    await updateMvpStatus(previouslyReleased.id, 'superseded');
+  }
+
+  return true;
+}
+
 export const mvpRepository = {
   isAvailable,
   createMvp,
@@ -368,4 +429,5 @@ export const mvpRepository = {
   updateMvpStatus,
   recordMvpApproval,
   listMvpApprovals,
+  releaseMvp,
 };
