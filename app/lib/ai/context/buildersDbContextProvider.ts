@@ -58,6 +58,26 @@ import {
   hasFrontendBlueprintContent,
   formatFrontendBlueprintGuidanceSection,
 } from '~/lib/blueprints/blueprintFrontendProjection';
+import { getEffectiveRegionalSelection } from '~/lib/regional/regionalResolutionService';
+import { regionalEngine } from '~/lib/regional/regionalProfileRegistry';
+import {
+  projectRegionalProfileForBusinessProduct,
+  describeSuppliedSections as describeBusinessProductRegionalSuppliedSections,
+  hasBusinessProductRegionalContent,
+  formatBusinessProductRegionalGuidanceSection,
+} from '~/lib/regional/regionalBusinessProductProjection';
+import {
+  projectRegionalProfileForArchitectureEngineering,
+  describeSuppliedSections as describeArchitectureEngineeringRegionalSuppliedSections,
+  hasArchitectureEngineeringRegionalContent,
+  formatArchitectureEngineeringRegionalGuidanceSection,
+} from '~/lib/regional/regionalArchitectureEngineeringProjection';
+import {
+  projectRegionalProfileForDesignQuality,
+  describeSuppliedSections as describeDesignQualityRegionalSuppliedSections,
+  hasDesignQualityRegionalContent,
+  formatDesignQualityRegionalGuidanceSection,
+} from '~/lib/regional/regionalDesignQualityProjection';
 import {
   projectBlueprintForQa,
   describeSuppliedSections as describeQaSuppliedSections,
@@ -945,6 +965,110 @@ async function buildDevOpsBlueprintGuidance(
 }
 
 /**
+ * Sprint 71 (Regional Intelligence Foundation) — which role-family projection
+ * (`app/lib/regional/regional*Projection.ts`) each pipeline role reads from. A completely
+ * separate system from the Blueprint guidance above: Regional Intelligence answers "how should
+ * approved scope behave in this market," never "what should be built" — see
+ * `regionalResolutionService.ts`'s own header comment. Every pipeline role gets SOME regional
+ * family (unlike Blueprint guidance, which only reaches roles with their own dedicated
+ * projection) because market conventions (currency, locale, address/phone, privacy reminders)
+ * are relevant to every role in some form, per PART 7 of the Sprint 71 brief.
+ */
+const REGIONAL_ROLE_FAMILY: Record<string, 'business-product' | 'architecture-engineering' | 'design-quality'> = {
+  [ARTIFACT_TYPES.REQUIREMENTS_DRAFT]: 'business-product',
+  [ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT]: 'business-product',
+  [ARTIFACT_TYPES.ARCHITECTURE_DRAFT]: 'architecture-engineering',
+  [ARTIFACT_TYPES.DATABASE_DRAFT]: 'architecture-engineering',
+  [ARTIFACT_TYPES.BACKEND_DRAFT]: 'architecture-engineering',
+  [ARTIFACT_TYPES.FRONTEND_DRAFT]: 'architecture-engineering',
+  [ARTIFACT_TYPES.DEVOPS_DRAFT]: 'architecture-engineering',
+  [ARTIFACT_TYPES.UIUX_DRAFT]: 'design-quality',
+  [ARTIFACT_TYPES.QA_DRAFT]: 'design-quality',
+};
+
+/**
+ * Sprint 71 (Regional Intelligence Foundation) — the Regional Guidance sibling of every
+ * `buildXBlueprintGuidance` function above, but ONE shared function (not nine) since the three
+ * role-family projections already do the "only relevant guidance per role" narrowing — see
+ * `REGIONAL_ROLE_FAMILY` above. Same never-throws/safe-fallback discipline as the Blueprint
+ * builders: an unrecognized `roleKey`, no manual regional selection, or a lookup failure all
+ * resolve to `null` rather than blocking generation.
+ *
+ * Deliberately renders under its OWN "### Regional Guidance" heading, never merged into
+ * "### Blueprint Guidance" — PART 8 of the Sprint 71 brief. `buildRoleContextBlock` pushes this
+ * as its own section, after Blueprint guidance.
+ */
+async function buildRegionalGuidance(
+  projectId: string,
+  roleKey: string,
+): Promise<{ text: string; source: ContextTraceSource } | null> {
+  const family = REGIONAL_ROLE_FAMILY[roleKey];
+
+  if (!family) {
+    return null;
+  }
+
+  try {
+    const resolution = await getEffectiveRegionalSelection(projectId);
+
+    if (resolution.selectionSource === 'none' || !resolution.regionalProfileCode) {
+      return null;
+    }
+
+    const profile = regionalEngine.getRegionalProfile(resolution.regionalProfileCode);
+
+    if (!profile) {
+      return null;
+    }
+
+    const { text, sectionsSupplied, contentAvailable } =
+      family === 'business-product'
+        ? (() => {
+            const projection = projectRegionalProfileForBusinessProduct(profile);
+            return {
+              text: formatBusinessProductRegionalGuidanceSection(profile.name, resolution, projection),
+              sectionsSupplied: describeBusinessProductRegionalSuppliedSections(projection),
+              contentAvailable: hasBusinessProductRegionalContent(projection),
+            };
+          })()
+        : family === 'architecture-engineering'
+          ? (() => {
+              const projection = projectRegionalProfileForArchitectureEngineering(profile);
+              return {
+                text: formatArchitectureEngineeringRegionalGuidanceSection(profile.name, resolution, projection),
+                sectionsSupplied: describeArchitectureEngineeringRegionalSuppliedSections(projection),
+                contentAvailable: hasArchitectureEngineeringRegionalContent(projection),
+              };
+            })()
+          : (() => {
+              const projection = projectRegionalProfileForDesignQuality(profile);
+              return {
+                text: formatDesignQualityRegionalGuidanceSection(profile.name, resolution, projection),
+                sectionsSupplied: describeDesignQualityRegionalSuppliedSections(projection),
+                contentAvailable: hasDesignQualityRegionalContent(projection),
+              };
+            })();
+
+    const source: ContextTraceSource = {
+      type: 'regional-resolution',
+      label: `Regional: ${profile.name} (${resolution.selectionSource === 'manual_override' ? 'manual override' : resolution.selectionSource})`,
+      regionalProfileId: profile.id,
+      regionalProfileCode: profile.code,
+      regionalProfileVersion: profile.version,
+      selectionSource: resolution.selectionSource,
+      resolvedAt: resolution.resolvedAt,
+      sectionsSupplied,
+      contentAvailable,
+    };
+
+    return { text, source };
+  } catch (error) {
+    console.error('[BuildersDB Context] buildRegionalGuidance failed, continuing without Regional context:', error);
+    return null;
+  }
+}
+
+/**
  * Best-effort, fire-and-forget: records WHY a role's context looked the way it did (see
  * requirement #3/#4, "Context Source Traceability"/"Context Explanation"). Never awaited
  * by `buildRoleContextBlock` — a failure here must never affect the AI generation it's
@@ -957,8 +1081,13 @@ async function recordContextTrace(
   tasks: TaskContextEntry[],
   projectPromptText: string | undefined,
   blueprintSource?: ContextTraceSource,
+  regionalSource?: ContextTraceSource,
 ): Promise<void> {
   const sources = buildContextTraceSources(roleOutputs, tasks, projectPromptText);
+
+  if (regionalSource) {
+    sources.push(regionalSource);
+  }
 
   if (blueprintSource) {
     sources.push(blueprintSource);
@@ -1071,7 +1200,21 @@ export async function buildRoleContextBlock(
                         ? await buildDevOpsBlueprintGuidance(projectId)
                         : null;
 
-    if (roleOutputs.length === 0 && tasks.length === 0 && !projectPromptText && !blueprintGuidance) {
+    /*
+     * Sprint 71 (Regional Intelligence Foundation) — a completely separate source from
+     * Blueprint guidance above (see buildRegionalGuidance's own header comment). Reaches every
+     * pipeline role via one of three role-family projections, never merged into the Blueprint
+     * Guidance section.
+     */
+    const regionalGuidance = await buildRegionalGuidance(projectId, roleKey);
+
+    if (
+      roleOutputs.length === 0 &&
+      tasks.length === 0 &&
+      !projectPromptText &&
+      !blueprintGuidance &&
+      !regionalGuidance
+    ) {
       return '';
     }
 
@@ -1093,14 +1236,24 @@ export async function buildRoleContextBlock(
       sections.push(blueprintGuidance.text);
     }
 
+    if (regionalGuidance) {
+      sections.push(regionalGuidance.text);
+    }
+
     sections.push(
       '### Important Instruction\nUse this context as the source of truth. Do not contradict approved outputs unless clearly explaining why.',
     );
 
     logContextRetrievedActivity(projectId, roleKey, roleOutputs.length, tasks.length);
-    recordContextTrace(projectId, roleKey, roleOutputs, tasks, projectPromptText, blueprintGuidance?.source).catch(
-      (error) => console.error('[BuildersDB Context] recordContextTrace failed:', error),
-    );
+    recordContextTrace(
+      projectId,
+      roleKey,
+      roleOutputs,
+      tasks,
+      projectPromptText,
+      blueprintGuidance?.source,
+      regionalGuidance?.source,
+    ).catch((error) => console.error('[BuildersDB Context] recordContextTrace failed:', error));
 
     return sections.join('\n\n');
   } catch (error) {

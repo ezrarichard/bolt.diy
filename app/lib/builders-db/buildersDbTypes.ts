@@ -76,6 +76,9 @@ const METADATA_FIELDS = [
   /** Project Definition workflow — see app/lib/projects/projectDefinition.ts. */
   'projectDefinitionApproval',
   'projectDefinitionChat',
+
+  /** Sprint 71 — the project's manual Regional Profile selection. See Project.regionalSelection's own comment; no migration needed, same metadata-folding convention as every other field in this list. */
+  'regionalSelection',
 ] as const;
 
 /**
@@ -397,7 +400,13 @@ export function fromProjectMemberRow(row: BuildersDbProjectMemberRow): ProjectMe
  * this type, and point at (never copy) a section of `builders_business_understanding_models`.
  */
 export interface ContextTraceSource {
-  type: 'role-output' | 'task' | 'original-prompt' | 'business-understanding-section' | 'blueprint-resolution';
+  type:
+    | 'role-output'
+    | 'task'
+    | 'original-prompt'
+    | 'business-understanding-section'
+    | 'blueprint-resolution'
+    | 'regional-resolution';
   label: string;
   roleKey?: string;
   version?: number;
@@ -417,9 +426,36 @@ export interface ContextTraceSource {
   blueprintId?: string;
   blueprintVersion?: number;
   resolutionId?: string;
-  selectionSource?: 'recommendation' | 'manual_override';
+
+  /**
+   * Widened in Sprint 71 (Regional Intelligence Foundation) to also cover
+   * `RegionalResolutionResult['selectionSource']` (see regionalResolutionTypes.ts) — the two
+   * systems share this field rather than each defining their own, since `'manual_override'` is
+   * meaningful in both and duplicating the field would fragment traceability. `'recommendation'`
+   * is Blueprint-only; `'business_discovery' | 'project_metadata' | 'workspace_default' |
+   * 'none'` are Regional-only.
+   */
+  selectionSource?:
+    | 'recommendation'
+    | 'manual_override'
+    | 'business_discovery'
+    | 'project_metadata'
+    | 'workspace_default'
+    | 'none';
   sectionsSupplied?: string[];
   contentAvailable?: boolean;
+
+  /**
+   * Sprint 71 (Regional Intelligence Foundation) — populated only for `type:
+   * 'regional-resolution'` sources. Mirrors the Blueprint fields above one-for-one:
+   * `regionalProfileId`/`regionalProfileCode`/`regionalProfileVersion` identify the effective
+   * profile, `resolvedAt` is when resolution ran. Never IP/device/browser-derived — see
+   * regionalResolutionService.ts's own header comment.
+   */
+  regionalProfileId?: string;
+  regionalProfileCode?: string;
+  regionalProfileVersion?: number;
+  resolvedAt?: string;
 }
 
 /** builders_context_traces row. */

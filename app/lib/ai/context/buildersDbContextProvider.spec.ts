@@ -11,6 +11,7 @@ const {
   getBusinessUnderstandingModelMock,
   getLatestBlueprintResolutionMock,
   getBlueprintMock,
+  getEffectiveRegionalSelectionMock,
 } = vi.hoisted(() => ({
   isBuildersDbAvailableMock: vi.fn(),
   getRoleOutputsForProjectMock: vi.fn(),
@@ -22,6 +23,7 @@ const {
   getBusinessUnderstandingModelMock: vi.fn(),
   getLatestBlueprintResolutionMock: vi.fn(),
   getBlueprintMock: vi.fn(),
+  getEffectiveRegionalSelectionMock: vi.fn(),
 }));
 
 vi.mock('~/lib/builders-db/repositories/buildersDbRepository', () => ({
@@ -50,6 +52,29 @@ vi.mock('~/lib/projects/blueprintResolutionService', () => ({
 vi.mock('~/lib/blueprints', () => ({
   blueprintEngine: { getBlueprint: getBlueprintMock },
 }));
+
+vi.mock('~/lib/regional/regionalResolutionService', () => ({
+  getEffectiveRegionalSelection: getEffectiveRegionalSelectionMock,
+}));
+
+/*
+ * Sprint 71 — module-level default (never reset by any pre-existing describe block's own
+ * beforeEach, since none of them reference this mock): every Blueprint-only test written
+ * before Sprint 71 gets a consistent "no regional profile resolved" result, so
+ * `buildRegionalGuidance` returns null exactly like it did before this mock existed. Tests that
+ * actually exercise Regional Guidance override this per-test.
+ */
+getEffectiveRegionalSelectionMock.mockResolvedValue({
+  regionalProfileId: null,
+  regionalProfileCode: null,
+  regionalProfileVersion: null,
+  selectionSource: 'none',
+  sourceValue: null,
+  matchedCountry: null,
+  unresolvedReason: 'No manual regional selection has been made for this project.',
+  resolvedAt: '2026-01-01T00:00:00.000Z',
+  contentAvailable: false,
+});
 
 const { buildRoleContextBlock } = await import('./buildersDbContextProvider');
 
@@ -2099,6 +2124,273 @@ describe('buildersDbContextProvider — Sprint 68 Blueprint-Aware DevOps Enginee
 
     for (const block of [baBlock, poBlock, archBlock, dbBlock, backendBlock, uiuxBlock, frontendBlock]) {
       expect(block).not.toContain('Blueprint Guidance for DevOps Operations');
+    }
+  });
+});
+
+/*
+ * Sprint 71 — Regional Intelligence Foundation. `makeRegionalResolution` mirrors `makeBlueprint`/
+ * `makeResolution` above: a shared fixture builder for `RegionalResolutionResult`
+ * (regionalResolutionService.ts), reused across every describe block below.
+ */
+function makeRegionalResolution(overrides: Record<string, unknown> = {}) {
+  return {
+    regionalProfileId: 'region-in',
+    regionalProfileCode: 'IN',
+    regionalProfileVersion: 1,
+    selectionSource: 'manual_override',
+    sourceValue: 'IN',
+    matchedCountry: 'India',
+    resolvedAt: '2026-07-25T00:00:00.000Z',
+    contentAvailable: true,
+    ...overrides,
+  };
+}
+
+const UNRESOLVED_REGIONAL = {
+  regionalProfileId: null,
+  regionalProfileCode: null,
+  regionalProfileVersion: null,
+  selectionSource: 'none',
+  sourceValue: null,
+  matchedCountry: null,
+  unresolvedReason: 'No manual regional selection has been made for this project.',
+  resolvedAt: '2026-01-01T00:00:00.000Z',
+  contentAvailable: false,
+};
+
+describe('buildersDbContextProvider — Sprint 71 Regional Intelligence Foundation', () => {
+  beforeEach(() => {
+    isBuildersDbAvailableMock.mockReset().mockReturnValue(true);
+    getRoleOutputsForProjectMock.mockReset().mockResolvedValue([]);
+    getProjectTasksMock.mockReset().mockResolvedValue([]);
+    getTaskReviewsMock.mockReset().mockResolvedValue([]);
+    addProjectActivityMock.mockReset().mockResolvedValue(true);
+    saveContextTraceMock.mockReset().mockResolvedValue(true);
+    getLatestRequirementsSessionMock.mockReset();
+    getBusinessUnderstandingModelMock.mockReset();
+    getLatestBlueprintResolutionMock.mockReset().mockResolvedValue(null);
+    getBlueprintMock.mockReset();
+    getEffectiveRegionalSelectionMock.mockReset().mockResolvedValue(UNRESOLVED_REGIONAL);
+  });
+
+  it('adds no Regional Guidance when no regional profile is resolved', async () => {
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).not.toContain('Regional Guidance');
+  });
+
+  it('adds Regional Guidance once a manual selection resolves a profile', async () => {
+    getEffectiveRegionalSelectionMock.mockResolvedValue(makeRegionalResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('### Regional Guidance');
+    expect(block).toContain('India');
+    expect(block).toContain('manually selected by the user');
+  });
+
+  it('renders the Regional Guidance heading distinctly from Blueprint Guidance — never merged', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(makeBlueprint());
+    getEffectiveRegionalSelectionMock.mockResolvedValue(makeRegionalResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('### Blueprint Guidance');
+    expect(block).toContain('### Regional Guidance');
+
+    const blueprintIndex = block.indexOf('### Blueprint Guidance');
+    const regionalIndex = block.indexOf('### Regional Guidance');
+    expect(blueprintIndex).toBeGreaterThan(-1);
+    expect(regionalIndex).toBeGreaterThan(-1);
+    expect(blueprintIndex).not.toBe(regionalIndex);
+  });
+
+  it('records correct Regional traceability metadata, separate from Blueprint traceability', async () => {
+    getEffectiveRegionalSelectionMock.mockResolvedValue(makeRegionalResolution());
+
+    await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    const [{ sources }] = saveContextTraceMock.mock.calls[0];
+    const regionalSource = sources.find((s: { type: string }) => s.type === 'regional-resolution');
+
+    expect(regionalSource).toEqual(
+      expect.objectContaining({
+        type: 'regional-resolution',
+        regionalProfileId: 'region-in',
+        regionalProfileCode: 'IN',
+        regionalProfileVersion: 1,
+        selectionSource: 'manual_override',
+        contentAvailable: true,
+      }),
+    );
+  });
+
+  it('never throws when regional content is missing/sparse', async () => {
+    getEffectiveRegionalSelectionMock.mockResolvedValue(
+      makeRegionalResolution({ contentAvailable: false, regionalProfileCode: 'US' }),
+    );
+
+    await expect(buildRoleContextBlock('proj-1', 'architecture-draft', 'Build a US SaaS app')).resolves.toEqual(
+      expect.any(String),
+    );
+  });
+
+  it('never blocks generation when the regional lookup itself fails', async () => {
+    getEffectiveRegionalSelectionMock.mockRejectedValue(new Error('lookup failed'));
+
+    await expect(buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site')).resolves.toEqual(
+      expect.any(String),
+    );
+  });
+
+  it('gives the Business/Product family (requirements-draft) business-facing regional terminology', async () => {
+    getEffectiveRegionalSelectionMock.mockResolvedValue(makeRegionalResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('Tax terminology for this market');
+  });
+
+  it('gives the Architecture/Engineering family (architecture-draft) technical regional guidance, not business terminology', async () => {
+    getEffectiveRegionalSelectionMock.mockResolvedValue(makeRegionalResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'architecture-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('### Regional Guidance');
+    expect(block).not.toContain('Tax terminology for this market');
+    expect(block).not.toContain('Invoice conventions');
+  });
+
+  it('gives the Design/Quality family (uiux-draft) formatting/accessibility guidance, not business or engineering-only sections', async () => {
+    getEffectiveRegionalSelectionMock.mockResolvedValue(makeRegionalResolution());
+
+    const block = await buildRoleContextBlock('proj-1', 'uiux-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('### Regional Guidance');
+    expect(block).not.toContain('Invoice conventions');
+  });
+
+  it('no cross-family leakage: QA (design-quality) never contains Architecture/Engineering-only deployment wording', async () => {
+    getEffectiveRegionalSelectionMock.mockResolvedValue(
+      makeRegionalResolution({
+        regionalProfileCode: 'US',
+        regionalProfileId: 'region-us',
+        matchedCountry: 'United States',
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'qa-draft', 'Build a US SaaS app');
+    await flush();
+
+    expect(block).not.toContain('Deployment considerations');
+  });
+
+  it('existing Blueprint-aware behaviour remains unchanged when Blueprint guidance is also present', async () => {
+    getLatestBlueprintResolutionMock.mockResolvedValue(makeResolution());
+    getBlueprintMock.mockReturnValue(makeBlueprint());
+    getEffectiveRegionalSelectionMock.mockResolvedValue(UNRESOLVED_REGIONAL);
+
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a dental clinic site');
+    await flush();
+
+    expect(block).toContain('Blueprint Guidance');
+    expect(block).not.toContain('Regional Guidance');
+  });
+
+  it('a project with no region source still generates exactly as before (empty context stays empty)', async () => {
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', undefined);
+    await flush();
+
+    expect(block).toBe('');
+  });
+});
+
+describe('buildersDbContextProvider — Sprint 71 Regional Intelligence scope control', () => {
+  beforeEach(() => {
+    isBuildersDbAvailableMock.mockReset().mockReturnValue(true);
+    getRoleOutputsForProjectMock.mockReset().mockResolvedValue([]);
+    getProjectTasksMock.mockReset().mockResolvedValue([]);
+    getTaskReviewsMock.mockReset().mockResolvedValue([]);
+    addProjectActivityMock.mockReset().mockResolvedValue(true);
+    saveContextTraceMock.mockReset().mockResolvedValue(true);
+    getLatestRequirementsSessionMock.mockReset();
+    getBusinessUnderstandingModelMock.mockReset();
+    getLatestBlueprintResolutionMock.mockReset().mockResolvedValue(null);
+    getBlueprintMock.mockReset();
+    getEffectiveRegionalSelectionMock.mockReset().mockResolvedValue(makeRegionalResolution());
+  });
+
+  it('payment guidance is always gated by "only where payments are already approved" language, never a bare instruction', async () => {
+    const block = await buildRoleContextBlock('proj-1', 'requirements-draft', 'Build a booking system');
+    await flush();
+
+    if (block.includes('Payment-method conventions')) {
+      expect(block).toContain('only where payments are already approved');
+    }
+  });
+
+  it('a booking-style project receives timezone guidance from the Architecture/Engineering family', async () => {
+    getEffectiveRegionalSelectionMock.mockResolvedValue(
+      makeRegionalResolution({
+        regionalProfileCode: 'US',
+        regionalProfileId: 'region-us',
+        matchedCountry: 'United States',
+      }),
+    );
+
+    const block = await buildRoleContextBlock('proj-1', 'architecture-draft', 'Build a booking system');
+    await flush();
+
+    expect(block).toContain('Timezone strategy');
+  });
+
+  it('India-market e-commerce context surfaces GST terminology gated by "already approved"', async () => {
+    const block = await buildRoleContextBlock('proj-1', 'product-owner-draft', 'Build an e-commerce checkout');
+    await flush();
+
+    expect(block).toContain('GST');
+    expect(block).toContain('already approved');
+  });
+
+  it('invoicing guidance is never presented as a mandatory implementation requirement', async () => {
+    const block = await buildRoleContextBlock('proj-1', 'product-owner-draft', 'Build a basic informational website');
+    await flush();
+
+    if (block.includes('Invoice conventions')) {
+      expect(block).toContain('only where invoicing is already approved');
+    }
+  });
+
+  it('regional guidance never mentions authentication as something it adds', async () => {
+    const block = await buildRoleContextBlock('proj-1', 'backend-draft', 'Build a basic informational website');
+    await flush();
+
+    expect(block.toLowerCase()).not.toContain('regional guidance adds authentication');
+  });
+
+  it('regional guidance never claims to add localization/multi-language support automatically', async () => {
+    const block = await buildRoleContextBlock('proj-1', 'frontend-draft', 'Build a basic informational website');
+    await flush();
+
+    expect(block.toLowerCase()).not.toContain('automatically translat');
+    expect(block.toLowerCase()).not.toContain('automatically localiz');
+  });
+
+  it('data-residency guidance remains advisory, never an automatic infrastructure requirement', async () => {
+    const block = await buildRoleContextBlock('proj-1', 'devops-draft', 'Build a basic informational website');
+    await flush();
+
+    if (block.includes('Data-residency considerations')) {
+      expect(block).toContain('advisory only');
     }
   });
 });

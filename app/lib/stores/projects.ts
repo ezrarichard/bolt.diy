@@ -8,6 +8,7 @@ import {
 } from '~/lib/project-types/projectTypeRegistry';
 import type { RoadmapItemStatus } from '~/lib/blueprints';
 import type { ProjectKnowledge } from '~/lib/projects/knowledge';
+import type { RegionalSelection } from '~/lib/regional/regionalResolutionTypes';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
 import type { ProjectDefinitionApproval, ProjectDefinitionChatMessage } from '~/lib/projects/projectDefinition';
 import type { ProjectTaskStatus } from '~/lib/projects/executionEngine';
@@ -56,6 +57,20 @@ export interface Project {
    * drive starter prompts/templates/integrations per blueprint.
    */
   blueprintId?: string;
+
+  /**
+   * Sprint 71 — the project's manually-selected Regional Profile (see
+   * app/lib/regional/regionalProfileTypes.ts), if any. A completely separate system from
+   * `blueprintId` above: Regional Intelligence answers "how should approved scope behave in
+   * this market," never "what should be built." Undefined means no manual selection has been
+   * made — `regionalResolutionService.ts`'s `resolveEffectiveRegionalSelection` is the only
+   * place this should be read from; nothing else should branch on `regionCode` directly.
+   * Persisted via BuildersDB's `builders_projects.metadata` (see buildersDbTypes.ts's
+   * `METADATA_FIELDS`) — same convention as `projectDefinitionApproval` above; deliberately NOT
+   * a new table (see regionalResolutionService.ts's own header comment for why a dedicated
+   * table like Blueprint Resolution's isn't justified here).
+   */
+  regionalSelection?: RegionalSelection;
 
   /**
    * Sprint 39.7 — which Builders workflow drives this project (see
