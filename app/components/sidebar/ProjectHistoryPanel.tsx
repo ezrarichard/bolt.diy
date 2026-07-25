@@ -44,7 +44,12 @@ export const ACTIVITY_ICON: Record<string, string> = {
   repair_failed: 'i-ph:x-circle-duotone text-red-500',
   manual_attention_required: 'i-ph:warning-duotone text-red-500',
 
-  // Sprint 75 (Real Backend Activation, Phase 1) — see app/lib/database-activation/databaseActivationService.ts, the only writer of these.
+  /*
+   * Sprint 75 (Real Backend Activation, Phase 1) — see app/lib/database-activation/databaseActivationService.ts, the only writer of these.
+   * Sprint 76 (Real Database Provisioning, Phase 2) — see databaseActivationService.ts's connectSupabaseProject/disconnectSupabaseProject.
+   */
+  database_connected: 'i-ph:plug-duotone text-blue-500',
+  database_disconnected: 'i-ph:plug-duotone text-bolt-elements-textTertiary',
   database_schema_generated: 'i-ph:database-duotone text-blue-500',
   database_validation_passed: 'i-ph:check-circle-duotone text-green-500',
   database_validation_failed: 'i-ph:x-circle-duotone text-red-500',

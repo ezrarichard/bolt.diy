@@ -24,7 +24,7 @@ export function createMockDatabaseProvisioner(): DatabaseProvisioner {
       };
     },
 
-    async verifyConnection(): Promise<ConnectionResult> {
+    async verifyConnection(_schema?: StructuredDatabaseSchema): Promise<ConnectionResult> {
       return {
         ok: true,
         provider: 'mock',

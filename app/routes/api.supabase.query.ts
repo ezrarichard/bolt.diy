@@ -1,6 +1,10 @@
 import { type ActionFunctionArgs } from '@remix-run/cloudflare';
 import { createScopedLogger } from '~/utils/logger';
 import { requireAuthenticatedUser } from '~/lib/auth/requireUser';
+import {
+  BUILDERS_DB_PROJECT_REFUSAL_MESSAGE,
+  isBuildersDbProjectId,
+} from '~/lib/database-activation/provisioning/buildersDbProjectGuard';
 
 const logger = createScopedLogger('api.supabase.query');
 
@@ -25,6 +29,19 @@ export async function action({ request, context }: ActionFunctionArgs) {
   try {
     const { projectId, query } = (await request.json()) as any;
     logger.debug('Executing query:', { projectId, query });
+
+    /*
+     * Sprint 76 — the ultimate, server-side enforcement of the BuildersDB isolation boundary
+     * (docs/backend-activation/Provisioning-Architecture.md §1): this is the one place that
+     * actually reaches api.supabase.com, so it's checked here regardless of what any client-side
+     * caller (SupabaseProvisioner, or any future caller of this route) already checked.
+     */
+    if (isBuildersDbProjectId(projectId)) {
+      return new Response(JSON.stringify({ error: { message: BUILDERS_DB_PROJECT_REFUSAL_MESSAGE } }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
 
     const response = await fetch(`https://api.supabase.com/v1/projects/${projectId}/database/query`, {
       method: 'POST',
