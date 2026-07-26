@@ -124,6 +124,17 @@ export const ARTIFACT_TYPES = {
   FRONTEND_DRAFT: 'frontend-draft',
   QA_DRAFT: 'qa-draft',
   DEVOPS_DRAFT: 'devops-draft',
+
+  /**
+   * Sprint 82 polish — the Business Analyst's Product Review output, persisted as a normal
+   * artifact (markdown/JSON viewing, version history, export, AI context reuse, timeline
+   * consistency — same infrastructure every other role's draft already gets) in addition to the
+   * curated `ProductReview` domain row (`app/lib/product-review/`). The `ProductReview` row is
+   * the domain object (status lifecycle, queryable fields); this artifact is the AI-generated
+   * document itself, linked back via `ProductReview.artifactId`. See
+   * app/lib/projects/productReviewEngine.ts's `completeAnalysis`.
+   */
+  PRODUCT_REVIEW_ANALYSIS: 'product-review-analysis',
 } as const;
 
 /**

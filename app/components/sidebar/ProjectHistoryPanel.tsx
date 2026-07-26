@@ -57,6 +57,12 @@ export const ACTIVITY_ICON: Record<string, string> = {
   database_provisioning_finished: 'i-ph:check-circle-duotone text-green-500',
   database_provisioning_failed: 'i-ph:x-circle-duotone text-red-500',
   database_connection_verified: 'i-ph:plugs-connected-duotone text-green-500',
+
+  /* Sprint 82 (Business Analyst Product Review) — see app/lib/projects/productReviewEngine.ts, the only writer of these. */
+  product_review_started: 'i-ph:clipboard-text-duotone text-purple-500',
+  business_analysis_running: 'i-ph:magnifying-glass-duotone text-blue-500',
+  business_analysis_completed: 'i-ph:check-circle-duotone text-green-500',
+  product_review_approved: 'i-ph:seal-check-duotone text-green-500',
 };
 
 const REPAIR_STATUS_ICON: Record<RepairAttemptRecord['status'], string> = {
