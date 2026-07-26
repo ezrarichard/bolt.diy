@@ -10,6 +10,7 @@ import type { Project } from '~/lib/stores/projects';
 import { assessSupabaseReadiness } from '~/lib/services/supabaseDeployService';
 import { assessEnvironmentReadiness } from '~/lib/services/environmentReadinessService';
 import { getActiveApplicationManifest } from '~/lib/application-manifest/applicationManifestRepository';
+import { VercelDeployDialog } from '~/components/deploy/VercelDeployDialog';
 
 /**
  * Deployment Status Card — Sprint 88 (GitHub Product Integration), extended Sprint 89 (Supabase
@@ -81,6 +82,8 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
   const [history, setHistory] = useState<DeploymentHistoryEvent[]>([]);
   const [environmentRequirements, setEnvironmentRequirements] = useState<string[]>([]);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [reloadToken, setReloadToken] = useState(0);
+  const [showVercelDialog, setShowVercelDialog] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,7 +127,7 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, reloadToken]);
 
   if (status === 'loading') {
     return <div className="h-24 rounded-xl bg-bolt-elements-background-depth-2/60 animate-pulse" />;
@@ -162,6 +165,12 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
   const isEnvironmentReady =
     deployment.status === 'environment_ready' ||
     ['deploying', 'deployed', 'verified', 'released', 'maintenance', 'archived'].includes(deployment.status);
+  const { vercel } = deployment;
+  const canDeployToVercel = deployment.status === 'environment_ready' || deployment.status === 'failed';
+  const isDeploying = deployment.status === 'deploying';
+  const latestDeploymentUrl = (vercel?.metadata?.latestDeploymentUrl as string | undefined) ?? vercel?.productionUrl;
+  const latestDeploymentState = vercel?.metadata?.latestDeploymentState as string | undefined;
+  const latestDeploymentAt = vercel?.metadata?.latestDeploymentAt as string | undefined;
 
   return (
     <div className="rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5 bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md">
@@ -366,6 +375,103 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
           </div>
         )}
       </div>
+
+      <div className="mt-4 pt-4 border-t border-bolt-elements-borderColor/30">
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <div className="flex items-center gap-2">
+            <span className="i-ph:triangle-duotone h-4 w-4 text-bolt-elements-textSecondary" />
+            <h4 className="text-xs font-semibold text-bolt-elements-textPrimary uppercase tracking-wide">Vercel</h4>
+          </div>
+          {vercel && (
+            <BuildersStatusBadge
+              status={vercel.status === 'connected' ? 'success' : vercel.status === 'error' ? 'error' : 'pending'}
+              label={vercel.status === 'connected' ? 'Connected' : vercel.status === 'error' ? 'Error' : 'Pending'}
+              compact
+            />
+          )}
+        </div>
+
+        {vercel ? (
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-bolt-elements-textTertiary text-xs uppercase tracking-wide">Project</span>
+              <span className="text-bolt-elements-textPrimary font-mono text-xs">
+                {vercel.vercelProjectName ?? vercel.vercelProjectId ?? '—'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-bolt-elements-textTertiary text-xs uppercase tracking-wide">Team</span>
+              <span className="text-bolt-elements-textPrimary text-xs">
+                {(vercel.metadata?.teamId as string | undefined) ?? 'Personal account'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-bolt-elements-textTertiary text-xs uppercase tracking-wide">Framework</span>
+              <span className="text-bolt-elements-textPrimary text-xs">
+                {(vercel.metadata?.framework as string | undefined) ?? '—'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-bolt-elements-textTertiary text-xs uppercase tracking-wide">Production Branch</span>
+              <span className="text-bolt-elements-textPrimary text-xs">
+                {(vercel.metadata?.productionBranch as string | undefined) ?? '—'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-bolt-elements-textTertiary text-xs uppercase tracking-wide">Latest Deployment</span>
+              <span className="text-bolt-elements-textPrimary text-xs">{latestDeploymentState ?? '—'}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-bolt-elements-textTertiary text-xs uppercase tracking-wide">Deployed At</span>
+              <span className="text-bolt-elements-textPrimary text-xs">
+                {latestDeploymentAt ? formatTimestamp(latestDeploymentAt) : '—'}
+              </span>
+            </div>
+
+            {latestDeploymentUrl && (
+              <div className="pt-2">
+                <a
+                  href={latestDeploymentUrl.startsWith('http') ? latestDeploymentUrl : `https://${latestDeploymentUrl}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={buildersButtonVariants({ size: 'sm', variant: 'outline' })}
+                >
+                  Open Deployment
+                </a>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-xs text-bolt-elements-textTertiary">Not connected to Vercel yet.</div>
+        )}
+
+        <div className="pt-3">
+          {isDeploying ? (
+            <BuildersStatusBadge status="working" label="Deploying…" />
+          ) : (
+            canDeployToVercel && (
+              <button
+                type="button"
+                onClick={() => setShowVercelDialog(true)}
+                className={buildersButtonVariants({ size: 'sm', variant: 'primary' })}
+              >
+                {deployment.status === 'failed' ? 'Retry Deployment' : 'Deploy to Vercel'}
+              </button>
+            )
+          )}
+        </div>
+      </div>
+
+      {showVercelDialog && (
+        <VercelDeployDialog
+          isOpen={showVercelDialog}
+          onClose={() => setShowVercelDialog(false)}
+          project={project}
+          deployment={deployment}
+          environmentRequirements={environmentRequirements}
+          onDeployed={() => setReloadToken((token) => token + 1)}
+        />
+      )}
     </div>
   );
 }

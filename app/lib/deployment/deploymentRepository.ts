@@ -423,11 +423,22 @@ const PROVIDER_ATTACH_CONFIG: Record<
     connectedEventType: 'database_connected',
     updatedEventType: 'database_updated',
   },
+
+  /**
+   * Sprint 91 — `defaultToStatus` stays `'environment_ready'` (the status a Deployment is
+   * already at when Vercel gets attached) so attaching the provider is a NO-OP status
+   * transition by default: connecting/creating the Vercel project is a distinct event from
+   * actually triggering a deployment. `vercelDeployService.ts`'s `deployToVercel` calls
+   * `attachVercel` first (this connection event), then explicitly calls
+   * `updateDeploymentStatus` itself to advance `environment_ready -> deploying -> deployed` —
+   * see that file's header comment for the full sequence and why this split matters (Part 11:
+   * "assess the correct timing of attachVercel() carefully").
+   */
   vercel: {
     table: 'builders_deployment_vercel',
     defaultToStatus: 'environment_ready',
-    connectedEventType: 'environment_configured',
-    updatedEventType: 'environment_updated',
+    connectedEventType: 'vercel_connected',
+    updatedEventType: 'vercel_updated',
   },
 };
 
@@ -569,14 +580,65 @@ export async function attachSupabase(
 }
 
 /**
+ * Sprint 91 Part 4 — statuses `attachVercel` may run from. `'environment_ready'` is also legally
+ * reachable FROM `'database_connected'` via `updateDeploymentEnvironment` (Sprint 90's own,
+ * separate gate) — since `attachVercel`'s own default target status IS `'environment_ready'`, the
+ * generic `isValidDeploymentStatusTransition` check alone would let a Vercel attach silently jump
+ * a Deployment straight from `database_connected` to `environment_ready`, bypassing Sprint 90's
+ * environment-readiness assessment entirely. This explicit allow-list closes that gap: Vercel may
+ * only ever attach once the Deployment is ALREADY `environment_ready` (or further along, for a
+ * reconnect/metadata-refresh call using an explicit `toStatus` override).
+ */
+const VERCEL_ATTACH_ALLOWED_FROM_STATUSES: DeploymentStatus[] = [
+  'environment_ready',
+  'deploying',
+  'deployed',
+  'verified',
+  'released',
+  'maintenance',
+  'archived',
+  'failed',
+];
+
+/**
  * Attaches (or updates) this Deployment's Vercel connection, transitions the Deployment lifecycle
- * (`database_connected -> environment_ready` by default), and records the matching Deployment
- * History event — same shape as `attachGithub`, for Sprint 90 to build on.
+ * (a no-op at `environment_ready` by default), and records the matching Deployment History event —
+ * same shape as `attachGithub`, extended with the precondition above.
  */
 export async function attachVercel(
   input: DeploymentVercelInput,
   options: AttachProviderOptions = {},
 ): Promise<DeploymentVercel | null> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('attachVercel');
+    return null;
+  }
+
+  try {
+    const { data: current, error: readError } = await client
+      .from('builders_project_deployments')
+      .select('status')
+      .eq('id', input.deploymentId)
+      .single();
+
+    if (readError) {
+      throw readError;
+    }
+
+    if (!VERCEL_ATTACH_ALLOWED_FROM_STATUSES.includes(current.status as DeploymentStatus)) {
+      logError(
+        'attachVercel',
+        new Error(`Deployment must be environment_ready before attaching Vercel (currently: ${current.status}).`),
+      );
+      return null;
+    }
+  } catch (error) {
+    logError('attachVercel', error);
+    return null;
+  }
+
   return attachProviderAndTransition<DeploymentVercelInput, BuildersDbDeploymentVercelRow, DeploymentVercel>(
     'vercel',
     input,

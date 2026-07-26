@@ -16,6 +16,7 @@ const {
   updateDeploymentEnvironment,
   attachGithub,
   attachSupabase,
+  attachVercel,
   getDeploymentHistory,
   recordDeploymentEvent,
 } = await import('./deploymentRepository');
@@ -73,6 +74,25 @@ function makeSupabaseRow(overrides: Record<string, unknown> = {}) {
     metadata: {},
     created_at: '2026-08-05T00:00:00.000Z',
     updated_at: '2026-08-05T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function makeVercelRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'vc-1',
+    deployment_id: 'dep-1',
+    project_id: 'proj-1',
+    vercel_project_id: 'p1',
+    vercel_project_name: 'my-app',
+    production_url: null,
+    status: 'connected',
+    last_error: null,
+    connected_at: '2026-08-06T00:00:00.000Z',
+    last_deployed_at: null,
+    metadata: {},
+    created_at: '2026-08-06T00:00:00.000Z',
+    updated_at: '2026-08-06T00:00:00.000Z',
     ...overrides,
   };
 }
@@ -715,6 +735,107 @@ describe('deploymentRepository', () => {
     });
   });
 
+  describe('attachVercel', () => {
+    function makeAttachVercelMocks(options: {
+      currentStatus: string;
+      existingVercelRow: { id: string } | null;
+      vercelRow?: Record<string, unknown>;
+    }) {
+      const deploymentReadSingle = vi.fn().mockResolvedValue({ data: { status: options.currentStatus }, error: null });
+      const deploymentReadEq = vi.fn().mockReturnValue({ single: deploymentReadSingle });
+      const deploymentSelect = vi.fn().mockReturnValue({ eq: deploymentReadEq });
+      const deploymentUpdateEq = vi.fn().mockResolvedValue({ error: null });
+      const deploymentUpdate = vi.fn().mockReturnValue({ eq: deploymentUpdateEq });
+
+      const existingMaybeSingle = vi.fn().mockResolvedValue({ data: options.existingVercelRow, error: null });
+      const existingEq = vi.fn().mockReturnValue({ maybeSingle: existingMaybeSingle });
+      const vercelExistingSelect = vi.fn().mockReturnValue({ eq: existingEq });
+
+      const upsertSingle = vi.fn().mockResolvedValue({ data: options.vercelRow ?? makeVercelRow(), error: null });
+      const upsertSelect = vi.fn().mockReturnValue({ single: upsertSingle });
+      const upsert = vi.fn().mockReturnValue({ select: upsertSelect });
+
+      const historySingle = vi.fn().mockResolvedValue({ data: makeHistoryRow(), error: null });
+      const historySelect = vi.fn().mockReturnValue({ single: historySingle });
+      const historyInsert = vi.fn().mockReturnValue({ select: historySelect });
+
+      const from = vi.fn((table: string) => {
+        if (table === 'builders_project_deployments') {
+          return { select: deploymentSelect, update: deploymentUpdate };
+        }
+
+        if (table === 'builders_deployment_vercel') {
+          return { select: vercelExistingSelect, upsert };
+        }
+
+        if (table === 'builders_deployment_history') {
+          return { insert: historyInsert };
+        }
+
+        throw new Error(`unexpected table: ${table}`);
+      });
+
+      return { from, deploymentUpdate, upsert, historyInsert };
+    }
+
+    it('connects Vercel as a no-op status transition (stays environment_ready) and records one vercel_connected event', async () => {
+      const { from, deploymentUpdate, upsert, historyInsert } = makeAttachVercelMocks({
+        currentStatus: 'environment_ready',
+        existingVercelRow: null,
+      });
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      const result = await attachVercel({ deploymentId: 'dep-1', projectId: 'proj-1', vercelProjectId: 'p1' });
+
+      expect(upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ deployment_id: 'dep-1', vercel_project_id: 'p1' }),
+        { onConflict: 'deployment_id' },
+      );
+      expect(deploymentUpdate).toHaveBeenCalledWith({ status: 'environment_ready' });
+      expect(result?.vercelProjectId).toBe('p1');
+      expect(historyInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ event_type: 'vercel_connected', provider: 'vercel' }),
+      );
+    });
+
+    it('records a vercel_updated event on reconnect/metadata refresh', async () => {
+      const { from, historyInsert } = makeAttachVercelMocks({
+        currentStatus: 'deployed',
+        existingVercelRow: { id: 'vc-1' },
+      });
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      await attachVercel(
+        { deploymentId: 'dep-1', projectId: 'proj-1', vercelProjectId: 'p1', productionUrl: 'my-app.vercel.app' },
+        { toStatus: 'deployed' },
+      );
+
+      expect(historyInsert).toHaveBeenCalledWith(expect.objectContaining({ event_type: 'vercel_updated' }));
+    });
+
+    it('rejects attaching before the Deployment reaches environment_ready', async () => {
+      const { from, upsert, historyInsert } = makeAttachVercelMocks({
+        currentStatus: 'database_connected',
+        existingVercelRow: null,
+      });
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      const result = await attachVercel({ deploymentId: 'dep-1', projectId: 'proj-1', vercelProjectId: 'p1' });
+
+      expect(result).toBeNull();
+      expect(upsert).not.toHaveBeenCalled();
+      expect(historyInsert).not.toHaveBeenCalled();
+    });
+
+    it('returns null without throwing when BuildersDB is unconfigured', async () => {
+      getBuildersDbClientMock.mockReturnValue(null);
+
+      const result = await attachVercel({ deploymentId: 'dep-1', projectId: 'proj-1', vercelProjectId: 'p1' });
+
+      expect(result).toBeNull();
+    });
+  });
+
   describe('multi-project isolation', () => {
     /**
      * Sprint 88 Part 8 — every attach call is always scoped to the caller-supplied
@@ -940,6 +1061,90 @@ describe('deploymentRepository', () => {
       );
       expect(a.update).toHaveBeenCalledTimes(1);
       expect(b.update).toHaveBeenCalledTimes(1);
+    });
+
+    /** Sprint 91 Part 15 — three independent Project -> GitHub -> Supabase -> Environment -> Vercel mappings. */
+    it('scopes attachVercel strictly per project across three independent projects', async () => {
+      function makeMocksFor(deploymentId: string, projectId: string, vercelProjectId: string) {
+        const deploymentReadSingle = vi.fn().mockResolvedValue({ data: { status: 'environment_ready' }, error: null });
+        const deploymentReadEq = vi.fn().mockReturnValue({ single: deploymentReadSingle });
+        const deploymentSelect = vi.fn().mockReturnValue({ eq: deploymentReadEq });
+        const deploymentUpdateEq = vi.fn().mockResolvedValue({ error: null });
+        const deploymentUpdate = vi.fn().mockReturnValue({ eq: deploymentUpdateEq });
+
+        const existingMaybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
+        const existingEq = vi.fn().mockReturnValue({ maybeSingle: existingMaybeSingle });
+        const vercelSelect = vi.fn().mockReturnValue({ eq: existingEq });
+
+        const upsertSingle = vi.fn().mockResolvedValue({
+          data: makeVercelRow({
+            deployment_id: deploymentId,
+            project_id: projectId,
+            vercel_project_id: vercelProjectId,
+          }),
+          error: null,
+        });
+        const upsertSelect = vi.fn().mockReturnValue({ single: upsertSingle });
+        const upsert = vi.fn().mockReturnValue({ select: upsertSelect });
+
+        const historySingle = vi.fn().mockResolvedValue({ data: makeHistoryRow(), error: null });
+        const historySelect = vi.fn().mockReturnValue({ single: historySingle });
+        const historyInsert = vi.fn().mockReturnValue({ select: historySelect });
+
+        const from = vi.fn((table: string) => {
+          if (table === 'builders_project_deployments') {
+            return { select: deploymentSelect, update: deploymentUpdate };
+          }
+
+          if (table === 'builders_deployment_vercel') {
+            return { select: vercelSelect, upsert };
+          }
+
+          if (table === 'builders_deployment_history') {
+            return { insert: historyInsert };
+          }
+
+          throw new Error(`unexpected table: ${table}`);
+        });
+
+        return { from, upsert, historyInsert };
+      }
+
+      const projects = [
+        { deploymentId: 'dep-a', projectId: 'proj-a', vercelProjectId: 'vc-a' },
+        { deploymentId: 'dep-b', projectId: 'proj-b', vercelProjectId: 'vc-b' },
+        { deploymentId: 'dep-c', projectId: 'proj-c', vercelProjectId: 'vc-c' },
+      ];
+      const mocksByProject = new Map(
+        projects.map((p) => [p.projectId, makeMocksFor(p.deploymentId, p.projectId, p.vercelProjectId)]),
+      );
+
+      for (const p of projects) {
+        const mocks = mocksByProject.get(p.projectId)!;
+        getBuildersDbClientMock.mockReturnValue({ from: mocks.from });
+
+        await attachVercel({
+          deploymentId: p.deploymentId,
+          projectId: p.projectId,
+          vercelProjectId: p.vercelProjectId,
+        });
+      }
+
+      for (const p of projects) {
+        const mocks = mocksByProject.get(p.projectId)!;
+        expect(mocks.upsert).toHaveBeenCalledTimes(1);
+        expect(mocks.upsert).toHaveBeenCalledWith(
+          expect.objectContaining({
+            deployment_id: p.deploymentId,
+            project_id: p.projectId,
+            vercel_project_id: p.vercelProjectId,
+          }),
+          { onConflict: 'deployment_id' },
+        );
+        expect(mocks.historyInsert).toHaveBeenCalledWith(
+          expect.objectContaining({ deployment_id: p.deploymentId, project_id: p.projectId }),
+        );
+      }
     });
   });
 });

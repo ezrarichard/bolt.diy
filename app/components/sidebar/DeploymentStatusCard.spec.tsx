@@ -89,6 +89,29 @@ function makeSupabase(overrides: Partial<DeploymentSupabase> = {}): DeploymentSu
   };
 }
 
+function makeVercel(overrides: Partial<DeploymentWithProviders['vercel']> = {}) {
+  return {
+    id: 'vc-1',
+    deploymentId: 'dep-1',
+    projectId: 'proj-1',
+    vercelProjectId: 'p1',
+    vercelProjectName: 'my-app',
+    productionUrl: undefined,
+    status: 'connected' as const,
+    metadata: {
+      teamId: 'team_x',
+      framework: 'vite',
+      productionBranch: 'main',
+      latestDeploymentUrl: 'my-app.vercel.app',
+      latestDeploymentState: 'READY',
+      latestDeploymentAt: '2026-08-06T00:00:00.000Z',
+    },
+    createdAt: '2026-08-06T00:00:00.000Z',
+    updatedAt: '2026-08-06T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 function makeHistoryEvent(overrides: Partial<DeploymentHistoryEvent> = {}): DeploymentHistoryEvent {
   return {
     id: 'evt-1',
@@ -239,5 +262,51 @@ describe('DeploymentStatusCard', () => {
      * section's own badge — both correctly reflect readiness, so two matches is expected.
      */
     expect(screen.getAllByText('Environment Ready').length).toBe(2);
+  });
+
+  it('shows "Not connected to Vercel yet" and a Deploy to Vercel button when the Deployment is environment_ready', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(makeDeployment({ status: 'environment_ready' }));
+    getDeploymentHistoryMock.mockResolvedValue([]);
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    await waitFor(() => expect(screen.getByText('Not connected to Vercel yet.')).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Deploy to Vercel' })).toBeTruthy();
+  });
+
+  it('shows connected Vercel project details and an Open Deployment link once attached', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(
+      makeDeployment({ status: 'deployed', vercel: makeVercel() as DeploymentWithProviders['vercel'] }),
+    );
+    getDeploymentHistoryMock.mockResolvedValue([]);
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    await waitFor(() => expect(screen.getByText('my-app')).toBeTruthy());
+    expect(screen.getByText('team_x')).toBeTruthy();
+    expect(screen.getByText('vite')).toBeTruthy();
+    expect(screen.getByText('READY')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open Deployment' }).getAttribute('href')).toBe(
+      'https://my-app.vercel.app',
+    );
+  });
+
+  it('shows a Deploying… badge (no button) while a deployment is in progress', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(makeDeployment({ status: 'deploying' }));
+    getDeploymentHistoryMock.mockResolvedValue([]);
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    await waitFor(() => expect(screen.getByText('Deploying…')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Deploy to Vercel' })).toBeNull();
+  });
+
+  it('shows a Retry Deployment button when the Deployment has failed', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(makeDeployment({ status: 'failed' }));
+    getDeploymentHistoryMock.mockResolvedValue([]);
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry Deployment' })).toBeTruthy());
   });
 });
