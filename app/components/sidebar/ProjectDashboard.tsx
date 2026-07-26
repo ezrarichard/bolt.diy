@@ -56,6 +56,7 @@ import { AiEngineeringTeamPanel } from './AIEngineeringTeamPanel';
 import { ProjectDefinitionWorkspace } from './ProjectDefinitionWorkspace';
 import { isProjectDefinitionApproved, isAutoEngineeringComplete } from '~/lib/projects/autoEngineeringEngine';
 import { ProjectManagerPanel } from './ProjectManagerPanel';
+import { ProductWorkspacePanel } from './ProductWorkspacePanel';
 import { ProductPackagePanel } from './ProductPackagePanel';
 import { ProjectHistoryPanel } from './ProjectHistoryPanel';
 import { SharedProviderStatusCard } from './SharedProviderStatusCard';
@@ -459,7 +460,16 @@ function EngineeringStageSection({
  * remain as their own tabs (connections/config and the activity timeline aren't part of the
  * customer's product journey, but are still needed).
  */
-const DASHBOARD_TABS = ['business', 'blueprint', 'plan', 'engineering', 'application', 'workspace', 'history'] as const;
+const DASHBOARD_TABS = [
+  'business',
+  'blueprint',
+  'plan',
+  'product',
+  'engineering',
+  'application',
+  'workspace',
+  'history',
+] as const;
 
 type DashboardTabId = (typeof DASHBOARD_TABS)[number];
 
@@ -467,6 +477,17 @@ const DASHBOARD_TAB_LABELS: Record<DashboardTabId, string> = {
   business: 'Business',
   blueprint: 'Blueprint',
   plan: 'Plan',
+
+  /**
+   * Sprint 84B — Product Evolution Workspace. Deliberately NOT a `WorkflowStageId`/
+   * `WORKFLOW_STAGE_LABELS` entry — the persistent `ProjectWorkflowBar` represents INITIAL-BUILD
+   * progression for the MVP currently being built; this tab represents the product's long-lived,
+   * multi-release lifecycle (MVP1 -> MVP2 -> MVP3+, Sprints 78–83). See
+   * docs/product-management/Sprint-84-Product-Evolution-UX-Plan.md Phase 3 for why the two are
+   * never conflated. Always visible (not conditionally shown/hidden by lifecycle state) — a
+   * project with no MVP yet shows `ProductWorkspacePanel`'s own empty state instead.
+   */
+  product: 'Product',
   engineering: 'Engineering',
   application: 'Application',
   workspace: 'Workspace',
@@ -1127,6 +1148,26 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                               )}
                             </div>
                           )}
+                        </section>
+                      </TabsContent>
+
+                      {/*
+                        Sprint 84B — Product Evolution Workspace. Always rendered (never
+                        conditionally shown/hidden — see DASHBOARD_TAB_LABELS.product's own
+                        comment); ProductWorkspacePanel itself renders the "no MVP yet" empty
+                        state for a project that hasn't reached Gate A. Reads Sprints 78–83's
+                        persisted domain data (Mvp/Feature/ProductReview/RoadmapReview/
+                        MvpApproval) through a pure read-model selector — never duplicates
+                        lifecycle status as independent UI-only state.
+                      */}
+                      <TabsContent value="product" className="!mt-0">
+                        <section>
+                          <GroupHeading
+                            title="Product Roadmap"
+                            icon="i-ph:map-trifold-duotone"
+                            subtitle="Your product across every MVP — what's live, what's next, and the Product/Roadmap Reviews that got you there."
+                          />
+                          <ProductWorkspacePanel project={project} />
                         </section>
                       </TabsContent>
 
