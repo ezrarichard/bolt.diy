@@ -135,6 +135,15 @@ export const ARTIFACT_TYPES = {
    * app/lib/projects/productReviewEngine.ts's `completeAnalysis`.
    */
   PRODUCT_REVIEW_ANALYSIS: 'product-review-analysis',
+
+  /**
+   * Sprint 83 — the AI Product Owner's Roadmap Review output, persisted as a normal artifact,
+   * same reasoning as `PRODUCT_REVIEW_ANALYSIS` above: the curated `RoadmapReview` domain row
+   * (`app/lib/roadmap-review/`) is the queryable/lifecycle-tracked object, this artifact is the
+   * AI-generated document itself, linked back via `RoadmapReview.artifactId`. See
+   * app/lib/projects/roadmapReviewEngine.ts's `completePlanning`.
+   */
+  ROADMAP_REVIEW_ANALYSIS: 'roadmap-review-analysis',
 } as const;
 
 /**

@@ -63,6 +63,12 @@ export const ACTIVITY_ICON: Record<string, string> = {
   business_analysis_running: 'i-ph:magnifying-glass-duotone text-blue-500',
   business_analysis_completed: 'i-ph:check-circle-duotone text-green-500',
   product_review_approved: 'i-ph:seal-check-duotone text-green-500',
+
+  /* Sprint 83 (Product Owner Roadmap Review) — see app/lib/projects/roadmapReviewEngine.ts, the only writer of these. */
+  roadmap_review_started: 'i-ph:map-trifold-duotone text-purple-500',
+  roadmap_planning_running: 'i-ph:compass-duotone text-blue-500',
+  roadmap_planning_completed: 'i-ph:check-circle-duotone text-green-500',
+  roadmap_review_approved: 'i-ph:seal-check-duotone text-green-500',
 };
 
 const REPAIR_STATUS_ICON: Record<RepairAttemptRecord['status'], string> = {
