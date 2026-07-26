@@ -171,17 +171,26 @@ function StageNode({
 export function ProjectWorkflowBar({ stages, activeTab, onSelect }: ProjectWorkflowBarProps) {
   return (
     <div className="px-5 sm:px-8 py-5 sm:py-6 border-b border-bolt-elements-borderColor/40 bg-gradient-to-b from-bolt-elements-background-depth-2/40 to-transparent">
-      <div className="flex items-start max-w-full">
-        {stages.map((stage, index) => (
-          <StageNode
-            key={stage.id}
-            stage={stage}
-            index={index}
-            isActiveTab={activeTab === stage.id}
-            isLast={index === stages.length - 1}
-            onSelect={onSelect}
-          />
-        ))}
+      {/*
+        Sprint 84C (Part 6) — every node already has `shrink-0` (see StageNode's button), so at
+        narrow widths this row previously overflowed its container and got visually clipped mid-
+        node (Sprint 84A's Finding UI-11, confirmed live at 375px). `overflow-x-auto` on this wrapper
+        turns that clip into a scroll instead — wide screens are unaffected (the row already fits,
+        so nothing scrolls); narrow screens degrade to a scrollable strip rather than losing nodes.
+      */}
+      <div className="overflow-x-auto">
+        <div className="flex items-start max-w-full min-w-max">
+          {stages.map((stage, index) => (
+            <StageNode
+              key={stage.id}
+              stage={stage}
+              index={index}
+              isActiveTab={activeTab === stage.id}
+              isLast={index === stages.length - 1}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );

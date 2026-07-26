@@ -15,7 +15,6 @@ import { getProjectArtifacts } from '~/lib/stores/projects';
 import { shouldHydrateProjectData } from '~/lib/projects/hydration';
 import type { Project } from '~/lib/stores/projects';
 import { PROJECT_COLOR_CLASSES } from './ProjectListItem';
-import { getProjectTypeDefinition } from '~/lib/project-types/projectTypeRegistry';
 import BackgroundRays from '~/components/ui/BackgroundRays';
 import { blueprintEngine, type RoadmapItemStatus } from '~/lib/blueprints';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
@@ -24,6 +23,7 @@ import { projectTaskEngine } from '~/lib/projects/taskEngine';
 import { executionEngine } from '~/lib/projects/executionEngine';
 import { reviewEngine } from '~/lib/projects/reviewEngine';
 import { checkBuildersDbConnection } from '~/lib/builders-db/client';
+import { workbenchStore } from '~/lib/stores/workbench';
 import { useDiscoveryIntelligence } from '~/lib/hooks/useDiscoveryIntelligence';
 import { useBlueprintRecommendation } from '~/lib/hooks/useBlueprintRecommendation';
 import { BusinessDiscoveryCard } from './BusinessDiscoveryCard';
@@ -37,6 +37,7 @@ import {
   type ProjectArtifact,
 } from '~/lib/projects/artifacts';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '~/components/ui/Tabs';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '~/components/ui/Collapsible';
 import { ProjectRequirementsDialog } from './ProjectRequirementsDialog';
 import { InterviewChatDialog } from './InterviewChatDialog';
 import { ProjectDocumentImportDialog } from './ProjectDocumentImportDialog';
@@ -64,7 +65,7 @@ import { GenerationProfileSelector } from './GenerationProfileSelector';
 import { RegionalProfileCard } from './RegionalProfileCard';
 import { PackageProfileCard } from './PackageProfileCard';
 import { DatabaseActivationCard } from './DatabaseActivationCard';
-import { DEFAULT_GENERATION_PROFILE_ID, DEFAULT_GENERATION_PROFILES } from '~/lib/generation-profiles/defaultProfiles';
+import { DEFAULT_GENERATION_PROFILE_ID } from '~/lib/generation-profiles/defaultProfiles';
 import { saveSelectedProfileForProject } from '~/lib/generation-profiles/generationProfileRepository';
 
 interface ProjectDashboardProps {
@@ -114,49 +115,11 @@ function InfoCard({ icon, label, rows }: InfoCardProps) {
   );
 }
 
-/** Sprint 38.5 — one Overview status stat (Current Stage/Application Status/Last Build/Last Activity). Reads project.workspaceState fields directly; `tone` only ever highlights the one field (Application Status) where "generated" is meaningfully different from every other plain-text status. */
-function StatusMiniCard({
-  label,
-  value,
-  tone = 'neutral',
-}: {
-  label: string;
-  value: string;
-  tone?: 'neutral' | 'success';
-}) {
-  return (
-    <div className="rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-3.5 bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-1">
-        {label}
-      </div>
-      <div
-        className={classNames(
-          'text-sm font-medium truncate',
-          tone === 'success' ? 'text-green-600 dark:text-green-400' : 'text-bolt-elements-textPrimary',
-        )}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
-/** Sprint 38.5 — a small connected/not-connected pill, same semantics as InfoCard's rows but condensed for the Overview status strip. */
-function QuickStatusBadge({ icon, label, connected }: { icon: string; label: string; connected: boolean }) {
-  return (
-    <span
-      className={classNames(
-        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border',
-        connected
-          ? 'border-green-500/30 text-green-600 dark:text-green-400 bg-green-500/5'
-          : 'border-bolt-elements-borderColor/50 text-bolt-elements-textTertiary',
-      )}
-    >
-      <div className={classNames(icon, 'w-3 h-3')} />
-      {label}: {connected ? 'Connected' : 'Not Connected'}
-    </span>
-  );
-}
+/*
+ * Sprint 84C — `StatusMiniCard`/`QuickStatusBadge` (the Workspace tab's old "Status" mini-card
+ * block) removed along with their only call site — see the `workspace` tab's own comment for
+ * why (Finding UI-2: near-verbatim duplicate of `ProjectManagerPanel`'s persistent hero card).
+ */
 
 /**
  * Sprint 8 — status metadata for roadmap items and the "Future status
@@ -598,6 +561,10 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
    */
   const [isBuildersDbConnected, setIsBuildersDbConnected] = useState(false);
 
+  /** Sprint 84C — Workspace tab progressive disclosure: both collapsed by default (Finding UI-3/UI-5), matching `EngineeringStageSection`'s existing collapse-on-approve pattern. */
+  const [isConnectionsExpanded, setIsConnectionsExpanded] = useState(false);
+  const [isBlueprintOverviewExpanded, setIsBlueprintOverviewExpanded] = useState(false);
+
   useEffect(() => {
     if (!open) {
       return undefined;
@@ -659,6 +626,17 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
     }
 
     requestChatInputFocus();
+  };
+
+  /**
+   * Sprint 84C (Part 5) — Product tab's "Open Preview" action. Reuses the exact same
+   * `workbenchStore.showWorkbench`/`onClose` mechanism `handleStartChat` above already uses to
+   * leave the dialog — no new routing primitive, mirroring `PreviewProductContextStrip`'s own
+   * "Open Product" direction (`isProjectDashboardOpenStore` + `lastSelectedTab`).
+   */
+  const handleOpenPreview = () => {
+    onClose();
+    workbenchStore.showWorkbench.set(true);
   };
 
   /*
@@ -1140,7 +1118,10 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                                     navSectionId="product-owner"
                                     sectionRef={registerSection('product-owner')}
                                   >
-                                    <ProductOwnerDraftPanel project={project} />
+                                    <ProductOwnerDraftPanel
+                                      project={project}
+                                      onViewProductRoadmap={() => handleTabChange('product')}
+                                    />
                                   </EngineeringStageSection>
                                 </>
                               ) : (
@@ -1162,11 +1143,21 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       */}
                       <TabsContent value="product" className="!mt-0">
                         <section>
-                          <GroupHeading
-                            title="Product Roadmap"
-                            icon="i-ph:map-trifold-duotone"
-                            subtitle="Your product across every MVP — what's live, what's next, and the Product/Roadmap Reviews that got you there."
-                          />
+                          <div className="flex items-start justify-between gap-3 flex-wrap">
+                            <GroupHeading
+                              title="Product Roadmap"
+                              icon="i-ph:map-trifold-duotone"
+                              subtitle="Your product across every MVP — what's live, what's next, and the Product/Roadmap Reviews that got you there."
+                            />
+                            <button
+                              type="button"
+                              onClick={handleOpenPreview}
+                              className="flex gap-1.5 items-center text-xs font-medium text-purple-600 dark:text-purple-300 hover:text-purple-700 dark:hover:text-purple-200 transition-colors shrink-0"
+                            >
+                              <span className="i-ph:arrow-square-out h-3.5 w-3.5" />
+                              Open Preview
+                            </button>
+                          </div>
                           <ProductWorkspacePanel project={project} />
                         </section>
                       </TabsContent>
@@ -1330,181 +1321,187 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                       </TabsContent>
 
                       <TabsContent value="workspace" className="!mt-0 space-y-10">
-                        {/* Sprint 38.5 — Status strip: Status/Current Stage/Last Activity/Application Status, plus BuildersDB/GitHub/Deployment quick badges. Moved here (Product Experience Sprint) — this is implementation-facing diagnostic detail, not part of the customer's journey; ProjectManagerPanel (persistent, above the tabs) is the business-friendly equivalent. */}
-                        <section>
-                          <GroupHeading
-                            title="Status"
-                            subtitle="Where this project's workspace actually is right now."
-                          />
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-                            <StatusMiniCard
-                              label="Project Type"
-                              value={`${getProjectTypeDefinition(project.projectType).icon} ${getProjectTypeDefinition(project.projectType).displayName}`}
-                            />
-                            <StatusMiniCard
-                              label="Current Stage"
-                              value={workspaceState?.currentStage ?? 'Not started'}
-                            />
-                            <StatusMiniCard
-                              label="Application Status"
-                              value={workspaceState?.generatedApplicationExists ? 'Generated' : 'Not Generated'}
-                              tone={workspaceState?.generatedApplicationExists ? 'success' : 'neutral'}
-                            />
-                            <StatusMiniCard
-                              label="Last Build"
-                              value={
-                                workspaceState?.lastGenerationTime
-                                  ? formatArtifactTimestamp(workspaceState.lastGenerationTime)
-                                  : 'Never'
-                              }
-                            />
-                            <StatusMiniCard
-                              label="Last Activity"
-                              value={workspaceState?.lastActivity ?? 'No activity yet'}
-                            />
-                            <StatusMiniCard
-                              label="Generation Profile"
-                              value={
-                                DEFAULT_GENERATION_PROFILES.find(
-                                  (profile) =>
-                                    profile.id ===
-                                    (workspaceState?.selectedGenerationProfileId ?? DEFAULT_GENERATION_PROFILE_ID),
-                                )?.name ?? 'Balanced'
-                              }
-                            />
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            <QuickStatusBadge
-                              icon="i-ph:cloud-duotone"
-                              label="BuildersDB"
-                              connected={isBuildersDbConnected}
-                            />
-                            <QuickStatusBadge
-                              icon="i-ph:github-logo-duotone"
-                              label="GitHub"
-                              connected={Boolean(project.githubRepo)}
-                            />
-                            <QuickStatusBadge
-                              icon="i-ph:rocket-launch-duotone"
-                              label="Deployment"
-                              connected={Boolean(project.deploymentTarget)}
-                            />
-                          </div>
-                        </section>
+                        {/*
+                          Sprint 84C — Workspace is now Configuration, not Status. The old "Status"
+                          mini-card block (Project Type/Current Stage/Application Status/Last
+                          Build/Last Activity/Generation Profile) was a near-verbatim repeat of
+                          ProjectManagerPanel's persistent hero card (Current Stage/Overall
+                          Progress — visible on every tab, not just this one), the Application
+                          tab/WorkflowBar (Application Status), the History tab (Last Activity, in
+                          full, not just a one-line summary), and the Generation Profile selector
+                          one section below in this SAME tab — see
+                          docs/product-management/Sprint-84-Product-Evolution-UX-Plan.md Finding
+                          UI-2. Removed entirely rather than relocated, per that finding's own
+                          recommendation.
+                        */}
 
-                        {/* SECTION 6 — Workspace (connections + project configuration) */}
+                        {/* SECTION 6 — Connections & Configuration */}
                         <section
                           className="pt-10 border-t border-bolt-elements-borderColor/40"
                           ref={registerSection('workspace')}
                           data-nav-section="workspace"
                         >
-                          <GroupHeading title="Workspace" subtitle="Connections and configuration for this project." />
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                            <InfoCard
-                              icon="i-ph:github-logo-duotone"
-                              label="GitHub"
-                              rows={[
-                                { label: 'Status', value: project.githubRepo ? 'Connected' : 'Not Connected' },
-                                { label: 'Repository', value: project.githubRepo || 'Not linked yet' },
-                              ]}
-                            />
-                            <InfoCard
-                              icon="i-ph:cloud-duotone"
-                              label="BuildersDB"
-                              rows={[
-                                {
-                                  label: 'Status',
-                                  value: isBuildersDbConnected ? 'Connected' : 'Local Only',
-                                },
-                                {
-                                  label: 'Provider',
-                                  value: isBuildersDbConnected ? 'Supabase' : 'Browser Storage',
-                                },
-                              ]}
-                            />
-                            <InfoCard
-                              icon="i-ph:database-duotone"
-                              label="Customer Supabase"
-                              rows={[
-                                { label: 'Status', value: project.supabaseProjectId ? 'Connected' : 'Not Connected' },
-                                { label: 'Project', value: project.supabaseProjectId || 'Not linked yet' },
-                              ]}
-                            />
-                            <InfoCard
-                              icon="i-ph:rocket-launch-duotone"
-                              label="Deployment"
-                              rows={[
-                                { label: 'Status', value: project.deploymentTarget ? 'Connected' : 'Not Connected' },
-                                { label: 'Target', value: project.deploymentTarget || 'Not set' },
-                              ]}
-                            />
-                            <InfoCard
-                              icon="i-ph:flask-duotone"
-                              label="Environment"
-                              rows={[{ label: 'Current', value: 'Development' }]}
-                            />
-                            <InfoCard
-                              icon="i-ph:users-duotone"
-                              label="Team Members"
-                              rows={[
-                                {
-                                  label: 'Total',
-                                  value: `${project.members?.length || 1} Member${(project.members?.length || 1) === 1 ? '' : 's'}`,
-                                },
-                              ]}
-                            />
-                            <InfoCard
-                              icon="i-ph:stack-duotone"
-                              label="Templates"
-                              rows={[{ label: 'Active', value: blueprint?.name || 'Blank Project' }]}
-                            />
-                            <InfoCard
-                              icon="i-ph:waveform-duotone"
-                              label="Preview Status"
-                              rows={[
-                                {
-                                  label: 'Status',
-                                  value: workspaceState?.previewAvailable
-                                    ? 'Available'
-                                    : (workspaceState?.lastPreviewStatus ?? 'Not Available'),
-                                },
-                              ]}
-                            />
-                            <InfoCard
-                              icon="i-ph:clock-clockwise-duotone"
-                              label="Last Build"
-                              rows={[
-                                {
-                                  label: 'When',
-                                  value: workspaceState?.lastGenerationTime
-                                    ? formatArtifactTimestamp(workspaceState.lastGenerationTime)
-                                    : 'Never',
-                                },
-                              ]}
-                            />
-                            {/* Sprint 39 — Code Reviewer/Repair Engineer/Build Validator status, read from the same workspaceState the other Workspace cards already use. */}
-                            <InfoCard
-                              icon="i-ph:wrench-duotone"
-                              label="Self-Healing"
-                              rows={[
-                                {
-                                  label: 'Status',
-                                  value:
-                                    workspaceState?.lastRepairStatus === 'succeeded'
-                                      ? 'Repaired'
-                                      : workspaceState?.lastRepairStatus === 'failed'
-                                        ? 'Needs Attention'
-                                        : workspaceState?.lastRepairStatus === 'repairing'
-                                          ? 'Repairing…'
-                                          : 'Not Needed',
-                                },
-                                { label: 'Attempts', value: String(workspaceState?.repairAttempts ?? 0) },
-                              ]}
-                            />
-                          </div>
+                          <GroupHeading
+                            title="Configuration"
+                            subtitle="Connections and configuration for this project."
+                          />
 
-                          {/* Sprint 39.5 — small Generation Profile card, same footprint as the Self-Healing card above. Changing it here only affects future AI Engineering Team generations for this project — Quick Chat's own model dropdown is untouched. */}
-                          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {/*
+                            Sprint 84C — the 10 connection cards below (mostly "Not Connected"/"Not
+                            set" for any non-advanced project, per Finding UI-3) now sit behind one
+                            progressive-disclosure toggle instead of always rendering fully
+                            expanded, matching the same collapse-by-default pattern
+                            `ProjectManagerPanel`'s "Advanced" section and `EngineeringStageSection`
+                            already use elsewhere in this file.
+                          */}
+                          <Collapsible open={isConnectionsExpanded} onOpenChange={setIsConnectionsExpanded}>
+                            <CollapsibleTrigger asChild>
+                              <button
+                                type="button"
+                                className="w-full flex items-center justify-between gap-3 rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] px-5 py-3.5 text-left bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md hover:border-purple-500/25 transition-colors"
+                              >
+                                <span className="flex items-center gap-2 text-sm font-medium text-bolt-elements-textPrimary">
+                                  <span className="i-ph:plugs-connected-duotone w-4 h-4 text-purple-600/80 dark:text-purple-400/80" />
+                                  Connections &amp; Configuration
+                                </span>
+                                <span className="flex items-center gap-1 text-xs text-bolt-elements-textTertiary">
+                                  {isConnectionsExpanded ? 'Collapse' : 'Expand'}
+                                  <span
+                                    className={classNames(
+                                      'i-ph:caret-down w-3 h-3 transition-transform duration-150',
+                                      isConnectionsExpanded && 'rotate-180',
+                                    )}
+                                  />
+                                </span>
+                              </button>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+                                <InfoCard
+                                  icon="i-ph:github-logo-duotone"
+                                  label="GitHub"
+                                  rows={[
+                                    { label: 'Status', value: project.githubRepo ? 'Connected' : 'Not Connected' },
+                                    { label: 'Repository', value: project.githubRepo || 'Not linked yet' },
+                                  ]}
+                                />
+                                <InfoCard
+                                  icon="i-ph:cloud-duotone"
+                                  label="BuildersDB"
+                                  rows={[
+                                    {
+                                      label: 'Status',
+                                      value: isBuildersDbConnected ? 'Connected' : 'Local Only',
+                                    },
+                                    {
+                                      label: 'Provider',
+                                      value: isBuildersDbConnected ? 'Supabase' : 'Browser Storage',
+                                    },
+                                  ]}
+                                />
+                                <InfoCard
+                                  icon="i-ph:database-duotone"
+                                  label="Customer Supabase"
+                                  rows={[
+                                    {
+                                      label: 'Status',
+                                      value: project.supabaseProjectId ? 'Connected' : 'Not Connected',
+                                    },
+                                    { label: 'Project', value: project.supabaseProjectId || 'Not linked yet' },
+                                  ]}
+                                />
+                                <InfoCard
+                                  icon="i-ph:rocket-launch-duotone"
+                                  label="Deployment"
+                                  rows={[
+                                    {
+                                      label: 'Status',
+                                      value: project.deploymentTarget ? 'Connected' : 'Not Connected',
+                                    },
+                                    { label: 'Target', value: project.deploymentTarget || 'Not set' },
+                                  ]}
+                                />
+                                <InfoCard
+                                  icon="i-ph:flask-duotone"
+                                  label="Environment"
+                                  rows={[{ label: 'Current', value: 'Development' }]}
+                                />
+                                <InfoCard
+                                  icon="i-ph:users-duotone"
+                                  label="Team Members"
+                                  rows={[
+                                    {
+                                      label: 'Total',
+                                      value: `${project.members?.length || 1} Member${(project.members?.length || 1) === 1 ? '' : 's'}`,
+                                    },
+                                  ]}
+                                />
+                                <InfoCard
+                                  icon="i-ph:stack-duotone"
+                                  label="Templates"
+                                  rows={[{ label: 'Active', value: blueprint?.name || 'Blank Project' }]}
+                                />
+                                <InfoCard
+                                  icon="i-ph:waveform-duotone"
+                                  label="Preview Status"
+                                  rows={[
+                                    {
+                                      label: 'Status',
+                                      value: workspaceState?.previewAvailable
+                                        ? 'Available'
+                                        : (workspaceState?.lastPreviewStatus ?? 'Not Available'),
+                                    },
+                                  ]}
+                                />
+                                <InfoCard
+                                  icon="i-ph:clock-clockwise-duotone"
+                                  label="Last Build"
+                                  rows={[
+                                    {
+                                      label: 'When',
+                                      value: workspaceState?.lastGenerationTime
+                                        ? formatArtifactTimestamp(workspaceState.lastGenerationTime)
+                                        : 'Never',
+                                    },
+                                  ]}
+                                />
+                                {/* Sprint 39 — Code Reviewer/Repair Engineer/Build Validator status, read from the same workspaceState the other Workspace cards already use. */}
+                                <InfoCard
+                                  icon="i-ph:wrench-duotone"
+                                  label="Self-Healing"
+                                  rows={[
+                                    {
+                                      label: 'Status',
+                                      value:
+                                        workspaceState?.lastRepairStatus === 'succeeded'
+                                          ? 'Repaired'
+                                          : workspaceState?.lastRepairStatus === 'failed'
+                                            ? 'Needs Attention'
+                                            : workspaceState?.lastRepairStatus === 'repairing'
+                                              ? 'Repairing…'
+                                              : 'Not Needed',
+                                    },
+                                    { label: 'Attempts', value: String(workspaceState?.repairAttempts ?? 0) },
+                                  ]}
+                                />
+                              </div>
+                            </CollapsibleContent>
+                          </Collapsible>
+                        </section>
+
+                        {/*
+                          SECTION 7 — Product Configuration. Sprint 84C (Finding UI-4): these are
+                          real decisions the customer/operator makes (which generation profile,
+                          which region, which package shape), not inert connection status, so they
+                          get their own heading and stay expanded by default rather than sitting
+                          inside the collapsed Connections disclosure above.
+                        */}
+                        <section className="pt-10 border-t border-bolt-elements-borderColor/40">
+                          <GroupHeading
+                            title="Product Configuration"
+                            subtitle="Decisions that shape how this project's AI Engineering Team generates and packages your product."
+                          />
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                             <div
                               className={classNames(
                                 'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-4',
@@ -1540,89 +1537,122 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                             <SharedProviderStatusCard />
                           </div>
 
-                          {/* Blueprint Overview */}
+                          {/*
+                            Sprint 84C — Blueprint Overview repeats what the `blueprint` tab
+                            already shows for the same, already-chosen Blueprint (Finding UI-5).
+                            Collapsed by default rather than removed — a returning customer may
+                            still want the recommended-stack reference without re-opening the
+                            `blueprint` tab.
+                          */}
                           {blueprint && (
-                            <div className="mt-6">
-                              <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                                Blueprint Overview
-                              </h3>
-                              <div
-                                className={classNames(
-                                  'rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
-                                  'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                                )}
-                              >
-                                <div className="flex items-start gap-3 mb-4">
-                                  <span className="text-2xl leading-none shrink-0">{blueprint.icon}</span>
-                                  <div className="min-w-0">
-                                    <div className="text-sm font-semibold text-bolt-elements-textPrimary">
-                                      {blueprint.name}
-                                    </div>
-                                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-300 font-medium">
-                                        {blueprintEngine.getBlueprintCategory(blueprint.id)}
-                                      </span>
-                                      {blueprintEngine.getBlueprintProductType(blueprint.id) && (
-                                        <span className="text-xs text-bolt-elements-textTertiary">
-                                          {blueprintEngine.getBlueprintProductType(blueprint.id)}
+                            <Collapsible
+                              open={isBlueprintOverviewExpanded}
+                              onOpenChange={setIsBlueprintOverviewExpanded}
+                              className="mt-6"
+                            >
+                              <CollapsibleTrigger asChild>
+                                <button
+                                  type="button"
+                                  className="w-full flex items-center justify-between gap-3 rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] px-5 py-3.5 text-left bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md hover:border-purple-500/25 transition-colors"
+                                >
+                                  <span className="flex items-center gap-2 text-sm font-medium text-bolt-elements-textPrimary">
+                                    <span className="text-base leading-none">{blueprint.icon}</span>
+                                    Blueprint Overview — {blueprint.name}
+                                  </span>
+                                  <span className="flex items-center gap-1 text-xs text-bolt-elements-textTertiary">
+                                    {isBlueprintOverviewExpanded ? 'Collapse' : 'Expand'}
+                                    <span
+                                      className={classNames(
+                                        'i-ph:caret-down w-3 h-3 transition-transform duration-150',
+                                        isBlueprintOverviewExpanded && 'rotate-180',
+                                      )}
+                                    />
+                                  </span>
+                                </button>
+                              </CollapsibleTrigger>
+                              <CollapsibleContent>
+                                <div
+                                  className={classNames(
+                                    'mt-3 rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5',
+                                    'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
+                                  )}
+                                >
+                                  <div className="flex items-start gap-3 mb-4">
+                                    <span className="text-2xl leading-none shrink-0">{blueprint.icon}</span>
+                                    <div className="min-w-0">
+                                      <div className="text-sm font-semibold text-bolt-elements-textPrimary">
+                                        {blueprint.name}
+                                      </div>
+                                      <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-300 font-medium">
+                                          {blueprintEngine.getBlueprintCategory(blueprint.id)}
                                         </span>
+                                        {blueprintEngine.getBlueprintProductType(blueprint.id) && (
+                                          <span className="text-xs text-bolt-elements-textTertiary">
+                                            {blueprintEngine.getBlueprintProductType(blueprint.id)}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                    <div>
+                                      <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+                                        Recommended Stack
+                                      </div>
+                                      {blueprintEngine.getRecommendedStack(blueprint.id).length > 0 ? (
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {blueprintEngine.getRecommendedStack(blueprint.id).map((item) => (
+                                            <span
+                                              key={item}
+                                              className="text-xs px-2 py-1 rounded-md bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/40 text-bolt-elements-textSecondary"
+                                            >
+                                              {item}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <div className="text-xs text-bolt-elements-textTertiary">
+                                          No suggestions yet
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    <div>
+                                      <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
+                                        Recommended Integrations
+                                      </div>
+                                      {blueprintEngine.getRecommendedIntegrations(blueprint.id).length > 0 ? (
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {blueprintEngine.getRecommendedIntegrations(blueprint.id).map((item) => (
+                                            <span
+                                              key={item}
+                                              className="text-xs px-2 py-1 rounded-md bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/40 text-bolt-elements-textSecondary"
+                                            >
+                                              {item}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <div className="text-xs text-bolt-elements-textTertiary">
+                                          No suggestions yet
+                                        </div>
                                       )}
                                     </div>
                                   </div>
-                                </div>
 
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                                  <div>
-                                    <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
-                                      Recommended Stack
-                                    </div>
-                                    {blueprintEngine.getRecommendedStack(blueprint.id).length > 0 ? (
-                                      <div className="flex flex-wrap gap-1.5">
-                                        {blueprintEngine.getRecommendedStack(blueprint.id).map((item) => (
-                                          <span
-                                            key={item}
-                                            className="text-xs px-2 py-1 rounded-md bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/40 text-bolt-elements-textSecondary"
-                                          >
-                                            {item}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    ) : (
-                                      <div className="text-xs text-bolt-elements-textTertiary">No suggestions yet</div>
-                                    )}
-                                  </div>
-
-                                  <div>
-                                    <div className="text-[11px] font-semibold uppercase tracking-wide text-bolt-elements-textTertiary mb-2">
-                                      Recommended Integrations
-                                    </div>
-                                    {blueprintEngine.getRecommendedIntegrations(blueprint.id).length > 0 ? (
-                                      <div className="flex flex-wrap gap-1.5">
-                                        {blueprintEngine.getRecommendedIntegrations(blueprint.id).map((item) => (
-                                          <span
-                                            key={item}
-                                            className="text-xs px-2 py-1 rounded-md bg-bolt-elements-background-depth-2 border border-bolt-elements-borderColor/40 text-bolt-elements-textSecondary"
-                                          >
-                                            {item}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    ) : (
-                                      <div className="text-xs text-bolt-elements-textTertiary">No suggestions yet</div>
-                                    )}
+                                  <div className="mt-4 pt-3 border-t border-bolt-elements-borderColor/30 text-[11px] text-bolt-elements-textTertiary">
+                                    These are recommendations only — nothing here is applied, generated, or connected
+                                    automatically.
                                   </div>
                                 </div>
-
-                                <div className="mt-4 pt-3 border-t border-bolt-elements-borderColor/30 text-[11px] text-bolt-elements-textTertiary">
-                                  These are recommendations only — nothing here is applied, generated, or connected
-                                  automatically.
-                                </div>
-                              </div>
-                            </div>
+                              </CollapsibleContent>
+                            </Collapsible>
                           )}
                         </section>
 
-                        {/* SECTION 7 — Project Execution (Roadmap, Progress, Tasks, Quick Actions) */}
+                        {/* SECTION 8 — Project Execution (Roadmap, Progress, Tasks, Quick Actions) */}
                         <section
                           className="pt-10 border-t border-bolt-elements-borderColor/40"
                           ref={registerSection('execution')}
@@ -1633,10 +1663,18 @@ export function ProjectDashboard({ project, open, onClose }: ProjectDashboardPro
                             subtitle="Roadmap, task breakdown, and quick actions."
                           />
                           <div className="space-y-8">
-                            {/* Project Roadmap — Sprint 8 */}
+                            {/*
+                              Getting Started Checklist — Sprint 8, renamed Sprint 84C. This is
+                              the static blueprint onboarding checklist (Requirements -> ... ->
+                              Deployment), NOT the multi-MVP Product Roadmap (MVP1 -> MVP2 ->
+                              MVP3+, the Product tab) — the two were both called "Project
+                              Roadmap"/"Product Roadmap" before this rename, a naming collision
+                              docs/product-management/Sprint-84-Product-Evolution-UX-Plan.md's
+                              Finding UI-8 flagged explicitly. Function unchanged, name only.
+                            */}
                             <div>
                               <h3 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary mb-4">
-                                Project Roadmap
+                                Getting Started Checklist
                               </h3>
                               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                                 <div className="lg:col-span-2 space-y-3">

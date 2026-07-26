@@ -6,6 +6,7 @@ import { PortDropdown } from './PortDropdown';
 import { ScreenshotSelector } from './ScreenshotSelector';
 import { expoUrlAtom } from '~/lib/stores/qrCodeStore';
 import { ExpoQrModal } from '~/components/workbench/ExpoQrModal';
+import { PreviewProductContextStrip } from './PreviewProductContextStrip';
 import type { ElementInfo } from './Inspector';
 
 type ResizeSide = 'left' | 'right' | null;
@@ -665,6 +666,7 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
       {isPortDropdownOpen && (
         <div className="z-iframe-overlay w-full h-full absolute" onClick={() => setIsPortDropdownOpen(false)} />
       )}
+      <PreviewProductContextStrip />
       <div className="bg-bolt-elements-background-depth-2 px-2.5 py-1 flex items-center gap-2 min-h-[40px]">
         <div className="flex items-center gap-0.5 border border-bolt-elements-borderColor rounded-full px-0.5 py-0.5">
           <IconButton icon="i-ph:arrow-clockwise" size="md" onClick={reloadPreview} title="Refresh preview" />

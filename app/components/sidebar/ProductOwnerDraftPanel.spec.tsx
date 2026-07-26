@@ -24,6 +24,10 @@ const {
 
 const DRAFT: ProductOwnerDraft = {
   productVision: 'A dental clinic scheduling app',
+  roadmapSkeleton: [
+    { id: 'MVP-001', sequence: 1, theme: 'Core booking flow' },
+    { id: 'MVP-002', sequence: 2, theme: 'Billing', estimatedEffort: 'medium' },
+  ],
   currentMvp: {
     id: 'MVP-001',
     sequence: 1,
@@ -120,6 +124,36 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     ...overrides,
   } as Project;
 }
+
+describe('ProductOwnerDraftPanel — Sprint 84C: roadmap link replaces the buried roadmap list', () => {
+  beforeEach(() => {
+    isAvailableMock.mockReset().mockReturnValue(true);
+    listMvpsForProjectMock.mockReset().mockResolvedValue([]);
+  });
+
+  it('shows a single "View Product Roadmap" link instead of the full roadmap-skeleton list when a callback is supplied', () => {
+    const onViewProductRoadmap = vi.fn();
+    const project = makeProject();
+
+    render(<ProductOwnerDraftPanel project={project} onViewProductRoadmap={onViewProductRoadmap} />);
+
+    const link = screen.getByRole('button', { name: /View Product Roadmap/ });
+    expect(link).toBeTruthy();
+
+    // The old inline list (MVP-002 / theme text) must never render alongside the link.
+    expect(screen.queryByText('MVP-002')).toBeNull();
+
+    fireEvent.click(link);
+    expect(onViewProductRoadmap).toHaveBeenCalled();
+  });
+
+  it('does not render a dead roadmap link when onViewProductRoadmap is omitted', () => {
+    const project = makeProject();
+    render(<ProductOwnerDraftPanel project={project} />);
+
+    expect(screen.queryByRole('button', { name: /View Product Roadmap/ })).toBeNull();
+  });
+});
 
 describe('ProductOwnerDraftPanel — Sprint 78 Phase 0 corrective: transactional Gate A', () => {
   beforeEach(() => {

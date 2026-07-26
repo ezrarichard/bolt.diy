@@ -16,6 +16,14 @@ import { approveGateA } from '~/lib/mvp/gateAApproval';
 
 interface ProductOwnerDraftPanelProps {
   project: Project;
+
+  /**
+   * Sprint 84C — switches the dashboard to the Product tab (`ProjectDashboard.tsx`'s
+   * `handleTabChange('product')`). Optional so this panel still renders standalone (e.g. in
+   * tests) without needing a dashboard around it; when omitted, the "View Product Roadmap" link
+   * below simply isn't rendered rather than being a dead button.
+   */
+  onViewProductRoadmap?: () => void;
 }
 
 const ARTIFACT_TYPE = ARTIFACT_TYPES.PRODUCT_OWNER_DRAFT;
@@ -88,7 +96,7 @@ function BulletList({ items }: { items: string[] | undefined }) {
  * useAutoEngineeringPipeline.ts) — this panel's Approve button is the ONLY path that can
  * move it to 'approved', whether the draft itself was generated automatically or manually.
  */
-export function ProductOwnerDraftPanel({ project }: ProductOwnerDraftPanelProps) {
+export function ProductOwnerDraftPanel({ project, onViewProductRoadmap }: ProductOwnerDraftPanelProps) {
   const { user } = useAuth();
   const [isCreatingMvp, setIsCreatingMvp] = useState(false);
 
@@ -242,24 +250,25 @@ export function ProductOwnerDraftPanel({ project }: ProductOwnerDraftPanelProps)
               </Section>
             </div>
 
-            {latestDraft?.roadmapSkeleton && latestDraft.roadmapSkeleton.length > 0 && (
-              <Section title="MVP Roadmap (lightweight — only the current MVP below is fully elaborated)">
-                <ul className="space-y-1">
-                  {latestDraft.roadmapSkeleton.map((entry) => (
-                    <li key={entry.id} className="text-sm text-bolt-elements-textSecondary flex items-center gap-2">
-                      <Badge label={entry.id} className="border-bolt-elements-borderColor/50" />
-                      <span className="font-medium text-bolt-elements-textPrimary">MVP {entry.sequence}</span>
-                      <span>— {entry.theme}</span>
-                      {entry.targetRelease && (
-                        <Badge label={entry.targetRelease} className="border-bolt-elements-borderColor/50" />
-                      )}
-                      {entry.estimatedEffort && (
-                        <Badge label={entry.estimatedEffort} className="border-bolt-elements-borderColor/50" />
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </Section>
+            {/*
+              Sprint 84C — this used to render the full `roadmapSkeleton` list inline (every
+              future MVP + its effort chip), the exact buried-three-interactions-deep surface
+              docs/product-management/Sprint-84-Product-Evolution-UX-Plan.md's Finding UI-9
+              identified as the only place the roadmap could be seen at all. Now that the Product
+              tab (Sprint 84B) is the one authoritative place for it, this shrinks to a single
+              link so the roadmap is never shown in two places — see that same doc's own
+              "Duplicate-state risk" note.
+            */}
+            {latestDraft?.roadmapSkeleton && latestDraft.roadmapSkeleton.length > 0 && onViewProductRoadmap && (
+              <button
+                type="button"
+                onClick={onViewProductRoadmap}
+                className="flex items-center gap-1.5 text-sm font-medium text-purple-600 dark:text-purple-300 hover:text-purple-700 dark:hover:text-purple-200 transition-colors"
+              >
+                <span className="i-ph:map-trifold-duotone h-4 w-4" />
+                View Product Roadmap ({latestDraft.roadmapSkeleton.length} MVP
+                {latestDraft.roadmapSkeleton.length === 1 ? '' : 's'} planned)
+              </button>
             )}
 
             {latestDraft?.currentMvp && (
