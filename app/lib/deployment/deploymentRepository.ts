@@ -43,9 +43,9 @@ export type {
 } from '~/lib/deployment/deploymentTypes';
 
 /**
- * Deployment Repository — Sprint 87 (Deployment Architecture Foundation).
- *
- * Persistence for `builders_project_deployments` and its four child tables
+ * Deployment Repository — Sprint 87 (Deployment Architecture Foundation), refactored in Sprint 88
+ * pre-work so this repository is the ONLY supported entry point for a provider integration to
+ * change Deployment state. Persists `builders_project_deployments` and its four child tables
  * (`builders_deployment_github`/`_supabase`/`_vercel`/`_history`) — see
  * supabase/migrations/20260804100000_deployment_foundation.sql for the DDL. Follows the exact
  * defensive convention every other BuildersDB repository uses (`blueprintResolutionRepository.ts`,
@@ -54,6 +54,27 @@ export type {
  *
  * No provider API is called anywhere in this file — `attachGithub`/`attachSupabase`/
  * `attachVercel` only persist connection state a future sprint's real integration will supply.
+ *
+ * Sprint 88 pre-work — single entry point rule: a successful provider operation must never be
+ * expressed as "write the provider row" and "advance Deployment.status" as two independent calls
+ * scattered at the call site. `attachGithub`/`attachSupabase`/`attachVercel` now do both, plus the
+ * one Deployment History event describing what happened, through the shared
+ * `attachProviderAndTransition` helper below — a future Sprint 88/89/90 GitHub/Supabase/Vercel
+ * integration calls exactly one of these three functions and nothing else ever needs to touch
+ * `builders_project_deployments`/`builders_deployment_history` directly for a provider event.
+ * Non-provider lifecycle moves that don't attach anything (e.g. "Deployment Started",
+ * "Verification Passed") still go through `updateDeploymentStatus`, which now accepts a custom
+ * `eventType` so its history entries can be as descriptive as an attach's.
+ *
+ * Atomicity caveat: BuildersDB access here goes through the Supabase REST client, and — matching
+ * every other multi-step repository in this codebase (see `updateDeploymentStatus` itself, or
+ * `mvpRepository.releaseMvp`) — no multi-table Postgres transaction wraps the provider-row write,
+ * the status update, and the history insert. "Atomic" in this file means "one call site, one
+ * ordered sequence, never scattered across callers," not an ACID guarantee; a failure partway
+ * through is logged loudly (see `attachProviderAndTransition`'s own comment) rather than silently
+ * losing the mismatch. A real cross-table transaction would need a dedicated Postgres function
+ * (the way `builders_record_ai_usage` is one) — out of scope for this internal refactor, and not
+ * needed unless a partial-failure incident actually occurs in practice.
  */
 
 const { unavailable, logError } = createRepositoryLogger('DeploymentRepository');
@@ -131,15 +152,18 @@ export async function getDeploymentWithProviders(projectId: string): Promise<Dep
 
 /**
  * Validates the transition via `isValidDeploymentStatusTransition` before writing, and records a
- * `status_changed` history event alongside the update — the same "status write + history entry
- * together" shape `mvpRepository.releaseMvp` uses. Returns `false` (without writing anything) on
- * an illegal transition.
+ * history event alongside the update — the same "status write + history entry together" shape
+ * `mvpRepository.releaseMvp` uses. Returns `false` (without writing anything) on an illegal
+ * transition. For a status move that isn't tied to attaching a provider (e.g. "Deployment
+ * Started", "Deployment Successful", "Verification Passed", "Release Created" — see the Sprint 88
+ * pre-work brief's own history examples), pass a descriptive `eventType`; it defaults to the
+ * generic `'status_changed'` for callers that don't care.
  */
 export async function updateDeploymentStatus(
   deploymentId: string,
   projectId: string,
   toStatus: DeploymentStatus,
-  options: { message?: string; createdBy?: string } = {},
+  options: { eventType?: string; message?: string; createdBy?: string } = {},
 ): Promise<boolean> {
   const client = getBuildersDbClient();
 
@@ -181,7 +205,7 @@ export async function updateDeploymentStatus(
     await recordDeploymentEvent({
       deploymentId,
       projectId,
-      eventType: 'status_changed',
+      eventType: options.eventType ?? 'status_changed',
       fromStatus,
       toStatus,
       message: options.message,
@@ -195,12 +219,77 @@ export async function updateDeploymentStatus(
   }
 }
 
-async function attachProvider<TRow, TDomain>(
-  table: string,
-  logTag: string,
-  upsertPayload: Record<string, unknown>,
+/** Options every `attach*` function accepts, layered on top of its provider-specific input. */
+export interface AttachProviderOptions {
+  /**
+   * The Deployment status to transition to once the provider row is written. Defaults to the
+   * provider's canonical target (see `PROVIDER_ATTACH_CONFIG`) — override only when a caller
+   * needs a different target (e.g. re-attaching provider details without progressing the
+   * lifecycle any further: pass the deployment's own current status so the transition is a
+   * no-op per `isValidDeploymentStatusTransition`'s "from === to is always valid" rule).
+   */
+  toStatus?: DeploymentStatus;
+  message?: string;
+  metadata?: Record<string, unknown>;
+  performedBy?: string;
+}
+
+/**
+ * Per-provider defaults for `attachProviderAndTransition` — the one place a new provider's
+ * canonical lifecycle target and history event names are declared. Adding GitLab/Firebase/
+ * Netlify/... later means adding one entry here (plus the table/repository/adapter the Sprint 87
+ * migration's header comment already calls for), never touching the transition or history logic
+ * itself.
+ */
+const PROVIDER_ATTACH_CONFIG: Record<
+  DeploymentEventProvider,
+  { table: string; defaultToStatus: DeploymentStatus; connectedEventType: string; updatedEventType: string }
+> = {
+  github: {
+    table: 'builders_deployment_github',
+    defaultToStatus: 'repository_connected',
+    connectedEventType: 'repository_connected',
+    updatedEventType: 'repository_updated',
+  },
+  supabase: {
+    table: 'builders_deployment_supabase',
+    defaultToStatus: 'database_connected',
+    connectedEventType: 'database_connected',
+    updatedEventType: 'database_updated',
+  },
+  vercel: {
+    table: 'builders_deployment_vercel',
+    defaultToStatus: 'environment_ready',
+    connectedEventType: 'environment_configured',
+    updatedEventType: 'environment_updated',
+  },
+};
+
+/**
+ * The single entry point every `attach*` function funnels through — see this file's header
+ * comment for the Sprint 88 pre-work rule this exists to satisfy. One call does all of:
+ *
+ *  1. Reads the Deployment's current status and validates the target transition via
+ *     `isValidDeploymentStatusTransition` — an illegal transition writes nothing at all.
+ *  2. Upserts the provider row on `deployment_id` (distinguishing a fresh connection from an
+ *     update to an existing one, so the history event reads "Repository Connected" vs.
+ *     "Repository Updated", matching the Sprint 88 pre-work brief's own examples).
+ *  3. Advances `Deployment.status` to the target.
+ *  4. Records ONE Deployment History event capturing the provider, the status transition, and any
+ *     caller-supplied message/metadata — never two separate events for what is one logical
+ *     operation.
+ *
+ * See the file header for why this is "one ordered sequence" rather than a database transaction.
+ */
+async function attachProviderAndTransition<TInput extends { deploymentId: string; projectId: string }, TRow, TDomain>(
+  provider: DeploymentEventProvider,
+  input: TInput,
+  toUpsert: (input: TInput) => Record<string, unknown>,
   fromRow: (row: TRow) => TDomain,
+  options: AttachProviderOptions,
 ): Promise<TDomain | null> {
+  const config = PROVIDER_ATTACH_CONFIG[provider];
+  const logTag = `attach${provider.charAt(0).toUpperCase()}${provider.slice(1)}`;
   const client = getBuildersDbClient();
 
   if (!client) {
@@ -209,84 +298,126 @@ async function attachProvider<TRow, TDomain>(
   }
 
   try {
-    const { data, error } = await client
-      .from(table)
-      .upsert(upsertPayload, { onConflict: 'deployment_id' })
+    const { data: deploymentRow, error: deploymentError } = await client
+      .from('builders_project_deployments')
+      .select('status')
+      .eq('id', input.deploymentId)
+      .single();
+
+    if (deploymentError) {
+      throw deploymentError;
+    }
+
+    const fromStatus = deploymentRow.status as DeploymentStatus;
+    const toStatus = options.toStatus ?? config.defaultToStatus;
+
+    if (!isValidDeploymentStatusTransition(fromStatus, toStatus)) {
+      logError(logTag, new Error(`Illegal deployment status transition: ${fromStatus} -> ${toStatus}`));
+      return null;
+    }
+
+    const { data: existingRow } = await client
+      .from(config.table)
+      .select('id')
+      .eq('deployment_id', input.deploymentId)
+      .maybeSingle();
+
+    const { data: providerRow, error: upsertError } = await client
+      .from(config.table)
+      .upsert(toUpsert(input), { onConflict: 'deployment_id' })
       .select('*')
       .single();
 
-    if (error) {
-      throw error;
+    if (upsertError) {
+      throw upsertError;
     }
 
-    return fromRow(data as TRow);
+    const { error: statusError } = await client
+      .from('builders_project_deployments')
+      .update({ status: toStatus })
+      .eq('id', input.deploymentId);
+
+    if (statusError) {
+      /*
+       * The provider row is already written at this point — no cross-table transaction wraps
+       * these writes (see this file's header comment). Logged loudly rather than silently
+       * leaving Deployment.status out of sync with the provider row it now points at.
+       */
+      throw statusError;
+    }
+
+    await recordDeploymentEvent({
+      deploymentId: input.deploymentId,
+      projectId: input.projectId,
+      eventType: existingRow ? config.updatedEventType : config.connectedEventType,
+      fromStatus,
+      toStatus,
+      provider,
+      message: options.message,
+      metadata: options.metadata,
+      createdBy: options.performedBy,
+    });
+
+    return fromRow(providerRow as TRow);
   } catch (error) {
     logError(logTag, error);
     return null;
   }
 }
 
-/** Attaches (or updates) this Deployment's GitHub connection. Exactly one per deployment — upserts on `deployment_id`. */
-export async function attachGithub(input: DeploymentGithubInput): Promise<DeploymentGithub | null> {
-  const result = await attachProvider<BuildersDbDeploymentGithubRow, DeploymentGithub>(
-    'builders_deployment_github',
-    'attachGithub',
-    toDeploymentGithubUpsert(input),
+/**
+ * Attaches (or updates) this Deployment's GitHub connection, transitions the Deployment lifecycle
+ * (`generated -> repository_connected` by default), and records the matching Deployment History
+ * event — all in one call, per the Sprint 88 pre-work rule. Exactly one GitHub connection per
+ * deployment (upserts on `deployment_id`).
+ */
+export async function attachGithub(
+  input: DeploymentGithubInput,
+  options: AttachProviderOptions = {},
+): Promise<DeploymentGithub | null> {
+  return attachProviderAndTransition<DeploymentGithubInput, BuildersDbDeploymentGithubRow, DeploymentGithub>(
+    'github',
+    input,
+    toDeploymentGithubUpsert,
     fromDeploymentGithubRow,
+    options,
   );
-
-  if (result) {
-    await recordDeploymentEvent({
-      deploymentId: input.deploymentId,
-      projectId: input.projectId,
-      eventType: 'github_connected',
-      provider: 'github',
-    });
-  }
-
-  return result;
 }
 
-/** Attaches (or updates) this Deployment's Supabase connection. Exactly one per deployment — upserts on `deployment_id`. */
-export async function attachSupabase(input: DeploymentSupabaseInput): Promise<DeploymentSupabase | null> {
-  const result = await attachProvider<BuildersDbDeploymentSupabaseRow, DeploymentSupabase>(
-    'builders_deployment_supabase',
-    'attachSupabase',
-    toDeploymentSupabaseUpsert(input),
+/**
+ * Attaches (or updates) this Deployment's Supabase connection, transitions the Deployment
+ * lifecycle (`repository_connected -> database_connected` by default), and records the matching
+ * Deployment History event — same shape as `attachGithub`, for Sprint 89 to build on.
+ */
+export async function attachSupabase(
+  input: DeploymentSupabaseInput,
+  options: AttachProviderOptions = {},
+): Promise<DeploymentSupabase | null> {
+  return attachProviderAndTransition<DeploymentSupabaseInput, BuildersDbDeploymentSupabaseRow, DeploymentSupabase>(
+    'supabase',
+    input,
+    toDeploymentSupabaseUpsert,
     fromDeploymentSupabaseRow,
+    options,
   );
-
-  if (result) {
-    await recordDeploymentEvent({
-      deploymentId: input.deploymentId,
-      projectId: input.projectId,
-      eventType: 'supabase_connected',
-      provider: 'supabase',
-    });
-  }
-
-  return result;
 }
 
-/** Attaches (or updates) this Deployment's Vercel connection. Exactly one per deployment — upserts on `deployment_id`. */
-export async function attachVercel(input: DeploymentVercelInput): Promise<DeploymentVercel | null> {
-  const result = await attachProvider<BuildersDbDeploymentVercelRow, DeploymentVercel>(
-    'builders_deployment_vercel',
-    'attachVercel',
-    toDeploymentVercelUpsert(input),
+/**
+ * Attaches (or updates) this Deployment's Vercel connection, transitions the Deployment lifecycle
+ * (`database_connected -> environment_ready` by default), and records the matching Deployment
+ * History event — same shape as `attachGithub`, for Sprint 90 to build on.
+ */
+export async function attachVercel(
+  input: DeploymentVercelInput,
+  options: AttachProviderOptions = {},
+): Promise<DeploymentVercel | null> {
+  return attachProviderAndTransition<DeploymentVercelInput, BuildersDbDeploymentVercelRow, DeploymentVercel>(
+    'vercel',
+    input,
+    toDeploymentVercelUpsert,
     fromDeploymentVercelRow,
+    options,
   );
-
-  if (result) {
-    await recordDeploymentEvent({
-      deploymentId: input.deploymentId,
-      projectId: input.projectId,
-      eventType: 'vercel_connected',
-      provider: 'vercel',
-    });
-  }
-
-  return result;
 }
 
 export async function getDeploymentGithub(deploymentId: string): Promise<DeploymentGithub | null> {

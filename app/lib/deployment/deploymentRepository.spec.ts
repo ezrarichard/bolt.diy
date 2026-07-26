@@ -185,24 +185,22 @@ describe('deploymentRepository', () => {
 
       expect(ok).toBe(false);
     });
-  });
 
-  describe('attachGithub', () => {
-    it('upserts the github connection on deployment_id and records a history event', async () => {
-      const githubSingle = vi.fn().mockResolvedValue({ data: makeGithubRow(), error: null });
-      const githubSelect = vi.fn().mockReturnValue({ single: githubSingle });
-      const upsert = vi.fn().mockReturnValue({ select: githubSelect });
+    it('uses a caller-supplied eventType instead of the generic status_changed', async () => {
+      const readSingle = vi.fn().mockResolvedValue({ data: { status: 'deploying' }, error: null });
+      const readEq = vi.fn().mockReturnValue({ single: readSingle });
+      const readSelect = vi.fn().mockReturnValue({ eq: readEq });
 
-      const historySingle = vi.fn().mockResolvedValue({
-        data: makeHistoryRow({ event_type: 'github_connected', provider: 'github' }),
-        error: null,
-      });
+      const updateEq = vi.fn().mockResolvedValue({ error: null });
+      const update = vi.fn().mockReturnValue({ eq: updateEq });
+
+      const historySingle = vi.fn().mockResolvedValue({ data: makeHistoryRow(), error: null });
       const historySelect = vi.fn().mockReturnValue({ single: historySingle });
       const historyInsert = vi.fn().mockReturnValue({ select: historySelect });
 
       const from = vi.fn((table: string) => {
-        if (table === 'builders_deployment_github') {
-          return { upsert };
+        if (table === 'builders_project_deployments') {
+          return { select: readSelect, update };
         }
 
         if (table === 'builders_deployment_history') {
@@ -210,6 +208,65 @@ describe('deploymentRepository', () => {
         }
 
         throw new Error(`unexpected table: ${table}`);
+      });
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      const ok = await updateDeploymentStatus('dep-1', 'proj-1', 'deployed', { eventType: 'deployment_successful' });
+
+      expect(ok).toBe(true);
+      expect(historyInsert).toHaveBeenCalledWith(expect.objectContaining({ event_type: 'deployment_successful' }));
+    });
+  });
+
+  describe('attachGithub', () => {
+    /** Builds the shared mock chain for `attachGithub`'s multi-table call sequence: read the Deployment's current status, check for an existing github row, upsert it, advance Deployment.status, then insert one history event. */
+    function makeAttachGithubMocks(options: {
+      currentStatus: string;
+      existingGithubRow: { id: string } | null;
+      githubRow?: Record<string, unknown>;
+    }) {
+      const deploymentReadSingle = vi.fn().mockResolvedValue({ data: { status: options.currentStatus }, error: null });
+      const deploymentReadEq = vi.fn().mockReturnValue({ single: deploymentReadSingle });
+      const deploymentSelect = vi.fn().mockReturnValue({ eq: deploymentReadEq });
+
+      const deploymentUpdateEq = vi.fn().mockResolvedValue({ error: null });
+      const deploymentUpdate = vi.fn().mockReturnValue({ eq: deploymentUpdateEq });
+
+      const existingMaybeSingle = vi.fn().mockResolvedValue({ data: options.existingGithubRow, error: null });
+      const existingEq = vi.fn().mockReturnValue({ maybeSingle: existingMaybeSingle });
+      const githubExistingSelect = vi.fn().mockReturnValue({ eq: existingEq });
+
+      const upsertSingle = vi.fn().mockResolvedValue({ data: options.githubRow ?? makeGithubRow(), error: null });
+      const upsertSelect = vi.fn().mockReturnValue({ single: upsertSingle });
+      const upsert = vi.fn().mockReturnValue({ select: upsertSelect });
+
+      const historySingle = vi.fn().mockResolvedValue({ data: makeHistoryRow(), error: null });
+      const historySelect = vi.fn().mockReturnValue({ single: historySingle });
+      const historyInsert = vi.fn().mockReturnValue({ select: historySelect });
+
+      const from = vi.fn((table: string) => {
+        if (table === 'builders_project_deployments') {
+          return { select: deploymentSelect, update: deploymentUpdate };
+        }
+
+        if (table === 'builders_deployment_github') {
+          return { select: githubExistingSelect, upsert };
+        }
+
+        if (table === 'builders_deployment_history') {
+          return { insert: historyInsert };
+        }
+
+        throw new Error(`unexpected table: ${table}`);
+      });
+
+      return { from, deploymentUpdate, upsert, historyInsert };
+    }
+
+    it('upserts the github connection, advances the lifecycle, and records a repository_connected event on first connect', async () => {
+      const { from, deploymentUpdate, upsert, historyInsert } = makeAttachGithubMocks({
+        currentStatus: 'generated',
+        existingGithubRow: null,
       });
       getBuildersDbClientMock.mockReturnValue({ from });
 
@@ -224,10 +281,43 @@ describe('deploymentRepository', () => {
         expect.objectContaining({ deployment_id: 'dep-1', repo_owner: 'acme', repo_name: 'my-app' }),
         { onConflict: 'deployment_id' },
       );
+      expect(deploymentUpdate).toHaveBeenCalledWith({ status: 'repository_connected' });
       expect(result?.repoFullName).toBe('acme/my-app');
       expect(historyInsert).toHaveBeenCalledWith(
-        expect.objectContaining({ event_type: 'github_connected', provider: 'github' }),
+        expect.objectContaining({
+          event_type: 'repository_connected',
+          from_status: 'generated',
+          to_status: 'repository_connected',
+          provider: 'github',
+        }),
       );
+    });
+
+    it('records a repository_updated event (not repository_connected) when a github row already exists', async () => {
+      const { from, historyInsert } = makeAttachGithubMocks({
+        currentStatus: 'repository_connected',
+        existingGithubRow: { id: 'gh-1' },
+      });
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      await attachGithub({ deploymentId: 'dep-1', projectId: 'proj-1', repoOwner: 'acme', repoName: 'my-app' });
+
+      expect(historyInsert).toHaveBeenCalledWith(expect.objectContaining({ event_type: 'repository_updated' }));
+    });
+
+    it('rejects an illegal transition and writes nothing', async () => {
+      const { from, upsert, deploymentUpdate, historyInsert } = makeAttachGithubMocks({
+        currentStatus: 'released',
+        existingGithubRow: null,
+      });
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      const result = await attachGithub({ deploymentId: 'dep-1', projectId: 'proj-1' });
+
+      expect(result).toBeNull();
+      expect(upsert).not.toHaveBeenCalled();
+      expect(deploymentUpdate).not.toHaveBeenCalled();
+      expect(historyInsert).not.toHaveBeenCalled();
     });
 
     it('returns null without throwing when BuildersDB is unconfigured', async () => {
