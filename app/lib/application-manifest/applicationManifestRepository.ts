@@ -6,6 +6,8 @@ import type {
   ApplicationManifestDraft,
   ManifestFingerprints,
   ManifestPersistResult,
+  ManifestRouteDeclaration,
+  ManifestVerificationEndpoint,
 } from './manifestTypes';
 
 /**
@@ -77,6 +79,10 @@ interface ManifestRow {
     requiredServices?: string[];
     buildCommand?: string;
     outputDirectory?: string;
+
+    /** Sprint 92, Part 8/12 — see `ManifestRouteDeclaration`/`ManifestVerificationEndpoint` (manifestTypes.ts). Same `metadata`-not-a-column discipline. */
+    routes?: ManifestRouteDeclaration[];
+    verificationEndpoints?: ManifestVerificationEndpoint[];
   } | null;
   persisted_at: string;
   created_by: string | null;
@@ -140,6 +146,8 @@ function fromManifestRow(row: ManifestRow): ApplicationManifest {
     requiredServices: row.metadata?.requiredServices ?? undefined,
     buildCommand: row.metadata?.buildCommand ?? undefined,
     outputDirectory: row.metadata?.outputDirectory ?? undefined,
+    routes: row.metadata?.routes ?? undefined,
+    verificationEndpoints: row.metadata?.verificationEndpoints ?? undefined,
     persistedAt: row.persisted_at,
     createdBy: row.created_by ?? undefined,
     createdAt: row.created_at,
@@ -346,6 +354,8 @@ export async function saveApplicationManifest(
           requiredServices: draft.requiredServices,
           buildCommand: draft.buildCommand,
           outputDirectory: draft.outputDirectory,
+          routes: draft.routes,
+          verificationEndpoints: draft.verificationEndpoints,
         },
         persisted_at: new Date().toISOString(),
         created_by: options.createdBy ?? null,

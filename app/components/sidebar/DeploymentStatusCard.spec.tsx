@@ -8,18 +8,25 @@ import type {
 } from '~/lib/deployment/deploymentTypes';
 import type { Project } from '~/lib/stores/projects';
 
-const { getDeploymentWithProvidersMock, getDeploymentHistoryMock, getActiveApplicationManifestMock } = vi.hoisted(
-  () => ({
-    getDeploymentWithProvidersMock: vi.fn(),
-    getDeploymentHistoryMock: vi.fn(),
-    getActiveApplicationManifestMock: vi.fn(),
-  }),
-);
+const {
+  getDeploymentWithProvidersMock,
+  getDeploymentHistoryMock,
+  getActiveApplicationManifestMock,
+  getLatestDeploymentVerificationMock,
+} = vi.hoisted(() => ({
+  getDeploymentWithProvidersMock: vi.fn(),
+  getDeploymentHistoryMock: vi.fn(),
+  getActiveApplicationManifestMock: vi.fn(),
+
+  // Sprint 92 — the card now renders DeploymentVerificationPanel, which reads the latest report.
+  getLatestDeploymentVerificationMock: vi.fn(),
+}));
 
 vi.mock('~/lib/deployment/deploymentRepository', () => ({
   deploymentRepository: {
     getDeploymentWithProviders: getDeploymentWithProvidersMock,
     getDeploymentHistory: getDeploymentHistoryMock,
+    getLatestDeploymentVerification: getLatestDeploymentVerificationMock,
   },
 }));
 
@@ -131,6 +138,19 @@ describe('DeploymentStatusCard', () => {
     getDeploymentHistoryMock.mockReset();
     getActiveApplicationManifestMock.mockReset();
     getActiveApplicationManifestMock.mockResolvedValue(null);
+    getLatestDeploymentVerificationMock.mockReset();
+    getLatestDeploymentVerificationMock.mockResolvedValue(null);
+  });
+
+  it('renders the Verification section, sourced from the Deployment verification domain (Sprint 92)', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(makeDeployment({ status: 'deployed' }));
+    getDeploymentHistoryMock.mockResolvedValue([]);
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    expect(await screen.findByText('Verification')).toBeTruthy();
+    await waitFor(() => expect(getLatestDeploymentVerificationMock).toHaveBeenCalledWith('dep-1'));
+    expect(screen.getByRole('button', { name: 'Run Verification' })).toBeTruthy();
   });
 
   it('shows repository name, owner, branch, connection status, and an Open Repository link', async () => {

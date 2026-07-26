@@ -18,6 +18,16 @@ import {
   type BuildersDbProjectDeploymentRow,
 } from '~/lib/deployment/deploymentDbTypes';
 import { isValidDeploymentStatusTransition } from '~/lib/deployment/lifecycleTransitions';
+import {
+  fromDeploymentVerificationRow,
+  toDeploymentVerificationInsert,
+  type BuildersDbDeploymentVerificationRow,
+} from '~/lib/deployment/verificationDbTypes';
+import {
+  reportPermitsVerified,
+  type DeploymentVerification,
+  type VerificationReport,
+} from '~/lib/deployment/verificationTypes';
 import type {
   Deployment,
   DeploymentDraft,
@@ -32,6 +42,8 @@ import type {
   DeploymentVercelInput,
   DeploymentWithProviders,
 } from '~/lib/deployment/deploymentTypes';
+
+export type { DeploymentVerification, VerificationReport } from '~/lib/deployment/verificationTypes';
 
 export type {
   Deployment,
@@ -75,6 +87,16 @@ export type {
  * losing the mismatch. A real cross-table transaction would need a dedicated Postgres function
  * (the way `builders_record_ai_usage` is one) — out of scope for this internal refactor, and not
  * needed unless a partial-failure incident actually occurs in practice.
+ *
+ * Sprint 92 revisits exactly that judgement for ONE operation and reaches the opposite conclusion:
+ * `recordDeploymentVerification` DOES use a Postgres transaction
+ * (`builders_finalize_deployment_verification`). The difference is what a partial failure looks
+ * like. A half-finished `attachGithub` is self-evident on the next read — the provider row is
+ * either present or it isn't. A half-finished verification is MISLEADING: "Deployment says
+ * verified" with no report behind it, or "report says passed" with the Deployment still `deployed`
+ * and no history event, both of which read as authoritative. See that migration's header comment
+ * for the full rationale. Nothing else in this file changed; the paragraph above still describes
+ * every other operation here.
  */
 
 const { unavailable, logError } = createRepositoryLogger('DeploymentRepository');
@@ -790,6 +812,278 @@ export async function getDeploymentHistory(deploymentId: string): Promise<Deploy
   }
 }
 
+/**
+ * Deployment Verification — Sprint 92, Part 14/17.
+ *
+ * Statuses a verification attempt may START from. `deployed` is the normal case; `verified` is the
+ * explicitly-supported retry state (re-verifying an already-verified Deployment is legitimate — a
+ * redeploy, a corrected environment variable — and is handled without duplicating the lifecycle
+ * event, see `recordDeploymentVerification`). Every other status is refused: verifying a
+ * Deployment that has not actually deployed would be verifying nothing.
+ */
+const VERIFICATION_ALLOWED_FROM_STATUSES: DeploymentStatus[] = ['deployed', 'verified'];
+
+export type StartVerificationFailureCode = 'unavailable' | 'not_deployed' | 'already_running' | 'error';
+
+export type StartVerificationResult =
+  | { ok: true; verification: DeploymentVerification }
+  | { ok: false; code: StartVerificationFailureCode; message: string };
+
+/** Postgres unique-violation — here, the partial unique index that allows only one `running` verification per deployment. */
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && 'code' in error && (error as { code?: string }).code === '23505'
+  );
+}
+
+/**
+ * Opens a verification attempt: validates the Deployment is in a verifiable state, allocates the
+ * next `verification_number`, and inserts the `running` row that
+ * `recordDeploymentVerification` will later finalise. Also records the one
+ * `verification_started` history event.
+ *
+ * Duplicate-run protection (Part 17) is the DATABASE's, not this function's: the partial unique
+ * index `builders_deployment_verifications_one_active_idx` rejects a second `running` row for the
+ * same deployment, so two browser tabs (or a double-clicked button) cannot start parallel runs
+ * even though they never see each other's state.
+ */
+export async function startDeploymentVerification(params: {
+  deploymentId: string;
+  projectId: string;
+  policyVersion: string;
+  targetUrl?: string;
+  vercelDeploymentId?: string;
+  createdBy?: string;
+}): Promise<StartVerificationResult> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('startDeploymentVerification');
+    return { ok: false, code: 'unavailable', message: 'BuildersDB is not configured.' };
+  }
+
+  try {
+    const { data: deploymentRow, error: deploymentError } = await client
+      .from('builders_project_deployments')
+      .select('status')
+      .eq('id', params.deploymentId)
+      .single();
+
+    if (deploymentError) {
+      throw deploymentError;
+    }
+
+    const status = deploymentRow.status as DeploymentStatus;
+
+    if (!VERIFICATION_ALLOWED_FROM_STATUSES.includes(status)) {
+      return {
+        ok: false,
+        code: 'not_deployed',
+        message: `This Deployment must be deployed before it can be verified (currently: ${status}).`,
+      };
+    }
+
+    const { data: latestRows, error: latestError } = await client
+      .from('builders_deployment_verifications')
+      .select('verification_number')
+      .eq('deployment_id', params.deploymentId)
+      .order('verification_number', { ascending: false })
+      .limit(1);
+
+    if (latestError) {
+      throw latestError;
+    }
+
+    const verificationNumber =
+      ((latestRows?.[0] as { verification_number?: number } | undefined)?.verification_number ?? 0) + 1;
+
+    const { data, error } = await client
+      .from('builders_deployment_verifications')
+      .insert(
+        toDeploymentVerificationInsert({
+          deploymentId: params.deploymentId,
+          projectId: params.projectId,
+          verificationNumber,
+          policyVersion: params.policyVersion,
+          targetUrl: params.targetUrl,
+          vercelDeploymentId: params.vercelDeploymentId,
+          createdBy: params.createdBy,
+        }),
+      )
+      .select('*')
+      .single();
+
+    if (error) {
+      if (isUniqueViolation(error)) {
+        return {
+          ok: false,
+          code: 'already_running',
+          message: 'A verification is already running for this Deployment.',
+        };
+      }
+
+      throw error;
+    }
+
+    const verification = fromDeploymentVerificationRow(data as BuildersDbDeploymentVerificationRow);
+
+    await recordDeploymentEvent({
+      deploymentId: params.deploymentId,
+      projectId: params.projectId,
+      eventType: 'verification_started',
+      fromStatus: status,
+      toStatus: status,
+      provider: 'vercel',
+      message: `Verification #${verificationNumber} started${params.targetUrl ? ` for ${params.targetUrl}` : ''}.`,
+      metadata: { verificationId: verification.id, verificationNumber, policyVersion: params.policyVersion },
+      createdBy: params.createdBy,
+    });
+
+    return { ok: true, verification };
+  } catch (error) {
+    logError('startDeploymentVerification', error);
+    return { ok: false, code: 'error', message: 'Could not start verification — check server logs for details.' };
+  }
+}
+
+export interface RecordVerificationResult {
+  ok: boolean;
+
+  /** True when this call moved the Deployment `deployed -> verified`. */
+  transitioned: boolean;
+
+  /** True when the Deployment was ALREADY verified, so no second lifecycle event was written (Part 17). */
+  duplicate: boolean;
+  deploymentStatus?: DeploymentStatus;
+  message: string;
+}
+
+/**
+ * Part 14 — the ONE repository operation that finalises a verification. Persists the report,
+ * transitions `deployed -> verified` when (and only when) the report permits it, and records
+ * exactly one canonical history event — all three inside a single Postgres transaction
+ * (`builders_finalize_deployment_verification`), because a partial failure here would leave
+ * genuinely misleading state (see that function's own comment in the migration for the full
+ * rationale, and why the rest of this file legitimately does NOT need a transaction).
+ *
+ * The pass/warning rule itself is not duplicated here — `reportPermitsVerified`
+ * (`verificationTypes.ts`) is the single source, and its answer is passed to the transaction.
+ * A failed report is still persisted in full; it simply never transitions.
+ */
+export async function recordDeploymentVerification(
+  verificationId: string,
+  report: VerificationReport,
+  options: { performedBy?: string } = {},
+): Promise<RecordVerificationResult> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('recordDeploymentVerification');
+    return { ok: false, transitioned: false, duplicate: false, message: 'BuildersDB is not configured.' };
+  }
+
+  try {
+    const { data, error } = await client.rpc('builders_finalize_deployment_verification', {
+      p_verification_id: verificationId,
+      p_status: report.status,
+      p_summary: report.summary,
+      p_checks: report.checks,
+      p_message: report.message,
+      p_final_url: report.finalUrl ?? null,
+      p_duration_ms: report.durationMs ?? null,
+      p_permits_verified: reportPermitsVerified(report),
+      p_created_by: options.performedBy ?? null,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const result = (data ?? {}) as {
+      transitioned?: boolean;
+      duplicate?: boolean;
+      deploymentStatus?: DeploymentStatus;
+    };
+
+    return {
+      ok: true,
+      transitioned: result.transitioned === true,
+      duplicate: result.duplicate === true,
+      deploymentStatus: result.deploymentStatus,
+      message: report.message,
+    };
+  } catch (error) {
+    logError('recordDeploymentVerification', error);
+
+    /*
+     * The report could not be persisted. The Deployment is deliberately left as-is: never mark
+     * `verified` outside the transaction that also stores the evidence for it (Part 23).
+     */
+    return {
+      ok: false,
+      transitioned: false,
+      duplicate: false,
+      message: 'Verification finished, but its report could not be saved — the Deployment was left unchanged.',
+    };
+  }
+}
+
+/** The most recent attempt for a deployment, running or finished. */
+export async function getLatestDeploymentVerification(deploymentId: string): Promise<DeploymentVerification | null> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('getLatestDeploymentVerification');
+    return null;
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_deployment_verifications')
+      .select('*')
+      .eq('deployment_id', deploymentId)
+      .order('verification_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    return data ? fromDeploymentVerificationRow(data as BuildersDbDeploymentVerificationRow) : null;
+  } catch (error) {
+    logError('getLatestDeploymentVerification', error);
+    return null;
+  }
+}
+
+/** Every attempt for a deployment, newest first — older evidence is never overwritten (Part 15). */
+export async function listDeploymentVerifications(deploymentId: string): Promise<DeploymentVerification[]> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('listDeploymentVerifications');
+    return [];
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_deployment_verifications')
+      .select('*')
+      .eq('deployment_id', deploymentId)
+      .order('verification_number', { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    return (data ?? []).map((row) => fromDeploymentVerificationRow(row as BuildersDbDeploymentVerificationRow));
+  } catch (error) {
+    logError('listDeploymentVerifications', error);
+    return [];
+  }
+}
+
 export const deploymentRepository = {
   createDeployment,
   getDeploymentByProject,
@@ -805,4 +1099,8 @@ export const deploymentRepository = {
   getDeploymentVercel,
   recordDeploymentEvent,
   getDeploymentHistory,
+  startDeploymentVerification,
+  recordDeploymentVerification,
+  getLatestDeploymentVerification,
+  listDeploymentVerifications,
 };

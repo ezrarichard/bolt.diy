@@ -73,6 +73,53 @@ export type ManifestFileCategory =
 
 export type ApplicationManifestStatus = 'active' | 'superseded';
 
+/**
+ * Sprint 92 (Deployment Verification, Part 8) — one client route the generated application
+ * actually declares. Copied verbatim from `GenerationPlanPage` (`codeGenerationTypes.ts`), which is
+ * ALSO what `projectScaffolder.ts`'s `appTsxFile` writes into the generated `App.tsx`'s
+ * `<Route path=...>` list — so this is a record of the routing that was really generated, never a
+ * guess derived from a project/page name. Deployment Verification's route discovery reads exactly
+ * this (see `verificationPolicy.ts`'s `discoverVerifiableRoutes`), which is why it can refuse to
+ * crawl: it never has to.
+ *
+ * Optional on the draft, and stored in `metadata` rather than as a new column — the same
+ * discipline `mvpCode`/`featureScope`/`environmentRequirements` already established — so every
+ * manifest built before this sprint stays valid with `routes` simply undefined (verification then
+ * degrades to root-only, which is what `resolveVerificationPolicy` does).
+ */
+export interface ManifestRouteDeclaration {
+  /** The router path exactly as generated, e.g. `/` or `/about`. May contain `:params` — the verification policy filters those out itself rather than this builder pre-judging them. */
+  path: string;
+  name: string;
+  componentName: string;
+
+  /** The manifest file implementing this route, e.g. `src/pages/Home.tsx`. */
+  filePath: string;
+}
+
+/**
+ * Sprint 92 (Deployment Verification, Part 12) — an explicitly-declared, explicitly-safe endpoint
+ * a live deployment may be probed with. NOTHING in this codebase populates this today, and that is
+ * deliberate: Part 12 forbids inferring a safe API call from an arbitrary route name, so the
+ * `'api'` verification category simply skips until a generator (or an operator-supplied
+ * configuration) declares a real contract here. The type exists now so that declaring one later
+ * needs no schema or verification-engine change.
+ */
+export interface ManifestVerificationEndpoint {
+  path: string;
+  method: 'GET' | 'HEAD';
+  expectedStatus: number;
+  expectedContentType?: string;
+
+  /** Must be `true`. An endpoint declared without it is ignored by the verification policy — see `resolveVerificationPolicy`. */
+  nonDestructive: boolean;
+
+  /** `true` means the endpoint needs credentials Builders does not hold — the check is reported `unavailable`, never attempted. */
+  requiresAuthentication?: boolean;
+  timeoutMs?: number;
+  required?: boolean;
+}
+
 /** One planned file, before it's ever been persisted (no id/manifestId/timestamps yet) — what manifestBuilder.ts produces and applicationManifestRepository.ts inserts. */
 export interface ApplicationManifestFileDraft {
   path: string;
@@ -216,6 +263,12 @@ export interface ApplicationManifestDraft {
 
   /** Where the build command's output lands, relative to the project root — `"dist"` for the Vite template. */
   outputDirectory?: string;
+
+  /** Sprint 92, Part 8 — see `ManifestRouteDeclaration`. Undefined for every manifest built before this sprint. */
+  routes?: ManifestRouteDeclaration[];
+
+  /** Sprint 92, Part 12 — see `ManifestVerificationEndpoint`. Nothing populates this yet, by design. */
+  verificationEndpoints?: ManifestVerificationEndpoint[];
 }
 
 export interface ApplicationManifest extends ApplicationManifestDraft {

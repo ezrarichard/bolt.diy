@@ -253,6 +253,32 @@ describe('buildApplicationManifest — Sprint 86 Part 5 (deployment metadata)', 
   });
 });
 
+describe('buildApplicationManifest — Sprint 92 Part 8 (route declarations)', () => {
+  it('records every planned route exactly as the scaffolder wires it into App.tsx', () => {
+    const result = buildApplicationManifest({ projectId: 'proj-1', plan: makePlan() });
+
+    expect(result.manifest?.routes).toEqual([
+      { path: '/', name: 'Home', componentName: 'HomePage', filePath: 'src/pages/HomePage.tsx' },
+      { path: '/about', name: 'About', componentName: 'AboutPage', filePath: 'src/pages/AboutPage.tsx' },
+    ]);
+  });
+
+  it('points each route at a file the manifest itself plans', () => {
+    const result = buildApplicationManifest({ projectId: 'proj-1', plan: makePlan() });
+    const paths = new Set(result.files.map((file) => file.path));
+
+    for (const route of result.manifest?.routes ?? []) {
+      expect(paths.has(route.filePath)).toBe(true);
+    }
+  });
+
+  it('declares no verification endpoints — a safe endpoint is never inferred', () => {
+    const result = buildApplicationManifest({ projectId: 'proj-1', plan: makePlan() });
+
+    expect(result.manifest?.verificationEndpoints).toBeUndefined();
+  });
+});
+
 describe('buildApplicationManifest — Sprint 79 Phase 1 Backend Module planning', () => {
   it('plans exactly the six-file vertical slice for one Backend Module, tagged with its featureIds and dependency-chained', () => {
     const result = buildApplicationManifest({

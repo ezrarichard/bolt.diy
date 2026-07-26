@@ -11,6 +11,8 @@ import { assessSupabaseReadiness } from '~/lib/services/supabaseDeployService';
 import { assessEnvironmentReadiness } from '~/lib/services/environmentReadinessService';
 import { getActiveApplicationManifest } from '~/lib/application-manifest/applicationManifestRepository';
 import { VercelDeployDialog } from '~/components/deploy/VercelDeployDialog';
+import { DeploymentVerificationPanel } from '~/components/deploy/DeploymentVerificationPanel';
+import type { ApplicationManifest } from '~/lib/application-manifest/manifestTypes';
 
 /**
  * Deployment Status Card — Sprint 88 (GitHub Product Integration), extended Sprint 89 (Supabase
@@ -80,7 +82,7 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
   const projectId = project.id;
   const [deployment, setDeployment] = useState<DeploymentWithProviders | null>(null);
   const [history, setHistory] = useState<DeploymentHistoryEvent[]>([]);
-  const [environmentRequirements, setEnvironmentRequirements] = useState<string[]>([]);
+  const [manifest, setManifest] = useState<ApplicationManifest | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [reloadToken, setReloadToken] = useState(0);
   const [showVercelDialog, setShowVercelDialog] = useState(false);
@@ -90,7 +92,7 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
     setStatus('loading');
 
     (async () => {
-      const [result, manifest] = await Promise.all([
+      const [result, activeManifest] = await Promise.all([
         deploymentRepository.getDeploymentWithProviders(projectId),
         getActiveApplicationManifest(projectId),
       ]);
@@ -99,7 +101,7 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
         return;
       }
 
-      setEnvironmentRequirements(manifest?.environmentRequirements ?? []);
+      setManifest(activeManifest);
 
       if (!result) {
         setDeployment(null);
@@ -149,6 +151,7 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
     );
   }
 
+  const environmentRequirements = manifest?.environmentRequirements ?? [];
   const deploymentPresentation = deploymentStatusPresentation(deployment.status);
   const { github, supabase } = deployment;
   const latestPush = findLatestEvent(history, ['push_successful']);
@@ -461,6 +464,12 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
           )}
         </div>
       </div>
+
+      <DeploymentVerificationPanel
+        deployment={deployment}
+        manifest={manifest}
+        onVerificationComplete={() => setReloadToken((token) => token + 1)}
+      />
 
       {showVercelDialog && (
         <VercelDeployDialog

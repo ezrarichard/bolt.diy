@@ -6,6 +6,7 @@ import type {
   ApplicationManifestFileDraft,
   BuildManifestResult,
   ManifestFileCategory,
+  ManifestRouteDeclaration,
   ManifestValidationIssue,
 } from './manifestTypes';
 
@@ -497,6 +498,24 @@ export interface BuildManifestInput {
   needsSupabaseEnv?: boolean;
 }
 
+/**
+ * Sprint 92, Part 8 — records the routing that generation ACTUALLY produces. Each entry is the
+ * same `(routePath, componentName)` pair `projectScaffolder.ts`'s `appTsxFile` writes into the
+ * generated `App.tsx`'s `<Route>` list, and `filePath` is the same `src/pages/<fileName>` path
+ * `buildFileDrafts` above plans — so a route declared here is guaranteed to correspond to a real
+ * generated file, never a name-based guess. Nothing is filtered here (dynamic/unsafe routes
+ * included): deciding what is safe to probe is the verification policy's job, and this builder
+ * stays a faithful record of what was generated.
+ */
+function buildRouteDeclarations(plan: GenerationPlan): ManifestRouteDeclaration[] {
+  return plan.pages.map((page) => ({
+    path: page.routePath,
+    name: page.name,
+    componentName: page.componentName,
+    filePath: `src/pages/${page.fileName}`,
+  }));
+}
+
 const BUILD_COMMAND = 'npm run build';
 const OUTPUT_DIRECTORY = 'dist';
 const RUNTIME_REQUIREMENTS = ['Node.js'];
@@ -536,6 +555,7 @@ export function buildApplicationManifest(input: BuildManifestInput): BuildManife
       requiredServices: needsSupabaseEnv ? ['Supabase'] : [],
       buildCommand: BUILD_COMMAND,
       outputDirectory: OUTPUT_DIRECTORY,
+      routes: buildRouteDeclarations(input.plan),
     },
   };
 }
