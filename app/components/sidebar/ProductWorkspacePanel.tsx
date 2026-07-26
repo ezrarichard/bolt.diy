@@ -15,6 +15,7 @@ import { buildProductEvolutionView } from '~/lib/projects/productEvolutionView';
 import { BuildersAlert, BuildersButton, BuildersStatusBadge } from '~/components/ui/builders';
 import { MvpTimeline } from './MvpTimeline';
 import { MvpSummaryCard } from './MvpSummaryCard';
+import { DeploymentStatusCard } from './DeploymentStatusCard';
 
 /**
  * Product Workspace Panel — Sprint 84B (Product Evolution Workspace).
@@ -256,6 +257,9 @@ export function ProductWorkspacePanel({ project }: ProductWorkspacePanelProps) {
           <div className="text-sm text-bolt-elements-textPrimary">{view.nextAction.label}</div>
         </div>
       </div>
+
+      {/* Deployment status — Sprint 88 (GitHub Product Integration). */}
+      <DeploymentStatusCard projectId={project.id} />
 
       {/* MVP timeline — Phase 6. */}
       <MvpTimeline

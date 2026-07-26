@@ -2,15 +2,16 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useState, useEffect } from 'react';
 import { toast } from 'react-toastify';
 import { motion } from 'framer-motion';
-import { Octokit } from '@octokit/rest';
 import { classNames } from '~/utils/classNames';
 import { getLocalStorage } from '~/lib/persistence/localStorage';
 import type { GitHubUserResponse, GitHubRepoInfo } from '~/types/GitHub';
 import { logStore } from '~/lib/stores/logs';
-import { chatId } from '~/lib/persistence/useChatHistory';
+import { currentProjectIdStore } from '~/lib/stores/projects';
 import { useStore } from '@nanostores/react';
 import { GitHubAuthDialog } from '~/components/@settings/tabs/github/components/GitHubAuthDialog';
 import { SearchInput, EmptyState, StatusIndicator, Badge } from '~/components/ui';
+import { pushToGithubRepository } from '~/lib/services/githubDeployService';
+import { deploymentRepository } from '~/lib/deployment/deploymentRepository';
 
 interface GitHubDeploymentDialogProps {
   isOpen: boolean;
@@ -32,7 +33,7 @@ export function GitHubDeploymentDialog({ isOpen, onClose, projectName, files }: 
   const [createdRepoUrl, setCreatedRepoUrl] = useState('');
   const [pushedFiles, setPushedFiles] = useState<{ path: string; size: number }[]>([]);
   const [showAuthDialog, setShowAuthDialog] = useState(false);
-  const currentChatId = useStore(chatId);
+  const projectId = useStore(currentProjectIdStore);
 
   /*
    * Load GitHub connection on mount
@@ -222,250 +223,91 @@ export function GitHubDeploymentDialog({ isOpen, onClose, projectName, files }: 
     setIsLoading(true);
 
     try {
-      // Initialize Octokit with the GitHub token
-      const octokit = new Octokit({ auth: connection.token });
-      let repoExists = false;
-
-      try {
-        // Check if the repository already exists - ensure repo name is properly sanitized
-        const sanitizedRepoName = sanitizeRepoName(repoName);
-        const { data: existingRepo } = await octokit.repos.get({
-          owner: connection.user.login,
-          repo: sanitizedRepoName,
-        });
-
-        repoExists = true;
-
-        // If we get here, the repo exists - confirm overwrite
-        let confirmMessage = `Repository "${repoName}" already exists. Do you want to update it? This will add or modify files in the repository.`;
-
-        // Add visibility change warning if needed
-        if (existingRepo.private !== isPrivate) {
-          const visibilityChange = isPrivate
-            ? 'This will also change the repository from public to private.'
-            : 'This will also change the repository from private to public.';
-
-          confirmMessage += `\n\n${visibilityChange}`;
-        }
-
-        const confirmOverwrite = window.confirm(confirmMessage);
-
-        if (!confirmOverwrite) {
-          setIsLoading(false);
-          return;
-        }
-
-        // If visibility needs to be updated
-        if (existingRepo.private !== isPrivate) {
-          await octokit.repos.update({
-            owner: connection.user.login,
-            repo: sanitizedRepoName,
-            private: isPrivate,
-          });
-        }
-      } catch (error: any) {
-        // 404 means repo doesn't exist, which is what we want for new repos
-        if (error.status !== 404) {
-          throw error;
-        }
-      }
-
-      // Create repository if it doesn't exist
-      if (!repoExists) {
-        const sanitizedRepoName = sanitizeRepoName(repoName);
-        const { data: newRepo } = await octokit.repos.createForAuthenticatedUser({
-          name: sanitizedRepoName,
-          private: isPrivate,
-
-          // Initialize with a README to avoid empty repository issues
-          auto_init: true,
-
-          // Create a .gitignore file for the project
-          gitignore_template: 'Node',
-        });
-
-        // Set the URL for success dialog
-        setCreatedRepoUrl(newRepo.html_url);
-
-        // Since we created the repo with auto_init, we need to wait for GitHub to initialize it
-        console.log('Created new repository with auto_init, waiting for GitHub to initialize it...');
-
-        // Wait a moment for GitHub to set up the initial commit
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-      } else {
-        // Set URL for existing repo
-        const sanitizedRepoName = sanitizeRepoName(repoName);
-        setCreatedRepoUrl(`https://github.com/${connection.user.login}/${sanitizedRepoName}`);
-      }
-
-      // Process files to upload
-      const fileEntries = Object.entries(files);
-
-      // Filter out files and format them for display
-      const fileList = fileEntries.map(([filePath, content]) => {
-        // The paths are already properly formatted in the GitHubDeploy component
-        return {
-          path: filePath,
-          size: new TextEncoder().encode(content).length,
-        };
-      });
-
-      setPushedFiles(fileList);
+      const sanitizedRepoName = sanitizeRepoName(repoName);
 
       /*
-       * Now we need to handle the repository, whether it's new or existing
-       * Get the default branch for the repository
+       * Sprint 88 — the actual create-repo/push logic now lives in `githubDeployService.ts`
+       * (extracted verbatim from what used to be inline here); the "confirm overwrite" browser
+       * dialog stays a UI concern, passed in as a callback rather than baked into the service.
        */
-      let defaultBranch: string;
-      let baseSha: string | null = null;
+      const outcome = await pushToGithubRepository({
+        token: connection.token,
+        owner: connection.user.login,
+        repoName: sanitizedRepoName,
+        isPrivate,
+        files,
+        confirmOverwrite: (existing) => {
+          let confirmMessage = `Repository "${repoName}" already exists. Do you want to update it? This will add or modify files in the repository.`;
 
-      try {
-        // For both new and existing repos, get the repository info
-        const sanitizedRepoName = sanitizeRepoName(repoName);
-        const { data: repo } = await octokit.repos.get({
-          owner: connection.user.login,
-          repo: sanitizedRepoName,
-        });
-        defaultBranch = repo.default_branch || 'main';
-        console.log(`Repository default branch: ${defaultBranch}`);
+          if (existing.private !== isPrivate) {
+            const visibilityChange = isPrivate
+              ? 'This will also change the repository from public to private.'
+              : 'This will also change the repository from private to public.';
 
-        // For a newly created repo (or existing one), get the reference to the default branch
-        try {
-          const { data: refData } = await octokit.git.getRef({
-            owner: connection.user.login,
-            repo: sanitizedRepoName,
-            ref: `heads/${defaultBranch}`,
-          });
+            confirmMessage += `\n\n${visibilityChange}`;
+          }
 
-          baseSha = refData.object.sha;
-          console.log(`Found existing reference with SHA: ${baseSha}`);
+          return window.confirm(confirmMessage);
+        },
+      });
 
-          // Get the latest commit to use as a base for our tree
-          const { data: commitData } = await octokit.git.getCommit({
-            owner: connection.user.login,
-            repo: sanitizedRepoName,
-            commit_sha: baseSha,
-          });
-
-          // Store the base tree SHA for tree creation
-          baseSha = commitData.tree.sha;
-          console.log(`Using base tree SHA: ${baseSha}`);
-        } catch (refError) {
-          console.error('Error getting reference:', refError);
-          baseSha = null;
-        }
-      } catch (repoError) {
-        console.error('Error getting repository info:', repoError);
-        defaultBranch = 'main';
-        baseSha = null;
+      if (outcome.status === 'cancelled') {
+        return;
       }
 
-      try {
-        console.log('Creating tree for repository');
+      const { result } = outcome;
 
-        // Create a tree with all files
-        const tree = fileEntries.map(([filePath, content]) => ({
-          path: filePath, // We've already formatted the paths correctly
-          mode: '100644' as const, // Regular file
-          type: 'blob' as const,
-          content,
-        }));
+      setCreatedRepoUrl(result.repoUrl);
+      setPushedFiles(result.filesPushed);
 
-        console.log(`Creating tree with ${tree.length} files using base: ${baseSha || 'none'}`);
-
-        // Create a tree with all the files, using the base tree if available
-        const sanitizedRepoName = sanitizeRepoName(repoName);
-        const { data: treeData } = await octokit.git.createTree({
-          owner: connection.user.login,
-          repo: sanitizedRepoName,
-          tree,
-          base_tree: baseSha || undefined,
+      /*
+       * Sprint 88 — Deployment domain integration: the Deployment becomes the ONLY persistent
+       * owner of this repository's identity. The old chat-scoped `github-repo-${chatId}`
+       * localStorage write (which nothing ever read back) is gone — `attachGithub` persists
+       * repo identity, transitions the Deployment lifecycle, and records the history event, all
+       * through `DeploymentRepository`, never a second, parallel store.
+       */
+      if (projectId) {
+        const deployment = await deploymentRepository.ensureDeploymentForProject(projectId, {
+          createdBy: connection.user.login,
+          seedStatus: 'generated',
         });
 
-        console.log('Tree created successfully', treeData.sha);
+        if (deployment) {
+          const github = await deploymentRepository.attachGithub(
+            {
+              deploymentId: deployment.id,
+              projectId,
+              repoOwner: result.repoOwner,
+              repoName: result.repoName,
+              repoFullName: result.repoFullName,
+              repoUrl: result.repoUrl,
+              defaultBranch: result.defaultBranch,
+              visibility: result.visibility,
+              status: 'connected',
+            },
+            { performedBy: connection.user.login },
+          );
 
-        // Get the current reference to use as parent for our commit
-        let parentCommitSha: string | null = null;
-
-        try {
-          const { data: refData } = await octokit.git.getRef({
-            owner: connection.user.login,
-            repo: sanitizedRepoName,
-            ref: `heads/${defaultBranch}`,
-          });
-          parentCommitSha = refData.object.sha;
-          console.log(`Found parent commit: ${parentCommitSha}`);
-        } catch (refError) {
-          console.log('No reference found, this is a brand new repo', refError);
-          parentCommitSha = null;
-        }
-
-        // Create a commit with the tree
-        console.log('Creating commit');
-
-        const { data: commitData } = await octokit.git.createCommit({
-          owner: connection.user.login,
-          repo: sanitizedRepoName,
-          message: !repoExists ? 'Initial commit from Builders' : 'Update from Builders',
-          tree: treeData.sha,
-          parents: parentCommitSha ? [parentCommitSha] : [], // Use parent if available
-        });
-
-        console.log('Commit created successfully', commitData.sha);
-
-        // Update the reference to point to the new commit
-        try {
-          console.log(`Updating reference: heads/${defaultBranch} to ${commitData.sha}`);
-          await octokit.git.updateRef({
-            owner: connection.user.login,
-            repo: sanitizedRepoName,
-            ref: `heads/${defaultBranch}`,
-            sha: commitData.sha,
-            force: true, // Use force to ensure the update works
-          });
-          console.log('Reference updated successfully');
-        } catch (refError) {
-          console.log('Failed to update reference, attempting to create it', refError);
-
-          // If the reference doesn't exist, create it (shouldn't happen with auto_init, but just in case)
-          try {
-            await octokit.git.createRef({
-              owner: connection.user.login,
-              repo: sanitizedRepoName,
-              ref: `refs/heads/${defaultBranch}`,
-              sha: commitData.sha,
+          if (github) {
+            await deploymentRepository.recordDeploymentEvent({
+              deploymentId: deployment.id,
+              projectId,
+              eventType: 'push_successful',
+              provider: 'github',
+              message: `Pushed ${result.filesPushed.length} file(s) to ${result.repoFullName}`,
+              metadata: {
+                commitSha: result.commitSha,
+                filesPushed: result.filesPushed.length,
+                branch: result.defaultBranch,
+              },
+              createdBy: connection.user.login,
             });
-            console.log('Reference created successfully');
-          } catch (createRefError) {
-            console.error('Error creating reference:', createRefError);
-
-            const errorMsg =
-              typeof createRefError === 'object' && createRefError !== null && 'message' in createRefError
-                ? String(createRefError.message)
-                : 'Unknown error';
-            throw new Error(`Failed to create Git reference: ${errorMsg}`);
           }
         }
-      } catch (gitError) {
-        console.error('Error with git operations:', gitError);
-
-        const gitErrorMsg =
-          typeof gitError === 'object' && gitError !== null && 'message' in gitError
-            ? String(gitError.message)
-            : 'Unknown error';
-        throw new Error(`Failed during git operations: ${gitErrorMsg}`);
+      } else {
+        logStore.logError('GitHub push succeeded with no active project — Deployment was not updated.');
       }
-
-      // Save the repository information for this chat
-      const sanitizedRepoName = sanitizeRepoName(repoName);
-      localStorage.setItem(
-        `github-repo-${currentChatId}`,
-        JSON.stringify({
-          owner: connection.user.login,
-          name: sanitizedRepoName,
-          url: `https://github.com/${connection.user.login}/${sanitizedRepoName}`,
-        }),
-      );
 
       // Show success dialog
       setShowSuccessDialog(true);

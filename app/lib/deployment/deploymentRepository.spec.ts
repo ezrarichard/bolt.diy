@@ -11,6 +11,7 @@ vi.mock('~/lib/builders-db/client', () => ({
 const {
   createDeployment,
   getDeploymentByProject,
+  ensureDeploymentForProject,
   updateDeploymentStatus,
   attachGithub,
   getDeploymentHistory,
@@ -125,6 +126,43 @@ describe('deploymentRepository', () => {
       const result = await getDeploymentByProject('proj-1');
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe('ensureDeploymentForProject', () => {
+    it('returns the existing deployment without creating a new one', async () => {
+      const row = makeDeploymentRow();
+      const maybeSingle = vi.fn().mockResolvedValue({ data: row, error: null });
+      const eq = vi.fn().mockReturnValue({ maybeSingle });
+      const select = vi.fn().mockReturnValue({ eq });
+      const insert = vi.fn();
+      getBuildersDbClientMock.mockReturnValue({ from: () => ({ select, insert }) });
+
+      const result = await ensureDeploymentForProject('proj-1');
+
+      expect(result?.id).toBe('dep-1');
+      expect(insert).not.toHaveBeenCalled();
+    });
+
+    it('creates a deployment and seeds it at the requested status when none exists yet', async () => {
+      const maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
+      const readEq = vi.fn().mockReturnValue({ maybeSingle });
+      const select = vi.fn().mockReturnValue({ eq: readEq });
+
+      const insertSingle = vi.fn().mockResolvedValue({ data: makeDeploymentRow({ status: 'planning' }), error: null });
+      const insertSelect = vi.fn().mockReturnValue({ single: insertSingle });
+      const insert = vi.fn().mockReturnValue({ select: insertSelect });
+
+      const updateEq = vi.fn().mockResolvedValue({ error: null });
+      const update = vi.fn().mockReturnValue({ eq: updateEq });
+
+      getBuildersDbClientMock.mockReturnValue({ from: () => ({ select, insert, update }) });
+
+      const result = await ensureDeploymentForProject('proj-1', { seedStatus: 'generated' });
+
+      expect(insert).toHaveBeenCalled();
+      expect(update).toHaveBeenCalledWith({ status: 'generated' });
+      expect(result?.status).toBe('generated');
     });
   });
 
@@ -366,6 +404,89 @@ describe('deploymentRepository', () => {
       const result = await getDeploymentHistory('dep-1');
 
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('multi-project isolation', () => {
+    /**
+     * Sprint 88 Part 8 — every attach call is always scoped to the caller-supplied
+     * `deploymentId`/`projectId`; nothing in this repository resolves "the current" deployment
+     * implicitly, so attaching GitHub for Project A's deployment can never touch Project B's row
+     * — there is no shared, ambient state for two concurrent attach calls to collide on.
+     */
+    it('scopes attachGithub strictly to the deploymentId/projectId passed in, never a shared default', async () => {
+      function makeMocksFor(deploymentId: string, projectId: string) {
+        const deploymentReadSingle = vi.fn().mockResolvedValue({ data: { status: 'generated' }, error: null });
+        const deploymentReadEq = vi.fn().mockReturnValue({ single: deploymentReadSingle });
+        const deploymentSelect = vi.fn().mockReturnValue({ eq: deploymentReadEq });
+        const deploymentUpdateEq = vi.fn().mockResolvedValue({ error: null });
+        const deploymentUpdate = vi.fn().mockReturnValue({ eq: deploymentUpdateEq });
+
+        const existingMaybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
+        const existingEq = vi.fn().mockReturnValue({ maybeSingle: existingMaybeSingle });
+        const githubSelect = vi.fn().mockReturnValue({ eq: existingEq });
+
+        const upsertSingle = vi.fn().mockResolvedValue({
+          data: makeGithubRow({ deployment_id: deploymentId, project_id: projectId }),
+          error: null,
+        });
+        const upsertSelect = vi.fn().mockReturnValue({ single: upsertSingle });
+        const upsert = vi.fn().mockReturnValue({ select: upsertSelect });
+
+        const historySingle = vi.fn().mockResolvedValue({ data: makeHistoryRow(), error: null });
+        const historySelect = vi.fn().mockReturnValue({ single: historySingle });
+        const historyInsert = vi.fn().mockReturnValue({ select: historySelect });
+
+        const from = vi.fn((table: string) => {
+          if (table === 'builders_project_deployments') {
+            return { select: deploymentSelect, update: deploymentUpdate };
+          }
+
+          if (table === 'builders_deployment_github') {
+            return { select: githubSelect, upsert };
+          }
+
+          if (table === 'builders_deployment_history') {
+            return { insert: historyInsert };
+          }
+
+          throw new Error(`unexpected table: ${table}`);
+        });
+
+        return { from, upsert, deploymentReadEq, deploymentUpdateEq, historyInsert };
+      }
+
+      const projectA = makeMocksFor('dep-a', 'proj-a');
+      getBuildersDbClientMock.mockReturnValue({ from: projectA.from });
+      await attachGithub({ deploymentId: 'dep-a', projectId: 'proj-a', repoName: 'repo-a' });
+
+      const projectB = makeMocksFor('dep-b', 'proj-b');
+      getBuildersDbClientMock.mockReturnValue({ from: projectB.from });
+      await attachGithub({ deploymentId: 'dep-b', projectId: 'proj-b', repoName: 'repo-b' });
+
+      expect(projectA.deploymentReadEq).toHaveBeenCalledWith('id', 'dep-a');
+      expect(projectA.deploymentUpdateEq).toHaveBeenCalledWith('id', 'dep-a');
+      expect(projectA.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ deployment_id: 'dep-a', project_id: 'proj-a', repo_name: 'repo-a' }),
+        { onConflict: 'deployment_id' },
+      );
+      expect(projectA.historyInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ deployment_id: 'dep-a', project_id: 'proj-a' }),
+      );
+
+      expect(projectB.deploymentReadEq).toHaveBeenCalledWith('id', 'dep-b');
+      expect(projectB.deploymentUpdateEq).toHaveBeenCalledWith('id', 'dep-b');
+      expect(projectB.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ deployment_id: 'dep-b', project_id: 'proj-b', repo_name: 'repo-b' }),
+        { onConflict: 'deployment_id' },
+      );
+      expect(projectB.historyInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ deployment_id: 'dep-b', project_id: 'proj-b' }),
+      );
+
+      // Project A's mocks were never touched by Project B's call, and vice versa.
+      expect(projectA.upsert).toHaveBeenCalledTimes(1);
+      expect(projectB.upsert).toHaveBeenCalledTimes(1);
     });
   });
 });

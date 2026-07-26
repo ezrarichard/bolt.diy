@@ -133,6 +133,62 @@ export async function getDeploymentByProject(projectId: string): Promise<Deploym
   }
 }
 
+/**
+ * Returns the project's existing Deployment, or creates one if this is the project's first ever
+ * provider integration — Sprint 88 (GitHub Product Integration) pre-work: every real provider
+ * integration needs a Deployment row to attach to, and a caller should never have to special-case
+ * "does this project have a Deployment yet."
+ *
+ * `seedStatus` exists because this codebase does not yet wire the earlier `engineering`/
+ * `generated` lifecycle stages to any real signal (the code-generation pipeline that produces
+ * those states isn't itself Deployment-domain-aware yet — a future sprint's work, not this one).
+ * A caller that only reaches this function because generation has ALREADY completed (e.g. the
+ * GitHub "push" flow, which only runs once webcontainer files exist and the build succeeded) may
+ * pass the status that already reflects reality so the very next `attachGithub` call's transition
+ * validates correctly, without synthesizing history events for lifecycle stages this Deployment
+ * never actually visited in a way Deployment History could describe. When omitted, a freshly
+ * created Deployment starts at the table's own default (`'planning'`), matching `createDeployment`.
+ */
+export async function ensureDeploymentForProject(
+  projectId: string,
+  options: { createdBy?: string; seedStatus?: DeploymentStatus } = {},
+): Promise<Deployment | null> {
+  const existing = await getDeploymentByProject(projectId);
+
+  if (existing) {
+    return existing;
+  }
+
+  const created = await createDeployment({ projectId, createdBy: options.createdBy });
+
+  if (!created || !options.seedStatus || options.seedStatus === created.status) {
+    return created;
+  }
+
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('ensureDeploymentForProject');
+    return created;
+  }
+
+  try {
+    const { error } = await client
+      .from('builders_project_deployments')
+      .update({ status: options.seedStatus })
+      .eq('id', created.id);
+
+    if (error) {
+      throw error;
+    }
+
+    return { ...created, status: options.seedStatus };
+  } catch (error) {
+    logError('ensureDeploymentForProject', error);
+    return created;
+  }
+}
+
 /** The Deployment plus every provider connection attached to it — the full picture the Workspace's Deployment surface needs in one call. */
 export async function getDeploymentWithProviders(projectId: string): Promise<DeploymentWithProviders | null> {
   const deployment = await getDeploymentByProject(projectId);
@@ -565,6 +621,7 @@ export async function getDeploymentHistory(deploymentId: string): Promise<Deploy
 export const deploymentRepository = {
   createDeployment,
   getDeploymentByProject,
+  ensureDeploymentForProject,
   getDeploymentWithProviders,
   updateDeploymentStatus,
   attachGithub,
