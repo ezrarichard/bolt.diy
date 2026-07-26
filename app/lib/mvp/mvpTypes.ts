@@ -11,6 +11,8 @@
  * threaded through existing tables rather than a re-parenting of them.
  */
 
+import type { RoadmapSkeletonEntry } from '~/lib/projects/prompts/productOwner';
+
 /**
  * Free text, matching this codebase's existing convention of unconstrained status
  * columns validated at the application layer (see ApplicationManifestFile['status'],
@@ -114,8 +116,15 @@ export type MvpApprovalDecision = 'approved' | 'changes_requested';
  * (Delivery Approval, after Preview) — surfaced as a real gap during the Product Owner design
  * work, since both are legitimate, distinct approval moments that share this same table. See
  * docs/05-AI-Product-Owner/05-customer-review-workflow.md.
+ *
+ * Sprint 81 (Cross-MVP Foundation) adds `'roadmap_review'` — the Customer Approval stage between
+ * an MVP's Roadmap Analysis (Product Owner) and its own Gate A (see
+ * docs/product-management/Product-Management-Architecture.md Part 5). Deliberately does NOT drive
+ * an `Mvp.status` transition the way `'scope'`/`'delivery'` do — see `recordMvpApproval`'s own
+ * comment — it only gates whether Gate A may be invoked for this MVP at all, recorded here for the
+ * same append-only audit trail every other approval decision already gets.
  */
-export type MvpApprovalStage = 'scope' | 'delivery';
+export type MvpApprovalStage = 'scope' | 'delivery' | 'roadmap_review';
 
 export interface MvpApproval {
   id: string;
@@ -136,4 +145,19 @@ export interface MvpApprovalInput {
   decision: MvpApprovalDecision;
   notes?: string;
   decidedBy?: string;
+}
+
+/**
+ * Sprint 81 (Cross-MVP Foundation) — the result of `mvpRepository.resolveNextRoadmapTarget`
+ * (see that function's own comment and
+ * docs/product-management/Product-Management-Architecture.md Part 4). Bundles the three facts a
+ * caller needs together so it never has to make a second round-trip: which `Mvp` row is the
+ * target, which `roadmapSkeleton` entry it elaborates, and which MVP is currently `released` (the
+ * SOURCE a Product Review would be about — see `resolveLatestReleasedMvp`'s own comment for why
+ * that's a separate resolver from this one).
+ */
+export interface RoadmapTargetResolution {
+  targetMvp: Mvp;
+  roadmapEntry: RoadmapSkeletonEntry;
+  previousReleasedMvp: Mvp | undefined;
 }

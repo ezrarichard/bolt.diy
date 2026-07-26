@@ -231,6 +231,21 @@ function parseFeatureIdCounter(id: string): number {
 }
 
 /**
+ * Sprint 81 (Cross-MVP Foundation) — a committed, project-wide Feature identity `assignFeatureIds`
+ * can carry forward against, sourced from `featureRepository.listFeaturesForProject` (real,
+ * persisted `Feature` rows spanning every MVP), not just the current MVP's own previous draft.
+ * Deliberately just `{ id, name }` — the two fields `assignFeatureIds`' name-matching/counter-seed
+ * logic actually needs — rather than the full `Feature` shape, so this engine (which has no
+ * BuildersDB access of its own, see this file's header) stays decoupled from the repository
+ * layer's row shape; the caller adapts real `Feature` rows (`code` -> `id`, `title` -> `name`)
+ * before passing them in.
+ */
+export interface CommittedFeatureIdentity {
+  id: string;
+  name: string;
+}
+
+/**
  * Sprint 46C — assigns permanent feature IDs. NOT derived from array position (a reorder
  * would reassign every ID) or from `name` (a rename would orphan every downstream reference)
  * — see prompts/productOwner.ts's `ProductOwnerFeature.id` comment. Instead: a feature whose
@@ -241,20 +256,51 @@ function parseFeatureIdCounter(id: string): number {
  * silent bug: without title-based matching there is no other signal available, and this
  * codebase's own instructions for this sprint explicitly reject deriving the ID itself from
  * title or position, not the (separate) question of using title as a carry-forward heuristic.
+ *
+ * Sprint 81 (Cross-MVP Foundation) — `committedProjectFeatures` (optional, default `[]`) extends
+ * both the name-matching pool AND the counter seed with every Feature ALREADY COMMITTED anywhere
+ * in the project (not just this MVP's own prior draft — see
+ * docs/product-management/Product-Management-Architecture.md Part 0/1's finding that the
+ * previous behavior would let two different MVPs each mint their own unrelated "FEAT-001").
+ * Listed FIRST in the merged pool so a name match against an already-committed, real Feature
+ * always wins over a same-named match still sitting only in a draft (a committed identity is
+ * more authoritative than an uncommitted one). This is what makes retrying/regenerating a NEW
+ * MVP's plan deterministic: the next available code is always computed from the same
+ * project-wide history, never from an empty "no previous draft" state that would otherwise
+ * restart the counter at `FEAT-001` for every new MVP.
  */
 function assignFeatureIds(
   features: Omit<ProductOwnerFeature, 'id'>[],
   previousFeatures: ProductOwnerFeature[] | undefined,
+  committedProjectFeatures: CommittedFeatureIdentity[] = [],
 ): ProductOwnerFeature[] {
   const previous = previousFeatures ?? [];
-  const previousByName = new Map(previous.map((feature) => [feature.name.trim().toLowerCase(), feature]));
-  let nextCounter = 1 + previous.reduce((max, feature) => Math.max(max, parseFeatureIdCounter(feature.id)), 0);
+  const known: CommittedFeatureIdentity[] = [
+    ...committedProjectFeatures,
+    ...previous.map((feature) => ({ id: feature.id, name: feature.name })),
+  ];
+
+  const byName = new Map<string, string>();
+
+  for (const entry of known) {
+    const key = entry.name.trim().toLowerCase();
+
+    /*
+     * First-wins: committedProjectFeatures is listed first, so an already-committed identity is
+     * never overridden by a same-named match from an uncommitted draft.
+     */
+    if (!byName.has(key)) {
+      byName.set(key, entry.id);
+    }
+  }
+
+  let nextCounter = 1 + known.reduce((max, entry) => Math.max(max, parseFeatureIdCounter(entry.id)), 0);
 
   return features.map((feature) => {
-    const matched = previousByName.get(feature.name.trim().toLowerCase());
+    const matchedId = byName.get(feature.name.trim().toLowerCase());
 
-    if (matched) {
-      return { ...feature, id: matched.id };
+    if (matchedId) {
+      return { ...feature, id: matchedId };
     }
 
     const id = formatFeatureId(nextCounter);
@@ -354,7 +400,11 @@ function toEngineeringHandoffDraft(value: unknown): Omit<EngineeringHandoff, 'fe
   };
 }
 
-function toCurrentMvp(value: unknown, previousMvp: CurrentMvpPlan | undefined): CurrentMvpPlan | undefined {
+function toCurrentMvp(
+  value: unknown,
+  previousMvp: CurrentMvpPlan | undefined,
+  committedProjectFeatures: CommittedFeatureIdentity[] = [],
+): CurrentMvpPlan | undefined {
   if (!value || typeof value !== 'object') {
     return undefined;
   }
@@ -371,8 +421,8 @@ function toCurrentMvp(value: unknown, previousMvp: CurrentMvpPlan | undefined): 
     return undefined;
   }
 
-  // Sprint 46C — assigns permanent feature IDs, carrying forward matches from the previous MVP plan (if this is a regeneration) — see assignFeatureIds's own comment.
-  const features = assignFeatureIds(draftFeatures, previousMvp?.features);
+  // Sprint 46C — assigns permanent feature IDs, carrying forward matches from the previous MVP plan (if this is a regeneration) AND every already-committed Feature project-wide (Sprint 81) — see assignFeatureIds's own comment.
+  const features = assignFeatureIds(draftFeatures, previousMvp?.features, committedProjectFeatures);
 
   const handoffFeatures: HandoffFeatureRef[] = features
     .filter((feature) => feature.priority !== "Won't Have")
@@ -412,8 +462,20 @@ function toCurrentMvp(value: unknown, previousMvp: CurrentMvpPlan | undefined): 
  * Omitting it (the automatic pipeline's first-ever generation, or any caller that doesn't have
  * prior state) is always safe: every feature is simply treated as new and gets the next
  * available id starting from FEAT-001.
+ *
+ * Sprint 81 (Cross-MVP Foundation) — `committedProjectFeatures` (optional, third argument) is the
+ * project-wide carry-forward source `assignFeatureIds` now also draws on (see that function's own
+ * comment). Same "supplied by the caller, not read here" discipline as `previousDraft`: this
+ * engine has no BuildersDB access of its own, so a caller planning a NEW MVP is expected to fetch
+ * `featureRepository.listFeaturesForProject(project.id)` and adapt it (`code` -> `id`, `title` ->
+ * `name`) before calling this. Omitted (defaults to `[]`) for every existing call site — behavior
+ * is byte-for-byte unchanged from before this sprint when this argument isn't supplied.
  */
-function parseDraft(rawText: string, previousDraft?: ProductOwnerDraft): ParsedProductOwnerDraft {
+function parseDraft(
+  rawText: string,
+  previousDraft?: ProductOwnerDraft,
+  committedProjectFeatures: CommittedFeatureIdentity[] = [],
+): ParsedProductOwnerDraft {
   const payload = extractJsonPayload(rawText);
   let parsed: unknown;
 
@@ -432,7 +494,7 @@ function parseDraft(rawText: string, previousDraft?: ProductOwnerDraft): ParsedP
   }
 
   const source = parsed as Record<string, unknown>;
-  const currentMvp = toCurrentMvp(source.currentMvp, previousDraft?.currentMvp);
+  const currentMvp = toCurrentMvp(source.currentMvp, previousDraft?.currentMvp, committedProjectFeatures);
 
   if (!currentMvp) {
     return {

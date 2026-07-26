@@ -10,9 +10,15 @@ vi.mock('~/lib/builders-db/client', () => ({
   isBuildersDbConfigured: () => true,
 }));
 
-const { createMvp, listMvpsForProject, recordMvpApproval, updateMvpStatus, releaseMvp } = await import(
-  './mvpRepository'
-);
+const {
+  createMvp,
+  listMvpsForProject,
+  recordMvpApproval,
+  updateMvpStatus,
+  releaseMvp,
+  resolveLatestReleasedMvp,
+  resolveNextRoadmapTarget,
+} = await import('./mvpRepository');
 
 function makeDraft(overrides: Partial<MvpDraft> = {}): MvpDraft {
   return {
@@ -300,6 +306,39 @@ describe('recordMvpApproval', () => {
     expect(ok).toBe(true);
     expect(updateMvp).not.toHaveBeenCalled();
   });
+
+  it("Sprint 81 — persists a 'roadmap_review' approval but never touches MVP status (persist-only, not a Gate)", async () => {
+    const insertApproval = vi.fn(() => Promise.resolve({ error: null }));
+    const updateMvp = vi.fn();
+
+    const from = vi.fn((table: string) => {
+      if (table === 'builders_mvp_approvals') {
+        return { insert: insertApproval };
+      }
+
+      if (table === 'builders_mvps') {
+        return { update: updateMvp };
+      }
+
+      throw new Error(`unexpected table ${table}`);
+    });
+
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const ok = await recordMvpApproval({
+      mvpId: 'mvp-2',
+      projectId: 'proj-1',
+      stage: 'roadmap_review',
+      decision: 'approved',
+      decidedBy: 'user-1',
+    });
+
+    expect(ok).toBe(true);
+    expect(insertApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ mvp_id: 'mvp-2', stage: 'roadmap_review', decision: 'approved' }),
+    );
+    expect(updateMvp).not.toHaveBeenCalled();
+  });
 });
 
 describe('updateMvpStatus — Sprint 78 Phase 0 transition validation', () => {
@@ -470,5 +509,166 @@ describe('releaseMvp — Sprint 78 Phase 0 auto-supersede rule', () => {
     const ok = await releaseMvp('mvp-missing');
 
     expect(ok).toBe(false);
+  });
+});
+
+/**
+ * Sprint 81 (Cross-MVP Foundation) — a small in-memory `builders_mvps` stand-in supporting both
+ * `listMvpsForProject` (select/eq/order) and `createMvp` (insert/select/single) against the SAME
+ * mutable row list, so `resolveNextRoadmapTarget`'s reuse-vs-create decision and its idempotency
+ * across repeated calls can be exercised without re-wiring a fresh mock per call.
+ */
+function makeStatefulMvpsTable(initialRows: Record<string, unknown>[]) {
+  const rows = [...initialRows];
+  let nextId = 100;
+
+  const from = vi.fn((table: string) => {
+    if (table !== 'builders_mvps') {
+      throw new Error(`unexpected table ${table}`);
+    }
+
+    return {
+      select: () => ({
+        eq: (_col: string, projectId: string) => ({
+          order: () => Promise.resolve({ data: rows.filter((row) => row.project_id === projectId), error: null }),
+        }),
+      }),
+      insert: (row: Record<string, unknown>) => ({
+        select: () => ({
+          single: () => {
+            const created = mockMvpRow({
+              id: `mvp-new-${nextId++}`,
+              project_id: row.project_id,
+              sequence: row.sequence,
+              code: row.code ?? null,
+              theme: row.theme ?? null,
+              status: 'planned',
+              target_release: row.target_release ?? null,
+              estimated_effort: row.estimated_effort ?? null,
+            });
+            rows.push(created);
+
+            return Promise.resolve({ data: created, error: null });
+          },
+        }),
+      }),
+    };
+  });
+
+  return { from, rows };
+}
+
+describe('resolveLatestReleasedMvp — Sprint 81 (Cross-MVP Foundation)', () => {
+  beforeEach(() => {
+    getBuildersDbClientMock.mockReset();
+  });
+
+  it('returns undefined when no MVP has ever released', async () => {
+    const { from } = makeStatefulMvpsTable([mockMvpRow({ id: 'mvp-1', sequence: 1, status: 'scoped' })]);
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    expect(await resolveLatestReleasedMvp('proj-1')).toBeUndefined();
+  });
+
+  it('selects the HIGHEST-SEQUENCE released MVP, independent of list/row order', async () => {
+    // Deliberately out of sequence order in the underlying row list — the resolver must not just take the first match.
+    const { from } = makeStatefulMvpsTable([
+      mockMvpRow({ id: 'mvp-3', sequence: 3, status: 'released' }),
+      mockMvpRow({ id: 'mvp-1', sequence: 1, status: 'superseded' }),
+      mockMvpRow({ id: 'mvp-2', sequence: 2, status: 'superseded' }),
+    ]);
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const result = await resolveLatestReleasedMvp('proj-1');
+
+    expect(result?.id).toBe('mvp-3');
+  });
+});
+
+describe('resolveNextRoadmapTarget — Sprint 81 (Cross-MVP Foundation)', () => {
+  const ROADMAP_SKELETON = [
+    { id: 'MVP-001', sequence: 1, theme: 'Appointments' },
+    { id: 'MVP-002', sequence: 2, theme: 'Billing', targetRelease: 'v1.1' },
+    { id: 'MVP-003', sequence: 3, theme: 'Inventory' },
+  ];
+
+  beforeEach(() => {
+    getBuildersDbClientMock.mockReset();
+  });
+
+  it('returns undefined when no MVP has ever released', async () => {
+    const { from } = makeStatefulMvpsTable([mockMvpRow({ id: 'mvp-1', sequence: 1, status: 'scoped' })]);
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    expect(await resolveNextRoadmapTarget('proj-1', ROADMAP_SKELETON)).toBeUndefined();
+  });
+
+  it('creates a new sequence-2 row when none exists yet, using the matching roadmapSkeleton entry', async () => {
+    const { from, rows } = makeStatefulMvpsTable([mockMvpRow({ id: 'mvp-1', sequence: 1, status: 'released' })]);
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const result = await resolveNextRoadmapTarget('proj-1', ROADMAP_SKELETON);
+
+    expect(result?.targetMvp.sequence).toBe(2);
+    expect(result?.targetMvp.status).toBe('planned');
+    expect(result?.targetMvp.theme).toBe('Billing');
+    expect(result?.roadmapEntry.id).toBe('MVP-002');
+    expect(result?.previousReleasedMvp?.id).toBe('mvp-1');
+    expect(rows.filter((row) => row.sequence === 2)).toHaveLength(1);
+  });
+
+  it('returns undefined (never throws) when the roadmap has no entry sketched at the next sequence yet', async () => {
+    const { from } = makeStatefulMvpsTable([mockMvpRow({ id: 'mvp-1', sequence: 1, status: 'released' })]);
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const result = await resolveNextRoadmapTarget('proj-1', [{ id: 'MVP-001', sequence: 1, theme: 'Appointments' }]);
+
+    expect(result).toBeUndefined();
+  });
+
+  it.each(['planned', 'scoped', 'generating', 'ready_for_review', 'approved'])(
+    "reuses the SAME sequence-2 row when it is at status '%s' — never creates a duplicate",
+    async (status) => {
+      const { from, rows } = makeStatefulMvpsTable([
+        mockMvpRow({ id: 'mvp-1', sequence: 1, status: 'released' }),
+        mockMvpRow({ id: 'mvp-2', sequence: 2, status }),
+      ]);
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      const result = await resolveNextRoadmapTarget('proj-1', ROADMAP_SKELETON);
+
+      expect(result?.targetMvp.id).toBe('mvp-2');
+      expect(rows.filter((row) => row.sequence === 2)).toHaveLength(1);
+    },
+  );
+
+  it('Regression — Released MVP1 -> Planned MVP2 -> retry -> still MVP2, NOT MVP3', async () => {
+    const { from, rows } = makeStatefulMvpsTable([mockMvpRow({ id: 'mvp-1', sequence: 1, status: 'released' })]);
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const first = await resolveNextRoadmapTarget('proj-1', ROADMAP_SKELETON);
+    expect(first?.targetMvp.sequence).toBe(2);
+
+    // Retry — the MVP2 row created by the first call already exists now.
+    const second = await resolveNextRoadmapTarget('proj-1', ROADMAP_SKELETON);
+
+    expect(second?.targetMvp.id).toBe(first?.targetMvp.id);
+    expect(second?.targetMvp.sequence).toBe(2);
+    expect(rows.filter((row) => row.sequence === 2)).toHaveLength(1);
+    expect(rows.filter((row) => row.sequence === 3)).toHaveLength(0);
+  });
+
+  it('once the target itself releases, the NEXT call correctly advances to the sequence after it (never re-targets the same MVP)', async () => {
+    const { from } = makeStatefulMvpsTable([
+      mockMvpRow({ id: 'mvp-1', sequence: 1, status: 'superseded' }),
+      mockMvpRow({ id: 'mvp-2', sequence: 2, status: 'released' }),
+    ]);
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const result = await resolveNextRoadmapTarget('proj-1', ROADMAP_SKELETON);
+
+    expect(result?.previousReleasedMvp?.id).toBe('mvp-2');
+    expect(result?.targetMvp.sequence).toBe(3);
+    expect(result?.roadmapEntry.id).toBe('MVP-003');
   });
 });

@@ -320,6 +320,130 @@ describe('productOwnerEngine.parseDraft — Sprint 46C identity assignment', () 
   });
 });
 
+describe('productOwnerEngine.parseDraft — Sprint 81 (Cross-MVP Foundation) project-wide Feature identity', () => {
+  const NEW_MVP_RESPONSE = (features: { name: string; priority?: string }[]) =>
+    JSON.stringify({
+      currentMvp: {
+        sequence: 2,
+        features: features.map((feature) => ({
+          name: feature.name,
+          description: 'x',
+          priority: feature.priority ?? 'Must Have',
+          dependsOn: [],
+          customerValue: 'x',
+        })),
+        engineeringHandoff: {
+          scope: [],
+          constraints: [],
+          architectureGoals: [],
+          successCriteria: [],
+          acceptanceCriteria: [],
+          outOfScopeFeatures: [],
+          dependencies: [],
+        },
+      },
+    });
+
+  it('a brand-new MVP with no previous draft of its own still starts its counter AFTER every already-committed project-wide Feature — never restarting at FEAT-001', () => {
+    const committed = [
+      { id: 'FEAT-001', name: 'Book an appointment' },
+      { id: 'FEAT-002', name: 'Cancel an appointment' },
+    ];
+
+    const result = productOwnerEngine.parseDraft(NEW_MVP_RESPONSE([{ name: 'Send invoice' }]), undefined, committed);
+
+    expect(result.ok).toBe(true);
+
+    if (result.ok) {
+      expect(result.draft.currentMvp?.features[0].id).toBe('FEAT-003');
+    }
+  });
+
+  it("a new MVP's feature whose name matches an already-committed Feature (from an EARLIER MVP) carries forward that Feature's real, committed id — never mints a duplicate", () => {
+    const committed = [{ id: 'FEAT-001', name: 'Book an appointment' }];
+
+    const result = productOwnerEngine.parseDraft(
+      NEW_MVP_RESPONSE([{ name: 'Book an appointment' }, { name: 'Send invoice' }]),
+      undefined,
+      committed,
+    );
+
+    expect(result.ok).toBe(true);
+
+    if (result.ok) {
+      const [carriedForward, brandNew] = result.draft.currentMvp!.features;
+      expect(carriedForward.id).toBe('FEAT-001');
+      expect(brandNew.id).toBe('FEAT-002');
+    }
+  });
+
+  it('retrying/regenerating the SAME new MVP plan against the SAME committed project history never produces different ids (deterministic)', () => {
+    const committed = [{ id: 'FEAT-001', name: 'Book an appointment' }];
+    const raw = NEW_MVP_RESPONSE([{ name: 'Send invoice' }, { name: 'Refund a payment' }]);
+
+    const first = productOwnerEngine.parseDraft(raw, undefined, committed);
+    const second = productOwnerEngine.parseDraft(raw, undefined, committed);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+
+    if (first.ok && second.ok) {
+      expect(second.draft.currentMvp!.features.map((f) => f.id)).toEqual(
+        first.draft.currentMvp!.features.map((f) => f.id),
+      );
+      expect(first.draft.currentMvp!.features.map((f) => f.id)).toEqual(['FEAT-002', 'FEAT-003']);
+    }
+  });
+
+  it('an already-committed Feature always wins a name match over a same-named feature still only in a previous (uncommitted) draft', () => {
+    const previousDraftMvp = productOwnerEngine.parseDraft(VALID_RAW_RESPONSE);
+    expect(previousDraftMvp.ok).toBe(true);
+
+    if (!previousDraftMvp.ok) {
+      return;
+    }
+
+    // The committed history disagrees with the uncommitted previous draft's own id for the same name.
+    const committed = [{ id: 'FEAT-099', name: 'Patient login' }];
+
+    const raw = JSON.stringify({
+      currentMvp: {
+        sequence: 1,
+        features: [
+          { name: 'Patient login', description: 'x', priority: 'Must Have', dependsOn: [], customerValue: 'x' },
+        ],
+        engineeringHandoff: {
+          scope: [],
+          constraints: [],
+          architectureGoals: [],
+          successCriteria: [],
+          acceptanceCriteria: [],
+          outOfScopeFeatures: [],
+          dependencies: [],
+        },
+      },
+    });
+
+    const result = productOwnerEngine.parseDraft(raw, previousDraftMvp.draft, committed);
+
+    expect(result.ok).toBe(true);
+
+    if (result.ok) {
+      expect(result.draft.currentMvp?.features[0].id).toBe('FEAT-099');
+    }
+  });
+
+  it('omitting committedProjectFeatures entirely is unchanged behavior — every existing call site keeps working exactly as before this sprint', () => {
+    const result = productOwnerEngine.parseDraft(VALID_RAW_RESPONSE);
+
+    expect(result.ok).toBe(true);
+
+    if (result.ok) {
+      expect(result.draft.currentMvp?.features[0].id).toBe('FEAT-001');
+    }
+  });
+});
+
 describe('hasLegacyEngineeringProgress / canGenerateProductOwner backward compatibility', () => {
   it('is false for a brand-new project with no engineering artifacts yet', () => {
     const project = makeProject([]);

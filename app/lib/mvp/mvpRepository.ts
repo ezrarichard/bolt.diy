@@ -8,7 +8,9 @@ import type {
   MvpEstimatedEffort,
   MvpStatus,
   MvpWriteResult,
+  RoadmapTargetResolution,
 } from './mvpTypes';
+import type { RoadmapSkeletonEntry } from '~/lib/projects/prompts/productOwner';
 import { isValidMvpStatusTransition } from './lifecycleTransitions';
 
 /**
@@ -222,6 +224,124 @@ export async function resolveActiveMvpId(projectId: string): Promise<string | un
   return eligible.reduce((latest, candidate) => (candidate.sequence > latest.sequence ? candidate : latest)).id;
 }
 
+/**
+ * Sprint 81 (Cross-MVP Foundation) — the MVP whose real-world release is the product's current
+ * live state: the HIGHEST-SEQUENCE `Mvp` row with `status === 'released'`. Deliberately a
+ * SEPARATE resolver from `resolveActiveMvpId` above, which answers a different question
+ * ("which MVP should ENGINEERING currently treat as in-flight," which can be an MVP that hasn't
+ * released yet) — see
+ * docs/product-management/Product-Management-Architecture.md Part 3's correction for why
+ * conflating the two was a bug (a Product Review must always be about a real, shipped release,
+ * never a mid-engineering one). Selects by highest `sequence`, never by list position or "first
+ * match" — the existing auto-supersede rule (`releaseMvp` below) means there is normally at most
+ * one `released` row, but selecting deterministically by sequence keeps this resolver correct
+ * even against legacy data or a temporary invariant violation, not just the expected case.
+ * Returns `undefined` (never throws) when no MVP has ever released yet.
+ */
+export async function resolveLatestReleasedMvp(projectId: string): Promise<Mvp | undefined> {
+  const mvps = await listMvpsForProject(projectId);
+  const released = mvps.filter((mvp) => mvp.status === 'released');
+
+  if (released.length === 0) {
+    return undefined;
+  }
+
+  return released.reduce((latest, candidate) => (candidate.sequence > latest.sequence ? candidate : latest));
+}
+
+/**
+ * Sprint 81 (Cross-MVP Foundation) — deterministic, idempotent resolution of "the next roadmap
+ * target": the `Mvp` row that immediately succeeds whichever MVP is currently `released`. See
+ * docs/product-management/Product-Management-Architecture.md Part 4 for the full derivation and
+ * the two corrections that produced this exact algorithm.
+ *
+ * **Sequence-keyed reuse, not status-keyed.** `nextSequence` is computed ONCE, from
+ * `previousReleasedMvp.sequence + 1`, and never recomputed as "highest committed + 1" (which
+ * would incorrectly skip past an already-in-flight target the moment it's created) or gated on a
+ * specific status like `'planned'` (which would incorrectly attempt a duplicate insert the
+ * moment Gate A advances the target past `'planned'`). Instead: ANY row already at `nextSequence`
+ * — `planned`, `scoped`, `generating`, `ready_for_review`, `approved`, `provisioned`, `generated`,
+ * `qa_passed`, `ready_for_deployment`, or `blocked` — IS the target, full stop; a new row is
+ * created only when NO row exists at `nextSequence` at all.
+ *
+ * **Idempotency guarantee**: for as long as `previousReleasedMvp` remains the latest released
+ * MVP, repeated calls always resolve the same `nextSequence` and always return the SAME
+ * `targetMvp.id`, regardless of how many times called or what pre-release status that row has
+ * reached in the meantime. The target identity only changes once `targetMvp` itself reaches
+ * `released` — at that point `resolveLatestReleasedMvp` starts returning it instead, and the very
+ * next call correctly resolves (or creates) the sequence after it.
+ *
+ * `roadmapSkeleton` is supplied by the CALLER rather than read internally — this module talks
+ * only to BuildersDB (`builders_mvps`), matching every other function in this file; the
+ * `roadmapSkeleton` a target's `theme`/`targetRelease`/`estimatedEffort` come from lives in the
+ * approved Product Owner artifact, which is a LOCAL project-store read
+ * (`getApprovedArtifactContent`, `app/lib/projects/artifacts.ts`) requiring the full `Project`
+ * object — a different data plane this repository deliberately stays decoupled from, the same
+ * "pipeline stays DB-agnostic, caller resolves local data" discipline
+ * `app/lib/hooks/useCodeGeneration.ts`'s `resolveMvpScope`/`resolveBackendModules` already
+ * established for exactly this kind of cross-plane read.
+ *
+ * Returns `undefined` (never throws) when no MVP has ever released yet, or when the roadmap has
+ * no entry sketched at `nextSequence` yet (surfaced to a future caller as "no next MVP planned,"
+ * not an error).
+ */
+export async function resolveNextRoadmapTarget(
+  projectId: string,
+  roadmapSkeleton: RoadmapSkeletonEntry[],
+): Promise<RoadmapTargetResolution | undefined> {
+  const previousReleasedMvp = await resolveLatestReleasedMvp(projectId);
+
+  if (!previousReleasedMvp) {
+    return undefined;
+  }
+
+  const nextSequence = previousReleasedMvp.sequence + 1;
+  const allMvps = await listMvpsForProject(projectId);
+
+  /*
+   * Reuse first, by sequence, regardless of status. `released`/`superseded` are excluded
+   * deliberately: a row at nextSequence can only be one of those if it has ALREADY completed its
+   * own outer loop and become the new `previousReleasedMvp` — a state this very call's own
+   * `resolveLatestReleasedMvp` result would already reflect. Every other pre-release status means
+   * the row at nextSequence IS the target — no new row is ever created while it exists.
+   */
+  const existingTarget = allMvps.find(
+    (mvp) => mvp.sequence === nextSequence && mvp.status !== 'released' && mvp.status !== 'superseded',
+  );
+
+  const roadmapEntry = roadmapSkeleton.find((entry) => entry.sequence === nextSequence);
+
+  if (!roadmapEntry) {
+    return undefined;
+  }
+
+  const targetMvp = existingTarget ?? (await createRoadmapTargetRow(projectId, nextSequence, roadmapEntry));
+
+  if (!targetMvp) {
+    return undefined;
+  }
+
+  return { targetMvp, roadmapEntry, previousReleasedMvp };
+}
+
+/** Only reached when NO row exists at `nextSequence` at all (any status) — see `resolveNextRoadmapTarget`'s own comment. */
+async function createRoadmapTargetRow(
+  projectId: string,
+  nextSequence: number,
+  roadmapEntry: RoadmapSkeletonEntry,
+): Promise<Mvp | undefined> {
+  const created = await createMvp({
+    projectId,
+    sequence: nextSequence,
+    code: roadmapEntry.id,
+    theme: roadmapEntry.theme,
+    targetRelease: roadmapEntry.targetRelease,
+    estimatedEffort: roadmapEntry.estimatedEffort,
+  });
+
+  return created.ok ? created.mvp : undefined;
+}
+
 export async function getMvpById(mvpId: string): Promise<Mvp | null> {
   const client = getBuildersDbClient();
 
@@ -314,6 +434,13 @@ export async function updateMvpStatus(
  * app was accepted and the next MVP may unlock, so status becomes `'approved'` and
  * `approved_at` is stamped. A `'changes_requested'` decision at either stage never changes
  * status — the MVP stays wherever it was, awaiting a revised draft/delivery.
+ *
+ * Sprint 81 (Cross-MVP Foundation) — `'roadmap_review'` (see `MvpApprovalStage`'s own comment) is
+ * persist-only: it never drives an `updateMvpStatus` call, approved or not. It exists purely to
+ * gate whether Gate A (`'scope'`) may be invoked for this MVP at all — a precondition CHECK a
+ * caller performs by reading `listMvpApprovals`, not a status transition this function itself
+ * performs. Recording it here (rather than skipping the insert) is still required so it gets the
+ * same append-only audit trail as every other approval decision.
  */
 export async function recordMvpApproval(input: MvpApprovalInput): Promise<boolean> {
   const client = getBuildersDbClient();
@@ -345,7 +472,12 @@ export async function recordMvpApproval(input: MvpApprovalInput): Promise<boolea
         return await updateMvpStatus(input.mvpId, 'scoped');
       }
 
-      return await updateMvpStatus(input.mvpId, 'approved', { approvedAt: decidedAt });
+      if (input.stage === 'delivery') {
+        return await updateMvpStatus(input.mvpId, 'approved', { approvedAt: decidedAt });
+      }
+
+      // 'roadmap_review' — persisted above, no status transition. See this function's own comment.
+      return true;
     }
 
     return true;
@@ -425,6 +557,8 @@ export const mvpRepository = {
   createMvp,
   listMvpsForProject,
   resolveActiveMvpId,
+  resolveLatestReleasedMvp,
+  resolveNextRoadmapTarget,
   getMvpById,
   updateMvpStatus,
   recordMvpApproval,

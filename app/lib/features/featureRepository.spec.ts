@@ -9,9 +9,14 @@ vi.mock('~/lib/builders-db/client', () => ({
   isBuildersDbConfigured: () => true,
 }));
 
-const { promoteFeaturesForMvp, resolveActiveMvpFeatures, updateFeatureStatus, listFeaturesForMvp } = await import(
-  './featureRepository'
-);
+const {
+  promoteFeaturesForMvp,
+  resolveActiveMvpFeatures,
+  updateFeatureStatus,
+  listFeaturesForMvp,
+  listFeaturesForProject,
+  detectFeatureCodeCollisions,
+} = await import('./featureRepository');
 
 function mockFeatureRow(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
   return {
@@ -285,5 +290,111 @@ describe('listFeaturesForMvp — safe fallback', () => {
     const result = await listFeaturesForMvp('mvp-1');
 
     expect(result).toEqual([]);
+  });
+});
+
+describe('listFeaturesForProject — Sprint 81 (Cross-MVP Foundation)', () => {
+  beforeEach(() => {
+    getBuildersDbClientMock.mockReset();
+  });
+
+  it('returns every committed Feature across ALL MVPs in the project, in project (created_at) order', async () => {
+    const rows = [
+      mockFeatureRow({ id: 'feature-1', mvp_id: 'mvp-1', code: 'FEAT-001', created_at: '2026-07-25T00:00:00.000Z' }),
+      mockFeatureRow({ id: 'feature-2', mvp_id: 'mvp-2', code: 'FEAT-002', created_at: '2026-07-26T00:00:00.000Z' }),
+    ];
+
+    const from = vi.fn((table: string) => {
+      if (table !== 'builders_features') {
+        throw new Error(`unexpected table ${table}`);
+      }
+
+      return {
+        select: () => ({
+          eq: (column: string, value: string) => {
+            expect(column).toBe('project_id');
+            expect(value).toBe('proj-1');
+
+            return { order: () => Promise.resolve({ data: rows, error: null }) };
+          },
+        }),
+      };
+    });
+
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    const result = await listFeaturesForProject('proj-1');
+
+    expect(result.map((feature) => feature.code)).toEqual(['FEAT-001', 'FEAT-002']);
+    expect(result.map((feature) => feature.mvpId)).toEqual(['mvp-1', 'mvp-2']);
+  });
+
+  it('returns [] when BuildersDB is not configured', async () => {
+    getBuildersDbClientMock.mockReturnValue(null);
+
+    expect(await listFeaturesForProject('proj-1')).toEqual([]);
+  });
+});
+
+describe('detectFeatureCodeCollisions — Sprint 81 (Cross-MVP Foundation, Migration Safety)', () => {
+  beforeEach(() => {
+    getBuildersDbClientMock.mockReset();
+  });
+
+  function mockListFrom(rows: Record<string, unknown>[]) {
+    return vi.fn((table: string) => {
+      if (table !== 'builders_features') {
+        throw new Error(`unexpected table ${table}`);
+      }
+
+      return { select: () => ({ eq: () => ({ order: () => Promise.resolve({ data: rows, error: null }) }) }) };
+    });
+  }
+
+  it('reports [] for a project with no cross-MVP collisions (the expected case for every project today)', async () => {
+    const rows = [
+      mockFeatureRow({ id: 'feature-1', mvp_id: 'mvp-1', code: 'FEAT-001' }),
+      mockFeatureRow({ id: 'feature-2', mvp_id: 'mvp-1', code: 'FEAT-002' }),
+    ];
+    getBuildersDbClientMock.mockReturnValue({ from: mockListFrom(rows) });
+
+    expect(await detectFeatureCodeCollisions('proj-1')).toEqual([]);
+  });
+
+  it('detects (never repairs) a Feature code shared by two DIFFERENT MVPs in the same project', async () => {
+    const rows = [
+      mockFeatureRow({ id: 'feature-1', mvp_id: 'mvp-1', code: 'FEAT-001', title: 'Book an appointment' }),
+      mockFeatureRow({ id: 'feature-2', mvp_id: 'mvp-2', code: 'FEAT-001', title: 'Unrelated billing feature' }),
+    ];
+    getBuildersDbClientMock.mockReturnValue({ from: mockListFrom(rows) });
+
+    const collisions = await detectFeatureCodeCollisions('proj-1');
+
+    expect(collisions).toHaveLength(1);
+    expect(collisions[0]).toEqual({
+      projectId: 'proj-1',
+      code: 'FEAT-001',
+      features: [
+        { id: 'feature-1', mvpId: 'mvp-1', code: 'FEAT-001', title: 'Book an appointment' },
+        { id: 'feature-2', mvpId: 'mvp-2', code: 'FEAT-001', title: 'Unrelated billing feature' },
+      ],
+    });
+  });
+
+  it('does NOT report two Features sharing a code under the SAME MVP as a collision (that is the existing, valid (mvp_id, code) case)', async () => {
+    // Not realistically reachable (builders_features_project_code_unique/older mvp_code_unique would reject it), but confirms the detector's own logic keys on distinct mvpId, not just a repeated code.
+    const rows = [
+      mockFeatureRow({ id: 'feature-1', mvp_id: 'mvp-1', code: 'FEAT-001' }),
+      mockFeatureRow({ id: 'feature-2', mvp_id: 'mvp-1', code: 'FEAT-001' }),
+    ];
+    getBuildersDbClientMock.mockReturnValue({ from: mockListFrom(rows) });
+
+    expect(await detectFeatureCodeCollisions('proj-1')).toEqual([]);
+  });
+
+  it('returns [] when BuildersDB is not configured', async () => {
+    getBuildersDbClientMock.mockReturnValue(null);
+
+    expect(await detectFeatureCodeCollisions('proj-1')).toEqual([]);
   });
 });

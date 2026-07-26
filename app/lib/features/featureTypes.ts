@@ -90,3 +90,16 @@ export interface PromoteFeaturesResult {
   features: Feature[];
   error: string | null;
 }
+
+/**
+ * Sprint 81 (Cross-MVP Foundation) — one project-wide Feature `code` collision: two or more
+ * `Feature` rows under the SAME project sharing the SAME `code` across DIFFERENT MVPs. Only
+ * possible for data written before the `(project_id, code)` unique index
+ * (`20260801110000_cross_mvp_feature_identity.sql`) applies — see that migration's own header
+ * comment for why a detected collision is reported, never auto-repaired.
+ */
+export interface FeatureCodeCollision {
+  projectId: string;
+  code: string;
+  features: Pick<Feature, 'id' | 'mvpId' | 'code' | 'title'>[];
+}

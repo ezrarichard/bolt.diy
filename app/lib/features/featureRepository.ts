@@ -2,7 +2,14 @@ import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/c
 import type { MoscowPriority } from '~/lib/projects/prompts/productOwner';
 import { isValidFeatureStatusTransition } from '~/lib/mvp/lifecycleTransitions';
 import { mvpRepository } from '~/lib/mvp/mvpRepository';
-import type { Feature, FeatureDraft, FeatureStatus, FeatureWriteResult, PromoteFeaturesResult } from './featureTypes';
+import type {
+  Feature,
+  FeatureCodeCollision,
+  FeatureDraft,
+  FeatureStatus,
+  FeatureWriteResult,
+  PromoteFeaturesResult,
+} from './featureTypes';
 
 /**
  * Feature Repository — Sprint 78 Phase 0 (Product Lifecycle & Backend Generation Architecture).
@@ -101,6 +108,82 @@ export async function listFeaturesForMvp(mvpId: string): Promise<Feature[]> {
     logError('listFeaturesForMvp', error);
     return [];
   }
+}
+
+/**
+ * Sprint 81 (Cross-MVP Foundation) — every Feature committed across the WHOLE project, spanning
+ * every MVP, in project order (`created_at` ascending — MVPs are always planned/promoted in
+ * sequence order, Gate A after Gate A, so creation order already matches roadmap order without
+ * needing a join back to `builders_mvps.sequence`). This is the direct replacement for "only
+ * inspecting the active MVP" — future roadmap planning (`assignFeatureIds`'s project-wide id
+ * counter, Roadmap Analysis's dependency resolution, Part 1 of
+ * docs/product-management/Product-Management-Architecture.md) reads this instead.
+ */
+export async function listFeaturesForProject(projectId: string): Promise<Feature[]> {
+  const client = getBuildersDbClient();
+
+  if (!isAvailable() || !client) {
+    unavailable('listFeaturesForProject');
+    return [];
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_features')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    return ((data ?? []) as FeatureRow[]).map(fromFeatureRow);
+  } catch (error) {
+    logError('listFeaturesForProject', error);
+    return [];
+  }
+}
+
+/**
+ * Sprint 81 (Cross-MVP Foundation) — Migration Safety, item 7: detects (never repairs) every
+ * Feature `code` collision across different MVPs within one project — the exact case the
+ * `(project_id, code)` unique index (`20260801110000_cross_mvp_feature_identity.sql`) cannot yet
+ * assume is impossible for data written before it applied. Read-only; a collision found here is
+ * always a REPORT (project, MVPs, affected Feature rows — the migration's own required repair
+ * report), never auto-renamed. Returns `[]` (never throws) when there is nothing to report,
+ * including the expected case (BuildersDB unavailable, or a project with no collisions at all).
+ */
+export async function detectFeatureCodeCollisions(projectId: string): Promise<FeatureCodeCollision[]> {
+  const features = await listFeaturesForProject(projectId);
+  const byCode = new Map<string, Feature[]>();
+
+  for (const feature of features) {
+    const group = byCode.get(feature.code) ?? [];
+    group.push(feature);
+    byCode.set(feature.code, group);
+  }
+
+  const collisions: FeatureCodeCollision[] = [];
+
+  for (const [code, group] of byCode) {
+    const distinctMvps = new Set(group.map((feature) => feature.mvpId));
+
+    if (distinctMvps.size > 1) {
+      collisions.push({
+        projectId,
+        code,
+        features: group.map((feature) => ({
+          id: feature.id,
+          mvpId: feature.mvpId,
+          code: feature.code,
+          title: feature.title,
+        })),
+      });
+    }
+  }
+
+  return collisions;
 }
 
 export async function getFeatureById(featureId: string): Promise<Feature | null> {
@@ -347,6 +430,8 @@ export async function updateFeatureStatus(featureId: string, status: FeatureStat
 export const featureRepository = {
   isAvailable,
   listFeaturesForMvp,
+  listFeaturesForProject,
+  detectFeatureCodeCollisions,
   getFeatureById,
   resolveActiveMvpFeatures,
   promoteFeaturesForMvp,
