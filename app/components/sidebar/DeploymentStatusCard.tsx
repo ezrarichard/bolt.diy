@@ -8,21 +8,26 @@ import type {
 import { BuildersStatusBadge, buildersButtonVariants, type BuildersStatus } from '~/components/ui/builders';
 import type { Project } from '~/lib/stores/projects';
 import { assessSupabaseReadiness } from '~/lib/services/supabaseDeployService';
+import { assessEnvironmentReadiness } from '~/lib/services/environmentReadinessService';
+import { getActiveApplicationManifest } from '~/lib/application-manifest/applicationManifestRepository';
 
 /**
  * Deployment Status Card — Sprint 88 (GitHub Product Integration), extended Sprint 89 (Supabase
- * Product Integration), Part 9.
+ * Product Integration) and Sprint 90 (Environment & Runtime Configuration), Part 7.
  *
  * The Project Dashboard's ONLY source for deployment/provider information — everything shown here
  * comes from `deploymentRepository.getDeploymentWithProviders`/`getDeploymentHistory` (never from
- * `github_connection`/`github-repo-*` localStorage) plus, for the Supabase readiness list only,
- * `assessSupabaseReadiness` reading the project's own approved structured schema — never legacy
- * `Project.databaseActivation` connection identity, which Sprint 89 keeps as the schema/provisioning
- * workflow's own state, not a second source of Deployment truth (see
- * `supabaseDeployService.ts`'s header comment). Reading from BuildersDB on every mount is also what
- * satisfies Part 7 (Sprint 88)/Part 10 (Sprint 89)'s "reopen the project, connection state remains
- * available, no manual reconnect" requirement — there is no session-local "connected" flag to
- * restore; the persisted Deployment row already knows.
+ * `github_connection`/`github-repo-*` localStorage), plus `assessSupabaseReadiness` (project's
+ * approved structured schema) and `assessEnvironmentReadiness` (the connected GitHub/Supabase
+ * provider rows plus the active Application Manifest's `environmentRequirements` — the ONLY
+ * BuildersDB read this component makes outside the Deployment domain, since that list of variable
+ * NAMES has no other owner). Never legacy `Project.databaseActivation` connection identity, which
+ * Sprint 89 keeps as the schema/provisioning workflow's own state, not a second source of
+ * Deployment truth (see `supabaseDeployService.ts`'s header comment). Reading from BuildersDB on
+ * every mount is also what satisfies Part 7 (Sprint 88)/Part 10 (Sprint 89)/Part 8 (Sprint 90)'s
+ * "reopen the project, connection/environment state remains available, no manual reconnect"
+ * requirement — there is no session-local "ready" flag to restore; the persisted Deployment row
+ * already knows.
  */
 
 export interface DeploymentStatusCardProps {
@@ -74,6 +79,7 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
   const projectId = project.id;
   const [deployment, setDeployment] = useState<DeploymentWithProviders | null>(null);
   const [history, setHistory] = useState<DeploymentHistoryEvent[]>([]);
+  const [environmentRequirements, setEnvironmentRequirements] = useState<string[]>([]);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
   useEffect(() => {
@@ -81,11 +87,16 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
     setStatus('loading');
 
     (async () => {
-      const result = await deploymentRepository.getDeploymentWithProviders(projectId);
+      const [result, manifest] = await Promise.all([
+        deploymentRepository.getDeploymentWithProviders(projectId),
+        getActiveApplicationManifest(projectId),
+      ]);
 
       if (cancelled) {
         return;
       }
+
+      setEnvironmentRequirements(manifest?.environmentRequirements ?? []);
 
       if (!result) {
         setDeployment(null);
@@ -143,6 +154,14 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
   const readiness = assessSupabaseReadiness(project);
   const missingReadinessItems = readiness.items.filter((item) => !item.ready);
   const isRealSupabaseMode = project.databaseActivation?.provisioning?.provider === 'supabase';
+  const environmentReport = assessEnvironmentReadiness({
+    environmentRequirements,
+    github: deployment.github,
+    supabase: deployment.supabase,
+  });
+  const isEnvironmentReady =
+    deployment.status === 'environment_ready' ||
+    ['deploying', 'deployed', 'verified', 'released', 'maintenance', 'archived'].includes(deployment.status);
 
   return (
     <div className="rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-5 bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md">
@@ -274,6 +293,76 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 pt-4 border-t border-bolt-elements-borderColor/30">
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <div className="flex items-center gap-2">
+            <span className="i-ph:gear-duotone h-4 w-4 text-bolt-elements-textSecondary" />
+            <h4 className="text-xs font-semibold text-bolt-elements-textPrimary uppercase tracking-wide">
+              Environment
+            </h4>
+          </div>
+          <BuildersStatusBadge
+            status={isEnvironmentReady ? 'success' : 'pending'}
+            label={isEnvironmentReady ? 'Environment Ready' : 'Not Ready'}
+            compact
+          />
+        </div>
+
+        {environmentReport.variables.length === 0 ? (
+          <div className="text-xs text-bolt-elements-textTertiary">
+            This project's Application Manifest declares no environment variables to configure.
+          </div>
+        ) : (
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-bolt-elements-textTertiary text-xs uppercase tracking-wide">
+                Resolved Variables
+              </span>
+              <span className="text-bolt-elements-textPrimary text-xs">
+                {environmentReport.resolvedVariables.length} / {environmentReport.variables.length}
+              </span>
+            </div>
+
+            {environmentReport.missingVariables.length > 0 && (
+              <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-2.5">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400 mb-1">
+                  Missing Variables
+                </div>
+                <ul className="space-y-0.5">
+                  {environmentReport.missingVariables.map((variable) => (
+                    <li key={variable.name} className="text-xs text-bolt-elements-textSecondary">
+                      <span className="font-mono font-medium text-bolt-elements-textPrimary">{variable.name}</span>
+                      {variable.sensitive && (
+                        <span className="ml-1 text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                          (sensitive)
+                        </span>
+                      )}{' '}
+                      — {variable.detail}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {environmentReport.manualVariables.length > 0 && (
+              <div className="rounded-lg border border-blue-500/25 bg-blue-500/5 p-2.5">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-400 mb-1">
+                  Manual Actions Required
+                </div>
+                <ul className="space-y-0.5">
+                  {environmentReport.manualVariables.map((variable) => (
+                    <li key={variable.name} className="text-xs text-bolt-elements-textSecondary">
+                      <span className="font-mono font-medium text-bolt-elements-textPrimary">{variable.name}</span> —{' '}
+                      {variable.detail}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -8,16 +8,23 @@ import type {
 } from '~/lib/deployment/deploymentTypes';
 import type { Project } from '~/lib/stores/projects';
 
-const { getDeploymentWithProvidersMock, getDeploymentHistoryMock } = vi.hoisted(() => ({
-  getDeploymentWithProvidersMock: vi.fn(),
-  getDeploymentHistoryMock: vi.fn(),
-}));
+const { getDeploymentWithProvidersMock, getDeploymentHistoryMock, getActiveApplicationManifestMock } = vi.hoisted(
+  () => ({
+    getDeploymentWithProvidersMock: vi.fn(),
+    getDeploymentHistoryMock: vi.fn(),
+    getActiveApplicationManifestMock: vi.fn(),
+  }),
+);
 
 vi.mock('~/lib/deployment/deploymentRepository', () => ({
   deploymentRepository: {
     getDeploymentWithProviders: getDeploymentWithProvidersMock,
     getDeploymentHistory: getDeploymentHistoryMock,
   },
+}));
+
+vi.mock('~/lib/application-manifest/applicationManifestRepository', () => ({
+  getActiveApplicationManifest: getActiveApplicationManifestMock,
 }));
 
 const { DeploymentStatusCard } = await import('./DeploymentStatusCard');
@@ -99,6 +106,8 @@ describe('DeploymentStatusCard', () => {
   beforeEach(() => {
     getDeploymentWithProvidersMock.mockReset();
     getDeploymentHistoryMock.mockReset();
+    getActiveApplicationManifestMock.mockReset();
+    getActiveApplicationManifestMock.mockResolvedValue(null);
   });
 
   it('shows repository name, owner, branch, connection status, and an Open Repository link', async () => {
@@ -180,5 +189,55 @@ describe('DeploymentStatusCard', () => {
     await waitFor(() => expect(screen.getByText('Missing Readiness Items')).toBeTruthy());
     expect(screen.getByText(/RLS Policies/)).toBeTruthy();
     expect(screen.getByText(/Authentication Wiring/)).toBeTruthy();
+  });
+
+  it('shows "no environment variables" copy when the Application Manifest declares none', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(makeDeployment());
+    getDeploymentHistoryMock.mockResolvedValue([]);
+    getActiveApplicationManifestMock.mockResolvedValue({ environmentRequirements: [] });
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("This project's Application Manifest declares no environment variables to configure."),
+      ).toBeTruthy(),
+    );
+  });
+
+  it('shows Missing Variables and Manual Actions Required when Supabase env vars are declared but not connected', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(makeDeployment({ supabase: null }));
+    getDeploymentHistoryMock.mockResolvedValue([]);
+    getActiveApplicationManifestMock.mockResolvedValue({
+      environmentRequirements: ['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'],
+    });
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    await waitFor(() => expect(screen.getByText('Missing Variables')).toBeTruthy());
+    expect(screen.getByText('VITE_SUPABASE_URL')).toBeTruthy();
+    expect(screen.getByText('Manual Actions Required')).toBeTruthy();
+
+    // VITE_SUPABASE_ANON_KEY is both missing AND manual, so it legitimately appears in both lists.
+    expect(screen.getAllByText('VITE_SUPABASE_ANON_KEY').length).toBe(2);
+    expect(screen.getByText('Not Ready')).toBeTruthy();
+  });
+
+  it('shows Resolved Variables and Environment Ready once Supabase is connected and resolves VITE_SUPABASE_URL', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(
+      makeDeployment({ status: 'environment_ready', supabase: makeSupabase() }),
+    );
+    getDeploymentHistoryMock.mockResolvedValue([]);
+    getActiveApplicationManifestMock.mockResolvedValue({ environmentRequirements: ['VITE_SUPABASE_URL'] });
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    await waitFor(() => expect(screen.getByText('1 / 1')).toBeTruthy());
+
+    /*
+     * "Environment Ready" appears both as the overall Deployment status badge and the
+     * section's own badge — both correctly reflect readiness, so two matches is expected.
+     */
+    expect(screen.getAllByText('Environment Ready').length).toBe(2);
   });
 });

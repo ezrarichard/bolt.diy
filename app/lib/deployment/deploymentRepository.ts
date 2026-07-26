@@ -275,6 +275,116 @@ export async function updateDeploymentStatus(
   }
 }
 
+/**
+ * Environment Readiness — Sprint 90. Persists an already-computed
+ * `EnvironmentReadinessReport` (see `environmentReadinessService.ts`'s `assessEnvironmentReadiness`
+ * — this function does none of that assessment itself, matching the "assessment lives in a
+ * service, mutation lives in the repository" boundary `attachSupabase`/`supabaseDeployService.ts`
+ * already established) into `Deployment.metadata.environmentReadiness`, and transitions
+ * `database_connected -> environment_ready` in the same call, with exactly one history event.
+ *
+ * Refuses (returns `null`, writes nothing) when the transition itself is illegal OR when the
+ * report contains any `'invalid'` variable — the only status this sprint treats as a real
+ * blocker; `missing`/`unknown` variables are still recorded and surfaced (Part 7's "Missing
+ * Variables"/"Manual Actions Required"), they just don't block reaching `environment_ready` (see
+ * `EnvironmentReadinessReport.ready`'s own comment for why).
+ *
+ * Never persists a variable's `value` when `EnvironmentVariable.sensitive` is true (Part 5) —
+ * the report passed in already guarantees this (`assessEnvironmentReadiness` never sets `value`
+ * on a sensitive entry), and this function stores the report verbatim rather than re-deriving it.
+ */
+export async function updateDeploymentEnvironment(
+  deploymentId: string,
+  projectId: string,
+  report: {
+    variables: Array<{
+      name: string;
+      status: string;
+      source: string;
+      sensitive: boolean;
+      value?: string;
+      detail: string;
+    }>;
+    ready: boolean;
+    fullyResolved: boolean;
+  },
+  options: { performedBy?: string } = {},
+): Promise<Deployment | null> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('updateDeploymentEnvironment');
+    return null;
+  }
+
+  try {
+    const { data: current, error: readError } = await client
+      .from('builders_project_deployments')
+      .select('*')
+      .eq('id', deploymentId)
+      .single();
+
+    if (readError) {
+      throw readError;
+    }
+
+    const fromStatus = current.status as DeploymentStatus;
+    const hasInvalid = report.variables.some((v) => v.status === 'invalid');
+    const toStatus: DeploymentStatus = hasInvalid ? fromStatus : 'environment_ready';
+
+    if (toStatus !== fromStatus && !isValidDeploymentStatusTransition(fromStatus, toStatus)) {
+      logError(
+        'updateDeploymentEnvironment',
+        new Error(`Illegal deployment status transition: ${fromStatus} -> ${toStatus}`),
+      );
+      return null;
+    }
+
+    if (hasInvalid) {
+      logError(
+        'updateDeploymentEnvironment',
+        new Error('Refusing to transition to environment_ready — the report contains invalid variable(s).'),
+      );
+      return null;
+    }
+
+    const nextMetadata = {
+      ...((current.metadata as Record<string, unknown>) ?? {}),
+      environmentReadiness: report,
+    };
+
+    const { error: updateError } = await client
+      .from('builders_project_deployments')
+      .update({ status: toStatus, metadata: nextMetadata })
+      .eq('id', deploymentId);
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    await recordDeploymentEvent({
+      deploymentId,
+      projectId,
+      eventType: 'environment_ready',
+      fromStatus,
+      toStatus,
+      message: `Environment assessed: ${report.variables.filter((v) => v.status === 'resolved').length} resolved, ${
+        report.variables.filter((v) => v.status !== 'resolved').length
+      } missing/manual.`,
+      createdBy: options.performedBy,
+    });
+
+    return fromProjectDeploymentRow({
+      ...(current as BuildersDbProjectDeploymentRow),
+      status: toStatus,
+      metadata: nextMetadata,
+    });
+  } catch (error) {
+    logError('updateDeploymentEnvironment', error);
+    return null;
+  }
+}
+
 /** Options every `attach*` function accepts, layered on top of its provider-specific input. */
 export interface AttachProviderOptions {
   /**
@@ -624,6 +734,7 @@ export const deploymentRepository = {
   ensureDeploymentForProject,
   getDeploymentWithProviders,
   updateDeploymentStatus,
+  updateDeploymentEnvironment,
   attachGithub,
   attachSupabase,
   attachVercel,

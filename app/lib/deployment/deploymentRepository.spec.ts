@@ -13,6 +13,7 @@ const {
   getDeploymentByProject,
   ensureDeploymentForProject,
   updateDeploymentStatus,
+  updateDeploymentEnvironment,
   attachGithub,
   attachSupabase,
   getDeploymentHistory,
@@ -272,6 +273,168 @@ describe('deploymentRepository', () => {
 
       expect(ok).toBe(true);
       expect(historyInsert).toHaveBeenCalledWith(expect.objectContaining({ event_type: 'deployment_successful' }));
+    });
+  });
+
+  describe('updateDeploymentEnvironment', () => {
+    interface ReportVariable {
+      name: string;
+      status: string;
+      source: string;
+      sensitive: boolean;
+      value?: string;
+      detail: string;
+    }
+
+    function makeReport(overrides: { variables?: ReportVariable[] } = {}) {
+      return {
+        variables: overrides.variables ?? [
+          {
+            name: 'VITE_SUPABASE_URL',
+            status: 'resolved',
+            source: 'provider',
+            sensitive: false,
+            value: 'https://x.supabase.co',
+            detail: '',
+          },
+          { name: 'VITE_SUPABASE_ANON_KEY', status: 'missing', source: 'manual', sensitive: true, detail: '' },
+        ],
+        ready: true,
+        fullyResolved: false,
+      };
+    }
+
+    it('transitions database_connected -> environment_ready, persists the report in metadata, and records one history event', async () => {
+      const fullRow = makeDeploymentRow({ status: 'database_connected' });
+      const readSingle = vi.fn().mockResolvedValue({ data: fullRow, error: null });
+      const readEq = vi.fn().mockReturnValue({ single: readSingle });
+      const readSelect = vi.fn().mockReturnValue({ eq: readEq });
+
+      const updateEq = vi.fn().mockResolvedValue({ error: null });
+      const update = vi.fn().mockReturnValue({ eq: updateEq });
+
+      const historySingle = vi.fn().mockResolvedValue({ data: makeHistoryRow(), error: null });
+      const historySelect = vi.fn().mockReturnValue({ single: historySingle });
+      const historyInsert = vi.fn().mockReturnValue({ select: historySelect });
+
+      const from = vi.fn((table: string) => {
+        if (table === 'builders_project_deployments') {
+          return { select: readSelect, update };
+        }
+
+        if (table === 'builders_deployment_history') {
+          return { insert: historyInsert };
+        }
+
+        throw new Error(`unexpected table: ${table}`);
+      });
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      const result = await updateDeploymentEnvironment('dep-1', 'proj-1', makeReport());
+
+      expect(result?.status).toBe('environment_ready');
+      expect(update).toHaveBeenCalledWith({
+        status: 'environment_ready',
+        metadata: expect.objectContaining({ environmentReadiness: expect.objectContaining({ ready: true }) }),
+      });
+      expect(historyInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'environment_ready',
+          from_status: 'database_connected',
+          to_status: 'environment_ready',
+        }),
+      );
+    });
+
+    it('never persists a value for a sensitive variable', async () => {
+      const fullRow = makeDeploymentRow({ status: 'database_connected' });
+      const readSingle = vi.fn().mockResolvedValue({ data: fullRow, error: null });
+      const readEq = vi.fn().mockReturnValue({ single: readSingle });
+      const readSelect = vi.fn().mockReturnValue({ eq: readEq });
+      const updateEq = vi.fn().mockResolvedValue({ error: null });
+      const update = vi.fn().mockReturnValue({ eq: updateEq });
+      const historySingle = vi.fn().mockResolvedValue({ data: makeHistoryRow(), error: null });
+      const historySelect = vi.fn().mockReturnValue({ single: historySingle });
+      const historyInsert = vi.fn().mockReturnValue({ select: historySelect });
+
+      const from = vi.fn((table: string) => {
+        if (table === 'builders_project_deployments') {
+          return { select: readSelect, update };
+        }
+
+        if (table === 'builders_deployment_history') {
+          return { insert: historyInsert };
+        }
+
+        throw new Error(`unexpected table: ${table}`);
+      });
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      await updateDeploymentEnvironment('dep-1', 'proj-1', makeReport());
+
+      const [payload] = update.mock.calls[0];
+      expect(JSON.stringify(payload)).not.toContain('service_role');
+
+      const sensitiveEntry = payload.metadata.environmentReadiness.variables.find(
+        (v: { name: string }) => v.name === 'VITE_SUPABASE_ANON_KEY',
+      );
+      expect(sensitiveEntry.value).toBeUndefined();
+    });
+
+    it('refuses and writes nothing when the report contains an invalid variable', async () => {
+      const fullRow = makeDeploymentRow({ status: 'database_connected' });
+      const readSingle = vi.fn().mockResolvedValue({ data: fullRow, error: null });
+      const readEq = vi.fn().mockReturnValue({ single: readSingle });
+      const readSelect = vi.fn().mockReturnValue({ eq: readEq });
+      const update = vi.fn();
+      const historyInsert = vi.fn();
+
+      const from = vi.fn((table: string) => {
+        if (table === 'builders_project_deployments') {
+          return { select: readSelect, update };
+        }
+
+        return { insert: historyInsert };
+      });
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      const result = await updateDeploymentEnvironment(
+        'dep-1',
+        'proj-1',
+        makeReport({
+          variables: [
+            { name: 'VITE_SUPABASE_URL', status: 'invalid', source: 'provider', sensitive: false, detail: '' },
+          ],
+        }),
+      );
+
+      expect(result).toBeNull();
+      expect(update).not.toHaveBeenCalled();
+      expect(historyInsert).not.toHaveBeenCalled();
+    });
+
+    it('refuses an illegal transition (e.g. deployment not yet database_connected) and writes nothing', async () => {
+      const fullRow = makeDeploymentRow({ status: 'repository_connected' });
+      const readSingle = vi.fn().mockResolvedValue({ data: fullRow, error: null });
+      const readEq = vi.fn().mockReturnValue({ single: readSingle });
+      const readSelect = vi.fn().mockReturnValue({ eq: readEq });
+      const update = vi.fn();
+
+      const from = vi.fn(() => ({ select: readSelect, update }));
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      const result = await updateDeploymentEnvironment('dep-1', 'proj-1', makeReport());
+
+      expect(result).toBeNull();
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it('returns null without throwing when BuildersDB is unconfigured', async () => {
+      getBuildersDbClientMock.mockReturnValue(null);
+
+      const result = await updateDeploymentEnvironment('dep-1', 'proj-1', makeReport());
+
+      expect(result).toBeNull();
     });
   });
 
@@ -723,6 +886,60 @@ describe('deploymentRepository', () => {
         // Connecting Supabase never touches another project's GitHub provider row.
         expect(mocks.githubUpsert).not.toHaveBeenCalled();
       }
+    });
+
+    /** Sprint 90 Part 9 — the Environment Readiness layer follows the same per-project scoping. */
+    it('scopes updateDeploymentEnvironment strictly per project, never sharing metadata between projects', async () => {
+      function makeMocksFor(deploymentId: string) {
+        const fullRow = makeDeploymentRow({ id: deploymentId, status: 'database_connected' });
+        const readSingle = vi.fn().mockResolvedValue({ data: fullRow, error: null });
+        const readEq = vi.fn().mockReturnValue({ single: readSingle });
+        const readSelect = vi.fn().mockReturnValue({ eq: readEq });
+        const updateEq = vi.fn().mockResolvedValue({ error: null });
+        const update = vi.fn().mockReturnValue({ eq: updateEq });
+        const historySingle = vi.fn().mockResolvedValue({ data: makeHistoryRow(), error: null });
+        const historySelect = vi.fn().mockReturnValue({ single: historySingle });
+        const historyInsert = vi.fn().mockReturnValue({ select: historySelect });
+
+        const from = vi.fn((table: string) => {
+          if (table === 'builders_project_deployments') {
+            return { select: readSelect, update };
+          }
+
+          if (table === 'builders_deployment_history') {
+            return { insert: historyInsert };
+          }
+
+          throw new Error(`unexpected table: ${table}`);
+        });
+
+        return { from, update, historyInsert };
+      }
+
+      const report = {
+        variables: [
+          { name: 'VITE_SUPABASE_URL', status: 'resolved', source: 'provider', sensitive: false, detail: '' },
+        ],
+        ready: true,
+        fullyResolved: true,
+      };
+
+      const a = makeMocksFor('dep-a');
+      getBuildersDbClientMock.mockReturnValue({ from: a.from });
+      await updateDeploymentEnvironment('dep-a', 'proj-a', report);
+
+      const b = makeMocksFor('dep-b');
+      getBuildersDbClientMock.mockReturnValue({ from: b.from });
+      await updateDeploymentEnvironment('dep-b', 'proj-b', report);
+
+      expect(a.historyInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ deployment_id: 'dep-a', project_id: 'proj-a' }),
+      );
+      expect(b.historyInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ deployment_id: 'dep-b', project_id: 'proj-b' }),
+      );
+      expect(a.update).toHaveBeenCalledTimes(1);
+      expect(b.update).toHaveBeenCalledTimes(1);
     });
   });
 });
