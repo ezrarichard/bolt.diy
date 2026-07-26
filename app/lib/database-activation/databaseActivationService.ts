@@ -37,7 +37,11 @@ export interface DatabaseActivationActionResult {
  * and is never passed to or persisted by this function. See
  * docs/backend-activation/Provisioning-Architecture.md §4.
  */
-export function connectSupabaseProject(project: Project, projectId: string): DatabaseActivationActionResult {
+export function connectSupabaseProject(
+  project: Project,
+  projectId: string,
+  meta: { projectName?: string; region?: string } = {},
+): DatabaseActivationActionResult {
   if (!projectId.trim()) {
     return { ok: false, message: 'Select a Supabase project first.' };
   }
@@ -52,7 +56,13 @@ export function connectSupabaseProject(project: Project, projectId: string): Dat
   }
 
   updateProjectDatabaseActivation(project.id, {
-    connectionConfig: { provider: 'supabase', projectId, connectedAt: new Date().toISOString() },
+    connectionConfig: {
+      provider: 'supabase',
+      projectId,
+      connectedAt: new Date().toISOString(),
+      projectName: meta.projectName,
+      region: meta.region,
+    },
 
     // A new connection invalidates any provisioning/connection status recorded against the previous one.
     provisioning: undefined,

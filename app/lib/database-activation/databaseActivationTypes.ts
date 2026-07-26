@@ -38,6 +38,16 @@ export interface DatabaseActivationState {
     provider: DatabaseProviderId;
     projectId: string;
     connectedAt: string;
+
+    /**
+     * Sprint 89 — carried over from the `SupabaseProject` the user picked in
+     * `DatabaseActivationCard.tsx` (see `app/types/supabase.ts`), so this safe, non-secret detail
+     * survives a reload instead of only living in that component's transient `availableProjects`
+     * state. Neither field is ever fetched independently by this service — both are optional and
+     * simply pass through whatever the caller already had at connect time.
+     */
+    projectName?: string;
+    region?: string;
   };
   provisioning?: {
     provider: DatabaseProviderId;

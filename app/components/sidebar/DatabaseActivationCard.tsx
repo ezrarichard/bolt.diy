@@ -18,6 +18,7 @@ import {
   connectSupabaseProvisioningSession,
   isSupabaseProvisioningConnected,
 } from '~/lib/database-activation/provisioning/supabaseSessionCredentials';
+import { syncSupabaseDeploymentAfterProvisioning } from '~/lib/services/supabaseDeployService';
 
 interface DatabaseActivationCardProps {
   project: Project;
@@ -94,11 +95,57 @@ export function DatabaseActivationCard({ project, className }: DatabaseActivatio
     }
   };
 
+  /**
+   * Sprint 89 — after a REAL (non-mock) Supabase step succeeds, sync the Deployment domain
+   * (`attachSupabase`, which itself validates the lifecycle transition, persists status, and
+   * records the one canonical history event). Mock-provider results never reach this — see
+   * `syncSupabaseDeploymentAfterProvisioning`'s own guard. A sync failure is surfaced as its own
+   * toast rather than silently swallowed, without overriding the primary action's own success toast.
+   */
+  const syncDeploymentIfRealSupabase = async () => {
+    if (provider !== 'supabase') {
+      return;
+    }
+
+    const sync = await syncSupabaseDeploymentAfterProvisioning(project);
+
+    if (!sync.ok) {
+      toast.error(sync.message);
+    }
+  };
+
   const handleGenerate = () => runAction('generate', async () => generateDatabaseSchema(project));
   const handleValidate = () => runAction('validate', async () => validateDatabaseSchema(project));
-  const handleProvision = () => runAction('provision', () => provisionDatabase(project, provider));
-  const handleRetry = () => runAction('retry', () => retryProvisionDatabase(project));
-  const handleVerify = () => runAction('verify', () => verifyDatabaseConnection(project));
+  const handleProvision = () =>
+    runAction('provision', async () => {
+      const result = await provisionDatabase(project, provider);
+
+      if (result.ok) {
+        await syncDeploymentIfRealSupabase();
+      }
+
+      return result;
+    });
+  const handleRetry = () =>
+    runAction('retry', async () => {
+      const result = await retryProvisionDatabase(project);
+
+      if (result.ok) {
+        await syncDeploymentIfRealSupabase();
+      }
+
+      return result;
+    });
+  const handleVerify = () =>
+    runAction('verify', async () => {
+      const result = await verifyDatabaseConnection(project);
+
+      if (result.ok) {
+        await syncDeploymentIfRealSupabase();
+      }
+
+      return result;
+    });
 
   const handleFetchProjects = async () => {
     if (!tokenInput.trim()) {
@@ -138,7 +185,11 @@ export function DatabaseActivationCard({ project, className }: DatabaseActivatio
       return;
     }
 
-    const result = connectSupabaseProject(project, selectedProjectId);
+    const selected = availableProjects.find((proj) => proj.id === selectedProjectId);
+    const result = connectSupabaseProject(project, selectedProjectId, {
+      projectName: selected?.name,
+      region: selected?.region,
+    });
 
     if (result.ok) {
       toast.success(result.message);

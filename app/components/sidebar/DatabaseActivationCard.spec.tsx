@@ -351,7 +351,14 @@ describe('DatabaseActivationCard — Sprint 75/76', () => {
       });
       fireEvent.click(screen.getByText('Use this project'));
 
-      expect(connectSupabaseProjectMock).toHaveBeenCalledWith(project, 'proj-abc');
+      /*
+       * Sprint 89 — name/region are non-secret, carried over from the already-fetched project list
+       * so the Deployment domain can persist them; the Management PAT itself is still never passed.
+       */
+      expect(connectSupabaseProjectMock).toHaveBeenCalledWith(project, 'proj-abc', {
+        projectName: 'My Project',
+        region: undefined,
+      });
     });
 
     it('shows the connected project id and a Disconnect button once connectionConfig is set', () => {

@@ -14,6 +14,7 @@ const {
   ensureDeploymentForProject,
   updateDeploymentStatus,
   attachGithub,
+  attachSupabase,
   getDeploymentHistory,
   recordDeploymentEvent,
 } = await import('./deploymentRepository');
@@ -53,6 +54,24 @@ function makeGithubRow(overrides: Record<string, unknown> = {}) {
     metadata: {},
     created_at: '2026-08-04T00:00:00.000Z',
     updated_at: '2026-08-04T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function makeSupabaseRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'sb-1',
+    deployment_id: 'dep-1',
+    project_id: 'proj-1',
+    supabase_project_ref: 'abcdefghij',
+    supabase_project_url: 'https://abcdefghij.supabase.co',
+    region: 'us-east-1',
+    status: 'connected',
+    last_error: null,
+    connected_at: '2026-08-05T00:00:00.000Z',
+    metadata: {},
+    created_at: '2026-08-05T00:00:00.000Z',
+    updated_at: '2026-08-05T00:00:00.000Z',
     ...overrides,
   };
 }
@@ -407,6 +426,132 @@ describe('deploymentRepository', () => {
     });
   });
 
+  describe('attachSupabase', () => {
+    function makeAttachSupabaseMocks(options: {
+      currentStatus: string;
+      existingSupabaseRow: { id: string } | null;
+      supabaseRow?: Record<string, unknown>;
+    }) {
+      const deploymentReadSingle = vi.fn().mockResolvedValue({ data: { status: options.currentStatus }, error: null });
+      const deploymentReadEq = vi.fn().mockReturnValue({ single: deploymentReadSingle });
+      const deploymentSelect = vi.fn().mockReturnValue({ eq: deploymentReadEq });
+
+      const deploymentUpdateEq = vi.fn().mockResolvedValue({ error: null });
+      const deploymentUpdate = vi.fn().mockReturnValue({ eq: deploymentUpdateEq });
+
+      const existingMaybeSingle = vi.fn().mockResolvedValue({ data: options.existingSupabaseRow, error: null });
+      const existingEq = vi.fn().mockReturnValue({ maybeSingle: existingMaybeSingle });
+      const supabaseExistingSelect = vi.fn().mockReturnValue({ eq: existingEq });
+
+      const upsertSingle = vi.fn().mockResolvedValue({ data: options.supabaseRow ?? makeSupabaseRow(), error: null });
+      const upsertSelect = vi.fn().mockReturnValue({ single: upsertSingle });
+      const upsert = vi.fn().mockReturnValue({ select: upsertSelect });
+
+      const historySingle = vi.fn().mockResolvedValue({ data: makeHistoryRow(), error: null });
+      const historySelect = vi.fn().mockReturnValue({ single: historySingle });
+      const historyInsert = vi.fn().mockReturnValue({ select: historySelect });
+
+      const githubSelect = vi.fn();
+      const githubUpsert = vi.fn();
+
+      const from = vi.fn((table: string) => {
+        if (table === 'builders_project_deployments') {
+          return { select: deploymentSelect, update: deploymentUpdate };
+        }
+
+        if (table === 'builders_deployment_supabase') {
+          return { select: supabaseExistingSelect, upsert };
+        }
+
+        if (table === 'builders_deployment_github') {
+          return { select: githubSelect, upsert: githubUpsert };
+        }
+
+        if (table === 'builders_deployment_history') {
+          return { insert: historyInsert };
+        }
+
+        throw new Error(`unexpected table: ${table}`);
+      });
+
+      return { from, deploymentUpdate, upsert, historyInsert, githubUpsert };
+    }
+
+    it('transitions repository_connected -> database_connected and records one database_connected event on first connect', async () => {
+      const { from, deploymentUpdate, upsert, historyInsert } = makeAttachSupabaseMocks({
+        currentStatus: 'repository_connected',
+        existingSupabaseRow: null,
+      });
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      const result = await attachSupabase({
+        deploymentId: 'dep-1',
+        projectId: 'proj-1',
+        supabaseProjectRef: 'abcdefghij',
+        region: 'us-east-1',
+      });
+
+      expect(upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ deployment_id: 'dep-1', supabase_project_ref: 'abcdefghij' }),
+        { onConflict: 'deployment_id' },
+      );
+      expect(deploymentUpdate).toHaveBeenCalledWith({ status: 'database_connected' });
+      expect(result?.supabaseProjectRef).toBe('abcdefghij');
+      expect(historyInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'database_connected',
+          from_status: 'repository_connected',
+          to_status: 'database_connected',
+          provider: 'supabase',
+        }),
+      );
+    });
+
+    it('records a database_updated event (reconnect) when a supabase row already exists, without touching GitHub', async () => {
+      const { from, historyInsert, githubUpsert } = makeAttachSupabaseMocks({
+        currentStatus: 'database_connected',
+        existingSupabaseRow: { id: 'sb-1' },
+      });
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      await attachSupabase({ deploymentId: 'dep-1', projectId: 'proj-1', supabaseProjectRef: 'abcdefghij' });
+
+      expect(historyInsert).toHaveBeenCalledWith(expect.objectContaining({ event_type: 'database_updated' }));
+      expect(githubUpsert).not.toHaveBeenCalled();
+    });
+
+    it('rejects an illegal transition (e.g. GitHub not yet connected) and writes nothing', async () => {
+      const { from, upsert, deploymentUpdate, historyInsert } = makeAttachSupabaseMocks({
+        currentStatus: 'planning',
+        existingSupabaseRow: null,
+      });
+      getBuildersDbClientMock.mockReturnValue({ from });
+
+      const result = await attachSupabase({
+        deploymentId: 'dep-1',
+        projectId: 'proj-1',
+        supabaseProjectRef: 'abcdefghij',
+      });
+
+      expect(result).toBeNull();
+      expect(upsert).not.toHaveBeenCalled();
+      expect(deploymentUpdate).not.toHaveBeenCalled();
+      expect(historyInsert).not.toHaveBeenCalled();
+    });
+
+    it('returns null without throwing when BuildersDB is unconfigured', async () => {
+      getBuildersDbClientMock.mockReturnValue(null);
+
+      const result = await attachSupabase({
+        deploymentId: 'dep-1',
+        projectId: 'proj-1',
+        supabaseProjectRef: 'abcdefghij',
+      });
+
+      expect(result).toBeNull();
+    });
+  });
+
   describe('multi-project isolation', () => {
     /**
      * Sprint 88 Part 8 — every attach call is always scoped to the caller-supplied
@@ -487,6 +632,97 @@ describe('deploymentRepository', () => {
       // Project A's mocks were never touched by Project B's call, and vice versa.
       expect(projectA.upsert).toHaveBeenCalledTimes(1);
       expect(projectB.upsert).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * Sprint 89 Part 11 — same isolation guarantee, now for Supabase across three independent
+     * projects: no SQL/session credential is a repository concern (that lives entirely in
+     * `supabaseDeployService.ts`/`databaseActivationService.ts`), but the durable identity
+     * `attachSupabase` persists must never leak between projects' rows.
+     */
+    it("scopes attachSupabase strictly per project across three independent projects, and never touches another project's GitHub row", async () => {
+      function makeMocksFor(deploymentId: string, projectId: string) {
+        const deploymentReadSingle = vi
+          .fn()
+          .mockResolvedValue({ data: { status: 'repository_connected' }, error: null });
+        const deploymentReadEq = vi.fn().mockReturnValue({ single: deploymentReadSingle });
+        const deploymentSelect = vi.fn().mockReturnValue({ eq: deploymentReadEq });
+        const deploymentUpdateEq = vi.fn().mockResolvedValue({ error: null });
+        const deploymentUpdate = vi.fn().mockReturnValue({ eq: deploymentUpdateEq });
+
+        const existingMaybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
+        const existingEq = vi.fn().mockReturnValue({ maybeSingle: existingMaybeSingle });
+        const supabaseSelect = vi.fn().mockReturnValue({ eq: existingEq });
+
+        const upsertSingle = vi.fn().mockResolvedValue({
+          data: makeSupabaseRow({ deployment_id: deploymentId, project_id: projectId }),
+          error: null,
+        });
+        const upsertSelect = vi.fn().mockReturnValue({ single: upsertSingle });
+        const upsert = vi.fn().mockReturnValue({ select: upsertSelect });
+
+        const historySingle = vi.fn().mockResolvedValue({ data: makeHistoryRow(), error: null });
+        const historySelect = vi.fn().mockReturnValue({ single: historySingle });
+        const historyInsert = vi.fn().mockReturnValue({ select: historySelect });
+
+        const githubSelect = vi.fn();
+        const githubUpsert = vi.fn();
+
+        const from = vi.fn((table: string) => {
+          if (table === 'builders_project_deployments') {
+            return { select: deploymentSelect, update: deploymentUpdate };
+          }
+
+          if (table === 'builders_deployment_supabase') {
+            return { select: supabaseSelect, upsert };
+          }
+
+          if (table === 'builders_deployment_github') {
+            return { select: githubSelect, upsert: githubUpsert };
+          }
+
+          if (table === 'builders_deployment_history') {
+            return { insert: historyInsert };
+          }
+
+          throw new Error(`unexpected table: ${table}`);
+        });
+
+        return { from, upsert, historyInsert, githubUpsert };
+      }
+
+      const projects = [
+        { deploymentId: 'dep-a', projectId: 'proj-a', ref: 'ref-a' },
+        { deploymentId: 'dep-b', projectId: 'proj-b', ref: 'ref-b' },
+        { deploymentId: 'dep-c', projectId: 'proj-c', ref: 'ref-c' },
+      ];
+      const mocksByProject = new Map(projects.map((p) => [p.projectId, makeMocksFor(p.deploymentId, p.projectId)]));
+
+      for (const p of projects) {
+        const mocks = mocksByProject.get(p.projectId)!;
+        getBuildersDbClientMock.mockReturnValue({ from: mocks.from });
+
+        await attachSupabase({ deploymentId: p.deploymentId, projectId: p.projectId, supabaseProjectRef: p.ref });
+      }
+
+      for (const p of projects) {
+        const mocks = mocksByProject.get(p.projectId)!;
+        expect(mocks.upsert).toHaveBeenCalledTimes(1);
+        expect(mocks.upsert).toHaveBeenCalledWith(
+          expect.objectContaining({
+            deployment_id: p.deploymentId,
+            project_id: p.projectId,
+            supabase_project_ref: p.ref,
+          }),
+          { onConflict: 'deployment_id' },
+        );
+        expect(mocks.historyInsert).toHaveBeenCalledWith(
+          expect.objectContaining({ deployment_id: p.deploymentId, project_id: p.projectId }),
+        );
+
+        // Connecting Supabase never touches another project's GitHub provider row.
+        expect(mocks.githubUpsert).not.toHaveBeenCalled();
+      }
     });
   });
 });

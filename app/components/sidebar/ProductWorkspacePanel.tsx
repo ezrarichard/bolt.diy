@@ -259,7 +259,7 @@ export function ProductWorkspacePanel({ project }: ProductWorkspacePanelProps) {
       </div>
 
       {/* Deployment status — Sprint 88 (GitHub Product Integration). */}
-      <DeploymentStatusCard projectId={project.id} />
+      <DeploymentStatusCard project={project} />
 
       {/* MVP timeline — Phase 6. */}
       <MvpTimeline
