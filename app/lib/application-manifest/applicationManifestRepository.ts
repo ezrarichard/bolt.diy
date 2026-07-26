@@ -69,6 +69,14 @@ interface ManifestRow {
     fingerprints?: ManifestFingerprints;
     mvpCode?: string;
     featureScope?: { inScopeFeatureIds: string[]; outOfScopeFeatureDescriptions: string[] };
+
+    /** Sprint 86, Part 5 — see ApplicationManifestDraft's own comments (manifestTypes.ts). Stored here, not new columns, same discipline `mvpCode`/`featureScope` above already established. */
+    dependencies?: Record<string, string>;
+    environmentRequirements?: string[];
+    runtimeRequirements?: string[];
+    requiredServices?: string[];
+    buildCommand?: string;
+    outputDirectory?: string;
   } | null;
   persisted_at: string;
   created_by: string | null;
@@ -126,6 +134,12 @@ function fromManifestRow(row: ManifestRow): ApplicationManifest {
     planChecksum: row.plan_checksum,
     sourceContentChecksum: row.source_content_checksum ?? '',
     fingerprints: row.metadata?.fingerprints ?? { types: '', services: '', pages: '', components: '' },
+    dependencies: row.metadata?.dependencies ?? undefined,
+    environmentRequirements: row.metadata?.environmentRequirements ?? undefined,
+    runtimeRequirements: row.metadata?.runtimeRequirements ?? undefined,
+    requiredServices: row.metadata?.requiredServices ?? undefined,
+    buildCommand: row.metadata?.buildCommand ?? undefined,
+    outputDirectory: row.metadata?.outputDirectory ?? undefined,
     persistedAt: row.persisted_at,
     createdBy: row.created_by ?? undefined,
     createdAt: row.created_at,
@@ -322,7 +336,17 @@ export async function saveApplicationManifest(
         failed_files: 0,
         plan_checksum: draft.planChecksum,
         source_content_checksum: draft.sourceContentChecksum,
-        metadata: { fingerprints: draft.fingerprints, mvpCode: draft.mvpCode, featureScope: draft.featureScope },
+        metadata: {
+          fingerprints: draft.fingerprints,
+          mvpCode: draft.mvpCode,
+          featureScope: draft.featureScope,
+          dependencies: draft.dependencies,
+          environmentRequirements: draft.environmentRequirements,
+          runtimeRequirements: draft.runtimeRequirements,
+          requiredServices: draft.requiredServices,
+          buildCommand: draft.buildCommand,
+          outputDirectory: draft.outputDirectory,
+        },
         persisted_at: new Date().toISOString(),
         created_by: options.createdBy ?? null,
       })

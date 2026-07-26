@@ -57,3 +57,24 @@ describe('assembleProductPackage — Sprint 76 credential non-leakage', () => {
     expect(databaseSection?.files.some((file) => file.filename === 'schema.sql')).toBe(true);
   });
 });
+
+describe('assembleProductPackage — Sprint 86 Part 6 (deploymentReadiness reference)', () => {
+  it('leaves deploymentReadiness undefined when the caller omits it (every pre-Sprint-86 call site)', () => {
+    const pkg = assembleProductPackage(makeProject());
+    expect(pkg.deploymentReadiness).toBeUndefined();
+  });
+
+  it('threads the caller-supplied deployment info straight through, unmodified', () => {
+    const deploymentInfo = {
+      framework: 'react-vite-ts',
+      buildCommand: 'npm run build',
+      outputDirectory: 'dist',
+      environmentRequirements: ['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'],
+      dependencySummary: ['react', 'react-dom', '@supabase/supabase-js'],
+      readinessStatus: 'ready' as const,
+    };
+
+    const pkg = assembleProductPackage(makeProject(), deploymentInfo);
+    expect(pkg.deploymentReadiness).toEqual(deploymentInfo);
+  });
+});

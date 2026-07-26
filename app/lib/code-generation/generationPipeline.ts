@@ -18,6 +18,8 @@ import {
 } from './prompts';
 import { REACT_VITE_TS_TEMPLATE_ID, resolveTemplate } from './templateResolver';
 import { scaffoldReactViteProject } from './projectScaffolder';
+import { resolveRequiredDependencies } from './dependencyValidation';
+import { validateBuildReadiness } from './generationValidator';
 import { fnv1aHash } from '~/lib/checksum/fnv1a';
 import { backendModuleFilePathList, backendModuleFilePaths } from '~/lib/backend-generation/backendModuleTypes';
 import type { BackendModulePlan } from '~/lib/backend-generation/backendModuleTypes';
@@ -676,6 +678,10 @@ export async function runGenerationPipeline(
         projectName: project.name,
         apiEndpoints: plan.apiEndpoints,
         apiArchitecture: drafts.backend?.apiArchitecture,
+        backendModules: (plan.backendModules ?? []).map((module) => ({
+          moduleSlug: module.moduleSlug,
+          apiEndpoints: module.apiEndpoints,
+        })),
       }),
       generate,
       project.id,
@@ -903,11 +909,37 @@ export async function runGenerationPipeline(
   onProgress({ stage: 'assembling' });
 
   const template = resolveTemplate(REACT_VITE_TS_TEMPLATE_ID);
+
+  /*
+   * Sprint 86 (Part 1) — the single biggest blocker Sprint 85's assessment identified:
+   * `template.dependencies` only ever covers the scaffold's own imports, so a generated
+   * Backend Module's `@supabase/supabase-js` import (or any other known package a future
+   * prompt starts allowing) was never added to `package.json`, guaranteeing a broken
+   * `npm run build`. Resolved here, once, over every AI-generated + backend file, BEFORE
+   * `package.json` is scaffolded, so it's correct on the very first write rather than
+   * patched in afterward.
+   */
+  const resolvedDependencies = resolveRequiredDependencies(validatedFiles, template.dependencies);
+
+  /*
+   * Sprint 86 (Part 3) — a project needs its own Supabase credentials at runtime exactly
+   * when it has a generated Backend Module (whose repository.ts calls
+   * `@supabase/supabase-js`) or an already-generated real database schema (Database
+   * Activation, `project.databaseActivation.schema` — see productAssembler.ts's own
+   * `buildDatabaseActivationFiles`). Neither implies the other structurally, so both are
+   * checked; a frontend-only project with neither gets a `.env.example` with no invented
+   * Supabase entries.
+   */
+  const needsSupabaseEnv =
+    Boolean(plan.backendModules && plan.backendModules.length > 0) || Boolean(project.databaseActivation?.schema);
+
   const scaffoldFiles = scaffoldReactViteProject({
     projectName: project.name,
     description: project.description,
     template,
     pages: plan.pages,
+    resolvedDependencies,
+    needsSupabaseEnv,
   });
 
   /*
@@ -934,5 +966,23 @@ export async function runGenerationPipeline(
     generatedAt: new Date().toISOString(),
   };
 
-  return { ok: true, project: generatedProject, issues };
+  /*
+   * Sprint 86 (Part 4) — the new build-readiness pass, over the FULLY assembled project
+   * (scaffold + AI-generated, dependencies already resolved above). `ok: false` here means
+   * `validateBuildReadiness` found something it's confident would break `npm install`/`npm
+   * run build` (an unresolvable import, a broken relative import, or an unparseable/missing
+   * package.json) — see that module's own header for why every softer, heuristic check
+   * stays a non-blocking warning instead of failing the whole run. This is the literal
+   * "generation should stop" requirement: unlike a single bad page (which the pipeline
+   * already tolerates and continues past), a build-breaking dependency/import problem is
+   * something no amount of "partial project is still usable" tolerance can paper over.
+   */
+  const buildValidation = validateBuildReadiness({ project: generatedProject, needsSupabaseEnv });
+  const allIssues = [...issues, ...buildValidation.issues];
+
+  if (!buildValidation.ok) {
+    return { ok: false, issues: allIssues, failedStage: 'validating' };
+  }
+
+  return { ok: true, project: generatedProject, issues: allIssues };
 }

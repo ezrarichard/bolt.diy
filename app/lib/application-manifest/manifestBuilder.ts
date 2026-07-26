@@ -483,7 +483,24 @@ export interface BuildManifestInput {
   /** Sprint 48 — see ApplicationManifestDraft.mvpCode/featureScope's comments (manifestTypes.ts). Threaded straight through, unvalidated — this module stays pure/deterministic. */
   mvpCode?: string;
   featureScope?: { inScopeFeatureIds: string[]; outOfScopeFeatureDescriptions: string[] };
+
+  /**
+   * Sprint 86, Part 5 — the resolved `package.json` "dependencies" map (see
+   * `dependencyValidation.ts`'s `resolveRequiredDependencies`), threaded straight through
+   * unvalidated, same "caller resolves it, this module stays pure" discipline every field
+   * above already follows. Omitted defaults to `{}` — a manifest built before generation's
+   * dependency-resolution step has run simply has no dependency list yet, not an error.
+   */
+  dependencies?: Record<string, string>;
+
+  /** Sprint 86, Part 5 — see `ApplicationManifestDraft.requiredServices`'s comment. Whether this plan's generation needs its own Supabase project — same signal `generationPipeline.ts` computes as `needsSupabaseEnv` (a Backend Module was planned, and/or Database Activation produced a schema) for `.env.example`, reused here rather than re-derived. */
+  needsSupabaseEnv?: boolean;
 }
+
+const BUILD_COMMAND = 'npm run build';
+const OUTPUT_DIRECTORY = 'dist';
+const RUNTIME_REQUIREMENTS = ['Node.js'];
+const SUPABASE_ENV_REQUIREMENTS = ['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'];
 
 /** Pure, synchronous, never throws — persistence is a separate step (applicationManifestRepository.ts). */
 export function buildApplicationManifest(input: BuildManifestInput): BuildManifestResult {
@@ -494,6 +511,8 @@ export function buildApplicationManifest(input: BuildManifestInput): BuildManife
   if (hasBlockingIssue || files.length === 0) {
     return { ok: false, files, issues };
   }
+
+  const needsSupabaseEnv = Boolean(input.needsSupabaseEnv);
 
   return {
     ok: true,
@@ -511,6 +530,12 @@ export function buildApplicationManifest(input: BuildManifestInput): BuildManife
       planChecksum: computeManifestChecksum(files),
       fingerprints: input.plan.fingerprints,
       sourceContentChecksum: fnv1aHash(JSON.stringify(input.plan.fingerprints)),
+      dependencies: input.dependencies ?? {},
+      environmentRequirements: needsSupabaseEnv ? SUPABASE_ENV_REQUIREMENTS : [],
+      runtimeRequirements: RUNTIME_REQUIREMENTS,
+      requiredServices: needsSupabaseEnv ? ['Supabase'] : [],
+      buildCommand: BUILD_COMMAND,
+      outputDirectory: OUTPUT_DIRECTORY,
     },
   };
 }

@@ -218,6 +218,41 @@ describe('validateManifestFileDrafts', () => {
   });
 });
 
+describe('buildApplicationManifest — Sprint 86 Part 5 (deployment metadata)', () => {
+  it('always sets buildCommand/outputDirectory/runtimeRequirements deterministically, regardless of input', () => {
+    const result = buildApplicationManifest({ projectId: 'proj-1', plan: makePlan() });
+
+    expect(result.manifest?.buildCommand).toBe('npm run build');
+    expect(result.manifest?.outputDirectory).toBe('dist');
+    expect(result.manifest?.runtimeRequirements).toEqual(['Node.js']);
+  });
+
+  it('defaults dependencies to {} and environmentRequirements/requiredServices to [] when the caller supplies neither', () => {
+    const result = buildApplicationManifest({ projectId: 'proj-1', plan: makePlan() });
+
+    expect(result.manifest?.dependencies).toEqual({});
+    expect(result.manifest?.environmentRequirements).toEqual([]);
+    expect(result.manifest?.requiredServices).toEqual([]);
+  });
+
+  it('threads the caller-supplied dependency map through unmodified', () => {
+    const result = buildApplicationManifest({
+      projectId: 'proj-1',
+      plan: makePlan(),
+      dependencies: { react: '^18.3.1', '@supabase/supabase-js': '^2.45.4' },
+    });
+
+    expect(result.manifest?.dependencies).toEqual({ react: '^18.3.1', '@supabase/supabase-js': '^2.45.4' });
+  });
+
+  it('adds Supabase environment/service requirements when needsSupabaseEnv is true', () => {
+    const result = buildApplicationManifest({ projectId: 'proj-1', plan: makePlan(), needsSupabaseEnv: true });
+
+    expect(result.manifest?.environmentRequirements).toEqual(['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY']);
+    expect(result.manifest?.requiredServices).toEqual(['Supabase']);
+  });
+});
+
 describe('buildApplicationManifest — Sprint 79 Phase 1 Backend Module planning', () => {
   it('plans exactly the six-file vertical slice for one Backend Module, tagged with its featureIds and dependency-chained', () => {
     const result = buildApplicationManifest({

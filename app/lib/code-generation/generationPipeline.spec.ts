@@ -3,6 +3,8 @@ import type { Project } from '~/lib/stores/projects';
 import type { ProductPackage } from '~/lib/product-assembly/assemblyTypes';
 import type { GenerateFn } from './codeGenerationTypes';
 import { buildGenerationPlan, runGenerationPipeline } from './generationPipeline';
+import { validateDependencies } from './dependencyValidation';
+import { calculateDeploymentReadinessFromArtifacts } from './deploymentReadiness';
 
 describe('buildGenerationPlan — component naming (word-boundary truncation)', () => {
   it('never cuts a component name mid-word, even for a long, comma-heavy page description', () => {
@@ -91,6 +93,20 @@ const stubGenerate: GenerateFn = async () => ({
   ok: true,
   text: JSON.stringify({ files: [{ path: 'src/stub.ts', content: 'export {};' }] }),
 });
+
+/** A minimal stand-in Application Manifest + Product Package, the shape a real caller (useCodeGeneration.ts/ProductPackagePanel.tsx) would already have in hand by the time it computes a deployment readiness score — see deploymentReadiness.spec.ts for unit coverage of the function itself. */
+function fakeManifestAndPackage(dependencies: Record<string, string>) {
+  return {
+    manifest: { buildCommand: 'npm run build', dependencies },
+    productPackage: {
+      projectId: 'proj-manifest-1',
+      projectName: 'Manifest Test Project',
+      assembledAt: '',
+      sections: [{ id: 'requirements' as const, label: 'Requirements', files: [{ id: 'f1' } as never] }],
+      missingSections: [],
+    },
+  };
+}
 
 describe('runGenerationPipeline — onPlanReady (Sprint 44.2 Application Manifest hook)', () => {
   it('calls onPlanReady with the deterministic plan before any AI generate() call', async () => {
@@ -673,5 +689,198 @@ describe('runGenerationPipeline — generating-backend stage (Sprint 79 Phase 1,
     expect(
       result.issues.some((issue) => issue.stage === 'generating-backend' && issue.message.includes('quota exceeded')),
     ).toBe(true);
+  });
+});
+
+/**
+ * Sprint 86 (Deployment Foundation) — Part 9's own verification instruction asks for at
+ * least three generated applications (Business Website / Booking System / SaaS Starter) to
+ * be checked end-to-end: correct package.json, correct .env.example, correct dependency
+ * list, correct frontend/backend wiring, and an overall "Deployment Ready" score of YES.
+ * Running three REAL AI generations isn't feasible in this environment (no live LLM calls
+ * in a test), so each scenario below drives `runGenerationPipeline` with a deterministic
+ * `generate` stub standing in for the AI, differentiated by which module/system-prompt
+ * this pipeline actually asks for — the exact same mechanism every other test in this file
+ * already uses (see `stubBackendGenerate` above) — so the pipeline's own orchestration,
+ * dependency resolution, validation, and env-template logic all run for real.
+ */
+describe('runGenerationPipeline — end-to-end example applications (Sprint 86 Part 9 verification)', () => {
+  it('Business Website (no backend module) — correct package.json, no invented Supabase env, deployment ready', async () => {
+    const result = await runGenerationPipeline(makeProject(), makeEmptyProductPackage(), stubGenerate, () => {});
+
+    expect(result.ok).toBe(true);
+
+    const packageJson = JSON.parse(result.project!.files.find((f) => f.path === 'package.json')!.content);
+    expect(packageJson.dependencies).toEqual({
+      react: '^18.3.1',
+      'react-dom': '^18.3.1',
+      'react-router-dom': '^6.26.2',
+    });
+
+    const envExample = result.project!.files.find((f) => f.path === '.env.example');
+    expect(envExample).toBeDefined();
+    expect(envExample!.content).not.toContain('VITE_SUPABASE_URL');
+
+    const dependencyValidation = validateDependencies(result.project!.files, {
+      ...packageJson.dependencies,
+      ...packageJson.devDependencies,
+    });
+    expect(dependencyValidation.ok).toBe(true);
+
+    const readiness = calculateDeploymentReadinessFromArtifacts({
+      generationResult: result,
+      ...fakeManifestAndPackage(packageJson.dependencies),
+    });
+    expect(readiness.overall).toBe('ready');
+  });
+
+  it('Booking System (one backend module) — @supabase/supabase-js auto-added, Supabase env placeholders present, services layer wired to the real module, deployment ready', async () => {
+    const APPOINTMENTS_MODULE = {
+      moduleSlug: 'appointments',
+      featureIds: ['FEAT-001'],
+      databaseTables: ['appointments'],
+      apiEndpoints: ['GET /appointments'],
+    };
+
+    const generate: GenerateFn = async (system, prompt) => {
+      if (typeof system === 'string' && system.includes('Backend Engineer')) {
+        return {
+          ok: true,
+          text: JSON.stringify({
+            files: [
+              { path: 'src/features/appointments/types.ts', content: 'export interface Appointment { id: string }' },
+              { path: 'src/features/appointments/validators.ts', content: 'export const validate = () => true;' },
+              {
+                path: 'src/features/appointments/repository.ts',
+                content:
+                  "import { createClient } from '@supabase/supabase-js';\nexport class AppointmentsRepository {}",
+              },
+              {
+                path: 'src/features/appointments/service.ts',
+                content: 'export function listAppointments() { return []; }',
+              },
+              { path: 'src/features/appointments/routes.ts', content: 'export const routes = {};' },
+              { path: 'api/appointments/index.ts', content: "export * from '../../src/features/appointments/routes';" },
+            ],
+          }),
+        };
+      }
+
+      // The "generating-services" stage's prompt is the one asking specifically for src/services/api.ts.
+      if (prompt.includes('src/services/api.ts')) {
+        return {
+          ok: true,
+          text: JSON.stringify({
+            files: [
+              {
+                path: 'src/services/api.ts',
+                content:
+                  "import { listAppointments } from '../features/appointments/service';\nexport { listAppointments };",
+              },
+            ],
+          }),
+        };
+      }
+
+      return stubGenerate(system, prompt);
+    };
+
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      generate,
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      [APPOINTMENTS_MODULE],
+    );
+
+    expect(result.ok).toBe(true);
+
+    const packageJson = JSON.parse(result.project!.files.find((f) => f.path === 'package.json')!.content);
+    expect(packageJson.dependencies['@supabase/supabase-js']).toBeDefined();
+
+    const envExample = result.project!.files.find((f) => f.path === '.env.example');
+    expect(envExample!.content).toContain('VITE_SUPABASE_URL=');
+    expect(envExample!.content).toContain('VITE_SUPABASE_ANON_KEY=');
+
+    const servicesFile = result.project!.files.find((f) => f.path === 'src/services/api.ts');
+    expect(servicesFile!.content).toContain('../features/appointments/service');
+
+    const readiness = calculateDeploymentReadinessFromArtifacts({
+      generationResult: result,
+      ...fakeManifestAndPackage(packageJson.dependencies),
+    });
+    expect(readiness.overall).toBe('ready');
+  });
+
+  it('SaaS Starter (two backend modules) — dependency resolution and env template stay correct with multiple modules, deployment ready', async () => {
+    const AUTH_MODULE = {
+      moduleSlug: 'auth',
+      featureIds: ['FEAT-010'],
+      databaseTables: ['users'],
+      apiEndpoints: ['POST /auth/login'],
+    };
+    const BILLING_MODULE = {
+      moduleSlug: 'billing',
+      featureIds: ['FEAT-020'],
+      databaseTables: ['subscriptions'],
+      apiEndpoints: ['POST /billing/subscribe'],
+    };
+
+    const generate: GenerateFn = async (system, prompt) => {
+      if (typeof system === 'string' && system.includes('Backend Engineer')) {
+        const moduleSlug = prompt.includes('Module: auth') ? 'auth' : 'billing';
+
+        return {
+          ok: true,
+          text: JSON.stringify({
+            files: [
+              { path: `src/features/${moduleSlug}/types.ts`, content: 'export interface Row { id: string }' },
+              { path: `src/features/${moduleSlug}/validators.ts`, content: 'export const validate = () => true;' },
+              {
+                path: `src/features/${moduleSlug}/repository.ts`,
+                content: "import { createClient } from '@supabase/supabase-js';\nexport class Repository {}",
+              },
+              { path: `src/features/${moduleSlug}/service.ts`, content: 'export class Service {}' },
+              { path: `src/features/${moduleSlug}/routes.ts`, content: 'export const routes = {};' },
+              {
+                path: `api/${moduleSlug}/index.ts`,
+                content: `export * from '../../src/features/${moduleSlug}/routes';`,
+              },
+            ],
+          }),
+        };
+      }
+
+      return stubGenerate(system, prompt);
+    };
+
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      generate,
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      [AUTH_MODULE, BILLING_MODULE],
+    );
+
+    expect(result.ok).toBe(true);
+
+    const packageJson = JSON.parse(result.project!.files.find((f) => f.path === 'package.json')!.content);
+    expect(packageJson.dependencies['@supabase/supabase-js']).toBeDefined();
+    expect(result.project!.files.some((f) => f.path === 'src/features/auth/repository.ts')).toBe(true);
+    expect(result.project!.files.some((f) => f.path === 'src/features/billing/repository.ts')).toBe(true);
+
+    const readiness = calculateDeploymentReadinessFromArtifacts({
+      generationResult: result,
+      ...fakeManifestAndPackage(packageJson.dependencies),
+    });
+    expect(readiness.overall).toBe('ready');
   });
 });

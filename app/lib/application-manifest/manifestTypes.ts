@@ -188,6 +188,34 @@ export interface ApplicationManifestDraft {
    */
   sourceContentChecksum: string;
   fingerprints: ManifestFingerprints;
+
+  /**
+   * Sprint 86 (Deployment Foundation, Part 5) — the deterministic dependency/runtime facts
+   * a future GitHub/Supabase/Vercel integration will need to reuse rather than re-derive
+   * from scratch. All five are optional and stored in `metadata` (see
+   * applicationManifestRepository.ts's `saveApplicationManifest` — same "not a new column"
+   * discipline `mvpCode`/`featureScope` already established above), so every manifest built
+   * before this sprint (or any test fixture constructing a draft directly) remains valid
+   * with these simply undefined.
+   */
+
+  /** Every `package.json` "dependencies" entry this manifest's generation actually resolved (see `dependencyValidation.ts`'s `resolveRequiredDependencies`) — name -> version, exactly what was written to the generated project's own package.json. */
+  dependencies?: Record<string, string>;
+
+  /** Environment variable names (not values — see `.env.example`'s own "no secrets" rule) this generated application needs at runtime, e.g. `["VITE_SUPABASE_URL", "VITE_SUPABASE_ANON_KEY"]`. Empty/undefined for a project needing no runtime configuration at all. */
+  environmentRequirements?: string[];
+
+  /** Runtime platform facts a deployment target would need — today always `["Node.js"]` for the one supported template (react-vite-ts), kept as a list (not a bare string) so a future template with additional runtime needs (e.g. a database driver) doesn't require a shape change. */
+  runtimeRequirements?: string[];
+
+  /** External services this generated application depends on to actually run correctly — e.g. `["Supabase"]` when a Backend Module or Database Activation schema exists, empty for a frontend-only mock-data project. Distinct from `environmentRequirements`: this names the SERVICE, not the variable. */
+  requiredServices?: string[];
+
+  /** The exact command a deployment target should run to produce a production build — always `"npm run build"` for this sprint's one template, but never hardcoded by a future consumer; read from here instead. */
+  buildCommand?: string;
+
+  /** Where the build command's output lands, relative to the project root — `"dist"` for the Vite template. */
+  outputDirectory?: string;
 }
 
 export interface ApplicationManifest extends ApplicationManifestDraft {

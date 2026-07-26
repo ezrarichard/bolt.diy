@@ -43,19 +43,53 @@ ${specSection('Data Entities', formatList(input.entities))}
 Generate exactly one file, "src/types/index.ts", exporting a TypeScript interface for each data entity listed above (reasonable fields inferred from the entity name and core features — id, timestamps, and obviously-implied fields). Keep every interface small and practical.`;
 }
 
+export interface ServicesPromptBackendModule {
+  moduleSlug: string;
+  apiEndpoints: string[];
+}
+
 export interface ServicesPromptInput {
   projectName: string;
   apiEndpoints: string[];
   apiArchitecture: string | undefined;
+
+  /**
+   * Sprint 86 (Part 2) — every Backend Module actually planned for this generation (see
+   * `GenerationPlan.backendModules`). Sprint 85's assessment found `src/services/api.ts`
+   * was UNCONDITIONALLY generated to return mock data, even for a project whose Backend
+   * Module was reviewed, approved, and fully generated — the frontend simply never called
+   * it. When this is non-empty, the prompt below asks for real calls into each module's
+   * `service.ts` instead of a mock, for exactly the endpoints those modules cover; any
+   * endpoint NOT covered by a Backend Module still gets realistic mock data, same as
+   * before. Omitted/empty preserves the original all-mock behavior exactly — a project
+   * with no Backend Module is unaffected by this change.
+   */
+  backendModules?: ServicesPromptBackendModule[];
 }
 
 export function buildServicesPrompt(input: ServicesPromptInput): string {
+  const backendModules = input.backendModules ?? [];
+  const hasBackend = backendModules.length > 0;
+
+  const backendSection = hasBackend
+    ? `\nGenerated Backend Module(s) — this project already has real backend code for these, in the same project (not a separate server):\n${backendModules
+        .map(
+          (module) =>
+            `- Module "${module.moduleSlug}" (src/features/${module.moduleSlug}/service.ts) covers: ${formatList(module.apiEndpoints)}`,
+        )
+        .join('\n')}\n`
+    : '';
+
+  const behaviorInstruction = hasBackend
+    ? `For each endpoint covered by a Backend Module above, import the module's exported function(s) directly from "../features/<moduleSlug>/service" and call them — do NOT return mock data for these, since real backend code already exists for them. For any endpoint listed above that is NOT covered by any Backend Module, still return realistic mock data (in-memory array, simulated setTimeout latency) so the app remains fully interactive for that part.`
+    : `Generate one async function per endpoint above (or a small, sensible set if none were specified), each returning realistic mock data (no real network calls — use an in-memory array and simulated latency via a short setTimeout-based delay) so the app is fully interactive without a real backend.`;
+
   return `Project: ${input.projectName}
 
 ${specSection('API Architecture', input.apiArchitecture)}
 ${specSection('API Endpoints', formatList(input.apiEndpoints))}
-
-Generate exactly one file, "src/services/api.ts", exporting one async function per endpoint above (or a small, sensible set if none were specified), each returning realistic mock data (no real network calls — use an in-memory array and simulated latency via a short setTimeout-based delay) so the app is fully interactive without a real backend. Import shared types from "../types".`;
+${backendSection}
+Generate exactly one file, "src/services/api.ts". ${behaviorInstruction} Import shared types from "../types".`;
 }
 
 export interface PagePromptInput {

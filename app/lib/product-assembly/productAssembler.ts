@@ -21,6 +21,7 @@ import type {
   ProductAssemblySection,
   ProductAssemblyStatus,
   ProductPackage,
+  ProductPackageDeploymentInfo,
   ProductPackageFile,
   ProductPackageSection,
 } from './assemblyTypes';
@@ -333,8 +334,20 @@ function buildDatabaseActivationFiles(project: Project): ProductPackageFile[] {
  * any role without usable output becomes a `missingSections` entry rather than
  * aborting assembly. Pure and synchronous; see assemblyRepository.ts for persisting the
  * result and app/components/sidebar/ProductPackagePanel.tsx for the manual trigger.
+ *
+ * Sprint 86, Part 6 — `deploymentInfo` (optional, second parameter) is threaded straight
+ * onto the returned package's `deploymentReadiness`, unvalidated — the CALLER already has
+ * (or can fetch) the Application Manifest and `calculateDeploymentReadiness`'s result, so
+ * this stays a pure passthrough rather than this module reaching into BuildersDB itself
+ * (this file's own header explains why that's a hard rule, not a preference). Omitted
+ * entirely (the common case, e.g. before any code has been generated) leaves
+ * `deploymentReadiness` undefined — every existing caller of this function is completely
+ * unaffected.
  */
-export function assembleProductPackage(project: Project): ProductPackage {
+export function assembleProductPackage(
+  project: Project,
+  deploymentInfo?: ProductPackageDeploymentInfo,
+): ProductPackage {
   const sections: ProductPackageSection[] = [];
   const missingSections: MissingSection[] = [];
 
@@ -368,7 +381,14 @@ export function assembleProductPackage(project: Project): ProductPackage {
   const documentationFile = buildDocumentationFile(project, sections, missingSections, assembledAt);
   sections.push({ id: 'documentation', label: 'Documentation', files: [documentationFile] });
 
-  return { projectId: project.id, projectName: project.name, assembledAt, sections, missingSections };
+  return {
+    projectId: project.id,
+    projectName: project.name,
+    assembledAt,
+    sections,
+    missingSections,
+    deploymentReadiness: deploymentInfo,
+  };
 }
 
 function buildDocumentationFile(

@@ -86,6 +86,31 @@ export interface MissingSection {
   reason: string;
 }
 
+/**
+ * Sprint 86 (Deployment Foundation, Part 6) — a lightweight reference into what the
+ * Application Manifest already knows about the generated application (see
+ * `manifestTypes.ts`'s `ApplicationManifestDraft`), so a human reading the Product Package
+ * can see "is what was generated actually deployable" without leaving this bundle.
+ * Deliberately NOT a redesign of the package itself (per this sprint's own instruction) —
+ * just a small, optional, informational block alongside the existing sections. Undefined
+ * whenever no code has been generated yet (nothing to reference), which every reader
+ * should already treat the same way `missingSections` treats an ungenerated role.
+ */
+export interface ProductPackageDeploymentInfo {
+  framework: string;
+  buildCommand: string;
+  outputDirectory: string;
+
+  /** Environment variable NAMES only (never values) this generated application needs — see `ApplicationManifestDraft.environmentRequirements`'s own comment. */
+  environmentRequirements: string[];
+
+  /** `package.json` dependency names, without versions — a quick summary, not a lockfile; the manifest/generated `package.json` itself remains the source of truth for exact versions. */
+  dependencySummary: string[];
+
+  /** Mirrors `DeploymentReadinessResult.overall` (see `deploymentReadiness.ts`) — computed by the SAME function, never re-derived here, so the two can never disagree about what "ready" means. */
+  readinessStatus: 'ready' | 'not_ready';
+}
+
 /** The full assembled package for one project — requirement #6 ("Handle Missing Outputs"): assembly always succeeds and returns a package, even when every section is missing. */
 export interface ProductPackage {
   projectId: string;
@@ -93,4 +118,16 @@ export interface ProductPackage {
   assembledAt: string;
   sections: ProductPackageSection[];
   missingSections: MissingSection[];
+
+  /**
+   * Sprint 86, Part 6 — see `ProductPackageDeploymentInfo`'s own comment. Computed fresh at
+   * assembly time from whatever the caller already knows (the Application Manifest, if one
+   * exists) — `productAssembler.ts` never fetches this itself (same "stays synchronous,
+   * caller resolves async data" discipline this module's own header comment already
+   * follows for everything else), and `assemblyRepository.ts` does not persist this field
+   * (no new column — see that file's own note), so it reflects the state at the moment of
+   * the most recent `assembleProductPackage` call, not necessarily what's stored in
+   * BuildersDB after a page refresh.
+   */
+  deploymentReadiness?: ProductPackageDeploymentInfo;
 }

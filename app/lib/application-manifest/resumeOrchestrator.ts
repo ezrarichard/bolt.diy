@@ -1,4 +1,5 @@
 import type { GenerationPlan } from '~/lib/code-generation/codeGenerationTypes';
+import { REACT_VITE_TS_TEMPLATE_ID, resolveTemplate } from '~/lib/code-generation/templateResolver';
 import { carryForwardFile, isReusableGeneratedStatus } from '~/lib/generated-files/generatedFilesRepository';
 import { mvpRepository } from '~/lib/mvp/mvpRepository';
 import { buildApplicationManifest } from './manifestBuilder';
@@ -291,6 +292,21 @@ export async function prepareManifestForGeneration(input: {
     }
   }
 
+  /*
+   * Sprint 86, Part 5 — seeded with the template's own baseline dependencies at this
+   * plan-ready point (before any AI call has run, so the FINAL resolved dependency set —
+   * see `dependencyValidation.ts` — isn't known yet). This is the manifest's best
+   * available answer at persistence time, not a promise that no additional package will be
+   * added once generation actually completes; a future sprint building GitHub/Vercel
+   * automation on top of this should treat it as "at least these," not "exactly these."
+   * `needsSupabaseEnv` uses the same `plan.backendModules` signal
+   * `generationPipeline.ts`'s own `needsSupabaseEnv` computation checks first — the
+   * Database Activation half of that computation isn't available here (this function only
+   * receives `plan`, not the full `Project`), a known, documented gap rather than an
+   * oversight.
+   */
+  const needsSupabaseEnv = Boolean(input.plan.backendModules && input.plan.backendModules.length > 0);
+
   const built = buildApplicationManifest({
     projectId: input.projectId,
     plan: input.plan,
@@ -298,6 +314,8 @@ export async function prepareManifestForGeneration(input: {
     mvpId: input.mvpId,
     mvpCode: input.mvpCode,
     featureScope: input.featureScope,
+    dependencies: resolveTemplate(REACT_VITE_TS_TEMPLATE_ID).dependencies,
+    needsSupabaseEnv,
   });
 
   /*

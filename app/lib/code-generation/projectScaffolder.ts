@@ -28,6 +28,25 @@ export interface ScaffoldInput {
   description?: string;
   template: ProjectTemplate;
   pages: GenerationPlanPage[];
+
+  /**
+   * Sprint 86 — every dependency the generated code actually imports, already resolved
+   * against the known-package registry (see `dependencyValidation.ts`'s
+   * `resolveRequiredDependencies`), merged with `template.dependencies`. Optional and
+   * defaults to `template.dependencies` alone — every existing caller that predates this
+   * field keeps generating exactly the same `package.json` it always has.
+   */
+  resolvedDependencies?: Record<string, string>;
+
+  /**
+   * Sprint 86 (Part 3) — true when the generated project needs its own Supabase
+   * credentials at runtime (a Backend Module was generated, and/or Database Activation
+   * produced a real schema — see `generationPipeline.ts`'s call site). Governs whether
+   * `.env.example` includes the Supabase placeholders. Defaults to `false` — a
+   * frontend-only project (no backend) gets an `.env.example` with only the generic
+   * placeholders, never invented Supabase entries it doesn't need.
+   */
+  needsSupabaseEnv?: boolean;
 }
 
 function packageJsonFile(input: ScaffoldInput): GeneratedFile {
@@ -41,7 +60,7 @@ function packageJsonFile(input: ScaffoldInput): GeneratedFile {
       build: 'tsc && vite build',
       preview: 'vite preview',
     },
-    dependencies: input.template.dependencies,
+    dependencies: input.resolvedDependencies ?? input.template.dependencies,
     devDependencies: input.template.devDependencies,
   };
 
@@ -188,6 +207,34 @@ ${routes}
   };
 }
 
+/**
+ * Sprint 86 (Part 3) — a real `.env.example` for every generated project, placeholders
+ * only, never a real secret (see this sprint's own "Do NOT generate secrets" instruction).
+ * `VITE_` prefixes match Vite's own env-var convention (only `VITE_`-prefixed vars are
+ * exposed to client code — see https://vitejs.dev/guide/env-and-mode.html), so these are
+ * the exact names generated frontend code would need to read via `import.meta.env`.
+ */
+function envExampleFile(input: ScaffoldInput): GeneratedFile {
+  const lines = [
+    '# Environment variables for this generated application.',
+    '# Copy this file to .env and fill in real values for your own deployment — never commit .env itself.',
+    '',
+    'VITE_ENV=development',
+    'VITE_API_URL=',
+  ];
+
+  if (input.needsSupabaseEnv) {
+    lines.push(
+      '',
+      "# Required by this project's generated backend module(s)/database schema.",
+      'VITE_SUPABASE_URL=',
+      'VITE_SUPABASE_ANON_KEY=',
+    );
+  }
+
+  return { path: '.env.example', content: `${lines.join('\n')}\n` };
+}
+
 function readmeFile(input: ScaffoldInput): GeneratedFile {
   return {
     path: 'README.md',
@@ -223,5 +270,6 @@ export function scaffoldReactViteProject(input: ScaffoldInput): GeneratedFile[] 
     indexCssFile(),
     appTsxFile(input),
     readmeFile(input),
+    envExampleFile(input),
   ];
 }
