@@ -1,5 +1,6 @@
 import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/client';
 import { DEFAULT_WORKSPACE_STATE, type ProjectWorkspaceState } from '~/lib/projects/workspaceState';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 
 /**
  * Workspace State Repository — Sprint 38.5.
@@ -18,7 +19,7 @@ function unavailable(method: string): void {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[BuildersDB] ${method}() failed:`, error);
+  console.error(`[BuildersDB] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 function isAvailable(): boolean {

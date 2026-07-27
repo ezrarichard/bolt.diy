@@ -3,6 +3,7 @@ import { updateProjectWorkspaceState, type Project } from '~/lib/stores/projects
 import { resolveModelKey } from './modelRegistry';
 import { DEFAULT_GENERATION_PROFILE_ID, DEFAULT_GENERATION_PROFILES } from './defaultProfiles';
 import type { GenerationProfile, GenerationProfileWithRoles, RoleModelResolution } from './generationProfileTypes';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 
 /**
  * Generation Profile Repository — Sprint 39.5.
@@ -28,7 +29,7 @@ function unavailable(method: string): void {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[GenerationProfiles] ${method}() failed:`, error);
+  console.error(`[GenerationProfiles] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 function findLocalProfile(profileId: string): GenerationProfileWithRoles | undefined {

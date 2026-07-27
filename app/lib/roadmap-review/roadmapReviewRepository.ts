@@ -15,6 +15,7 @@ import {
   type RoadmapReviewWriteResult,
 } from './roadmapReviewTypes';
 import type { ProductOwnerRoadmapOutput } from '~/lib/projects/prompts/roadmapReview';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 
 /**
  * Roadmap Review Repository — Sprint 83 (Product Owner Roadmap Review workflow).
@@ -37,7 +38,7 @@ function unavailable(method: string): void {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[RoadmapReview] ${method}() failed:`, error);
+  console.error(`[RoadmapReview] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 function safeErrorMessage(error: unknown): string {

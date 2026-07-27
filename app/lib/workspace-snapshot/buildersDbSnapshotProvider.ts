@@ -1,5 +1,6 @@
 import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/client';
 import type { WorkspaceSnapshotFile, WorkspaceSnapshotMeta, WorkspaceSnapshotProvider } from './types';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 
 /**
  * BuildersDB-backed `WorkspaceSnapshotProvider` — Sprint 38.5 (revised).
@@ -24,7 +25,7 @@ function unavailable(method: string): void {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[BuildersDB] ${method}() failed:`, error);
+  console.error(`[BuildersDB] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 function isAvailable(): boolean {

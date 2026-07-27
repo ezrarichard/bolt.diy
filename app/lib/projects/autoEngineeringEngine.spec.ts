@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  describePipelineBlock,
   getNextAutoRole,
   isAutoEngineeringComplete,
   resumePipelineFromRole,
@@ -195,5 +196,60 @@ describe('autoEngineeringEngine resume derivation', () => {
     const project = makeProject([...APPROVED_THROUGH_FRONTEND, qaDraftFirst, qaApprovedSecond]);
 
     expect(getNextAutoRole(project)?.id).toBe('devops');
+  });
+});
+
+/**
+ * Sprint 98A, BUG-007 — telling "finished" apart from "stuck".
+ *
+ * Acceptance Test Round 1: the pipeline reached IDLE after Frontend with QA and DevOps showing
+ * "Waiting…" indefinitely and no error anywhere, because `getNextAutoRole()` returning `undefined`
+ * meant both "everything is approved" and "the next role's gate is unsatisfied". These pin the
+ * distinction that makes an indefinite silent wait impossible.
+ */
+describe('describePipelineBlock — BUG-007', () => {
+  it('returns undefined when every role is approved (genuine completion)', () => {
+    const allApproved = AUTO_ENGINEERING_ROLES.map((role) => approved(role.artifactType));
+
+    expect(describePipelineBlock(makeProject(allApproved))).toBeUndefined();
+  });
+
+  it('returns undefined while a role is actually runnable — that is work left, not a block', () => {
+    // Through Frontend approved: QA's gate IS satisfied, so this is not a stall.
+    const project = makeProject(APPROVED_THROUGH_FRONTEND);
+
+    expect(getNextAutoRole(project)).toBeDefined();
+    expect(describePipelineBlock(project)).toBeUndefined();
+  });
+
+  it('identifies the blocked role when nothing at all can run', () => {
+    /*
+     * No artifacts and no captured requirements: Product Owner's own gate is unsatisfied, and
+     * because it is first in the registry nothing downstream can start either. This is the shape
+     * of a genuine stall — `getNextAutoRole` finds nothing AND work remains.
+     */
+    const project = makeProject([]);
+
+    expect(getNextAutoRole(project)).toBeUndefined();
+
+    const block = describePipelineBlock(project);
+
+    expect(block).toBeDefined();
+    expect(block?.role.id).toBe('productowner');
+    expect(block?.reason).toContain('cannot start');
+  });
+
+  it('always produces an operator-facing reason, never an empty message', () => {
+    const block = describePipelineBlock(makeProject([]));
+
+    expect(block?.reason.length ?? 0).toBeGreaterThan(20);
+  });
+
+  it('never reports a block for a project whose pipeline has genuinely finished', () => {
+    const allApproved = AUTO_ENGINEERING_ROLES.map((role) => approved(role.artifactType));
+    const project = makeProject(allApproved);
+
+    expect(isAutoEngineeringComplete(project)).toBe(true);
+    expect(describePipelineBlock(project)).toBeUndefined();
   });
 });

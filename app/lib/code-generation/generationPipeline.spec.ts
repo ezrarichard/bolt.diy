@@ -156,23 +156,38 @@ describe('runGenerationPipeline — onPlanReady (Sprint 44.2 Application Manifes
     expect(order.slice(1).every((entry) => entry === 'generate-start')).toBe(true);
   });
 
-  it('does not fail the pipeline when onPlanReady throws — recorded as a warning issue instead', async () => {
+  /*
+   * Sprint 98A, BUG-010 — this test previously asserted the OPPOSITE: that a failing `onPlanReady`
+   * was downgraded to a warning and the pipeline continued. Acceptance Test Round 1 showed what
+   * that costs. `onPlanReady` persists the Application Manifest; without it nothing generated can
+   * be recorded, resumed or verified, so the run must stop before the first AI call rather than
+   * spend credits producing output that cannot be tracked.
+   */
+  it('FAILS the pipeline when onPlanReady throws — a run with no manifest must not continue', async () => {
+    let generateCalls = 0;
+    const countingGenerate: typeof stubGenerate = (...args) => {
+      generateCalls += 1;
+      return stubGenerate(...args);
+    };
+
     const result = await runGenerationPipeline(
       makeProject(),
       makeEmptyProductPackage(),
-      stubGenerate,
+      countingGenerate,
       () => {},
       () => {
         throw new Error('manifest persistence boom');
       },
     );
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.failedStage).toBe('planning');
     expect(
-      result.issues.some(
-        (issue) => issue.severity === 'warning' && issue.message.includes('manifest persistence boom'),
-      ),
+      result.issues.some((issue) => issue.severity === 'error' && issue.message.includes('manifest persistence boom')),
     ).toBe(true);
+
+    // The credits question: nothing may be generated once the manifest is known to be missing.
+    expect(generateCalls).toBe(0);
   });
 
   it('still runs correctly with no onPlanReady provided (backward compatible)', async () => {
@@ -882,5 +897,187 @@ describe('runGenerationPipeline — end-to-end example applications (Sprint 86 P
       ...fakeManifestAndPackage(packageJson.dependencies),
     });
     expect(readiness.overall).toBe('ready');
+  });
+});
+
+/**
+ * Sprint 98A, BUG-012 — filenames must come from the component name, not the description sentence.
+ *
+ * Acceptance Test Round 1 shipped `src/pages/LoginPageUnauthenticatedRootAtLoginRendersPage.tsx`
+ * into generated output. These use the exact page-hierarchy strings observed in that run.
+ */
+describe('page component naming — BUG-012', () => {
+  const OBSERVED_IN_ROUND_1 = [
+    'LoginPage — unauthenticated root at /login; renders centered auth card with SignInForm/SignUpForm toggle (FEAT-001)',
+    'DashboardPage — authenticated home at /dashboard; renders Layout Shell wrapping SummaryCards, CreateTaskButton, and RecentTasksList (FEAT-002, FEAT-003)',
+  ];
+
+  it('uses the leading component name, not the whole description', () => {
+    const plan = buildGenerationPlan({ frontend: { pageHierarchy: OBSERVED_IN_ROUND_1 } } as any);
+
+    expect(plan.pages[0].componentName).toBe('LoginPage');
+    expect(plan.pages[0].fileName).toBe('LoginPage.tsx');
+    expect(plan.pages[1].componentName).toBe('DashboardPage');
+    expect(plan.pages[1].fileName).toBe('DashboardPage.tsx');
+  });
+
+  it('never emits the exact filename found in Round 1 output', () => {
+    const plan = buildGenerationPlan({ frontend: { pageHierarchy: OBSERVED_IN_ROUND_1 } } as any);
+
+    for (const page of plan.pages) {
+      expect(page.fileName).not.toBe('LoginPageUnauthenticatedRootAtLoginRendersPage.tsx');
+      expect(page.componentName.length).toBeLessThanOrEqual(30);
+    }
+  });
+
+  it('does not double the Page suffix when the label already ends in Page', () => {
+    const plan = buildGenerationPlan({ frontend: { pageHierarchy: ['LoginPage'] } } as any);
+
+    expect(plan.pages[0].componentName).toBe('LoginPage');
+    expect(plan.pages[0].componentName).not.toBe('LoginPagePage');
+  });
+
+  it('still appends Page for a bare noun', () => {
+    const plan = buildGenerationPlan({ frontend: { pageHierarchy: ['Dashboard', 'Profile'] } } as any);
+
+    expect(plan.pages.map((page) => page.componentName)).toEqual(['DashboardPage', 'ProfilePage']);
+  });
+
+  it('handles every separator style the roles produce', () => {
+    const plan = buildGenerationPlan({
+      frontend: {
+        pageHierarchy: [
+          'Settings: account preferences and theme',
+          'Billing (FEAT-009)',
+          'Reports - monthly export view',
+          'Inbox; unread messages first',
+        ],
+      },
+    } as any);
+
+    expect(plan.pages.map((page) => page.componentName)).toEqual([
+      'SettingsPage',
+      'BillingPage',
+      'ReportsPage',
+      'InboxPage',
+    ]);
+  });
+
+  it('keeps names unique when two descriptions share a leading label', () => {
+    const plan = buildGenerationPlan({
+      frontend: {
+        pageHierarchy: ['TaskPage — list view', 'TaskPage — detail view'],
+      },
+    } as any);
+
+    const names = plan.pages.map((page) => page.componentName);
+
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('produces a valid TypeScript identifier for every page', () => {
+    const plan = buildGenerationPlan({ frontend: { pageHierarchy: OBSERVED_IN_ROUND_1 } } as any);
+
+    for (const page of plan.pages) {
+      expect(page.componentName).toMatch(/^[A-Za-z_$][A-Za-z0-9_$]*$/);
+    }
+  });
+});
+
+/**
+ * Sprint 98A, BUG-011 — operator cancellation.
+ *
+ * Acceptance Test Round 1 had no way to stop a running generation. Halting a run that was
+ * demonstrably persisting nothing required reloading the page, and in-flight AI calls kept
+ * spending credits until it did.
+ */
+describe('runGenerationPipeline — cancellation (BUG-011)', () => {
+  it('stops before any AI call when already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    let generateCalls = 0;
+    const countingGenerate: typeof stubGenerate = (...args) => {
+      generateCalls += 1;
+      return stubGenerate(...args);
+    };
+
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      countingGenerate,
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      controller.signal,
+    );
+
+    expect(result.cancelled).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(generateCalls).toBe(0);
+  });
+
+  it('reports cancellation distinctly from failure', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      stubGenerate,
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      controller.signal,
+    );
+
+    // A stop is a decision, not a defect: no error-severity issue is raised.
+    expect(result.cancelled).toBe(true);
+    expect(result.issues.some((issue) => issue.severity === 'error')).toBe(false);
+    expect(result.issues.some((issue) => issue.message.includes('stopped by the operator'))).toBe(true);
+  });
+
+  it('stops partway through when aborted mid-run', async () => {
+    const controller = new AbortController();
+    let generateCalls = 0;
+
+    const abortingGenerate: typeof stubGenerate = (...args) => {
+      generateCalls += 1;
+      controller.abort();
+
+      return stubGenerate(...args);
+    };
+
+    const result = await runGenerationPipeline(
+      makeProject(),
+      makeEmptyProductPackage(),
+      abortingGenerate,
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      controller.signal,
+    );
+
+    expect(result.cancelled).toBe(true);
+
+    // It stopped at a checkpoint rather than running every remaining stage.
+    expect(generateCalls).toBeGreaterThan(0);
+    expect(generateCalls).toBeLessThan(10);
+  });
+
+  it('is fully backward compatible when no signal is supplied', async () => {
+    const result = await runGenerationPipeline(makeProject(), makeEmptyProductPackage(), stubGenerate, () => {});
+
+    expect(result.cancelled).toBeUndefined();
+    expect(result.ok).toBe(true);
   });
 });

@@ -80,6 +80,13 @@ export interface GenerationResult {
   project?: GeneratedProject;
   issues: GenerationIssue[];
   failedStage?: GenerationStage;
+
+  /**
+   * Sprint 98A, BUG-011 — true when the operator stopped the run. Distinct from `ok: false`
+   * without it, which means the run FAILED: a cancellation is a deliberate decision and must not
+   * be reported to the user as a defect, retried automatically, or logged as an error.
+   */
+  cancelled?: boolean;
 }
 
 /**

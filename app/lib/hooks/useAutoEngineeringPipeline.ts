@@ -13,6 +13,7 @@ import {
 import { getLatestArtifact } from '~/lib/projects/artifacts';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
 import {
+  describePipelineBlock,
   getNextAutoRole,
   isProjectDefinitionApproved,
   type AutoEngineeringRoleId,
@@ -56,6 +57,10 @@ const logger = createScopedLogger('autoEngineeringPipeline');
  * one in-flight run per project id is enough to stay correct.
  */
 const runningProjectIds = new Set<string>();
+
+/** Sprint 98A, BUG-007 — see the retry block in the loop below for why these are small. */
+const MAX_GATE_RETRIES = 3;
+const GATE_RETRY_DELAY_MS = 400;
 
 export interface AutoEngineeringPipelineFailure {
   /** Undefined for a 'hydration' failure — it happens before any role has been picked. */
@@ -184,6 +189,14 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
     }
 
     (async () => {
+      /*
+       * Sprint 98A, BUG-007 — bounded retries for a gate that is satisfied in the store but not yet
+       * visible to this iteration. Deliberately small: this covers a write-ordering race of
+       * milliseconds, not a genuinely unsatisfied dependency, which must surface as a failure
+       * rather than be retried into a hang.
+       */
+      let gateRetries = 0;
+
       try {
         for (;;) {
           const current = projectsStore.get().find((candidate) => candidate.id === projectId);
@@ -195,8 +208,48 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
           const role = getNextAutoRole(current);
 
           if (!role) {
+            /*
+             * Sprint 98A, BUG-007 — this `break` used to be silent and ambiguous. It fires both
+             * when every role is approved (success) and when the next role's gate is momentarily
+             * unsatisfied (blocked). Acceptance Test Round 1 hit the second case: the pipeline
+             * stopped after Frontend with QA and DevOps stuck on "Waiting…" and no error anywhere.
+             *
+             * The two are now told apart. A transient gate miss — the "one store write behind" race
+             * this file's own comments predicted — is retried a bounded number of times; a
+             * persistent one stops the run with the exact reason, so the UI can never sit in
+             * "Waiting…" indefinitely with nothing to explain it.
+             */
+            const block = describePipelineBlock(current);
+
+            if (!block) {
+              logger.debug(`pipeline project=${projectId} complete — every role approved`);
+              break;
+            }
+
+            if (gateRetries < MAX_GATE_RETRIES) {
+              gateRetries += 1;
+              logger.debug(
+                `pipeline project=${projectId} gate not satisfied (attempt ${gateRetries}/${MAX_GATE_RETRIES}): ${block.reason}`,
+              );
+
+              // Yield so pending store writes land before re-reading, then re-enter the loop.
+              await new Promise((resolve) => setTimeout(resolve, GATE_RETRY_DELAY_MS));
+
+              continue;
+            }
+
+            logger.error(`pipeline project=${projectId} stalled: ${block.reason}`);
+
+            if (isMountedRef.current) {
+              setFailure({ roleId: block.role.id, kind: 'error', message: block.reason });
+            }
+
+            toast.error(block.reason);
             break;
           }
+
+          /* A role was found — the gate cleared, so the transient-retry budget resets. */
+          gateRetries = 0;
 
           if (isMountedRef.current) {
             setCurrentRoleId(role.id);

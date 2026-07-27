@@ -1,4 +1,5 @@
 import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/client';
+import { describeSchemaError, formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 import type {
   ApplicationManifest,
   ApplicationManifestFile,
@@ -33,20 +34,31 @@ function unavailable(method: string): void {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[ApplicationManifest] ${method}() failed:`, error);
+  console.error(`[ApplicationManifest] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
-/** Same shape as buildersDbRepository.ts's own safeErrorMessage() — a Postgrest error is a plain `{ message }` object, not an `Error` instance. */
+/**
+ * Sprint 98A, BUG-010 — this string is the one the UI shows, so it now carries the Postgres code
+ * and hint rather than the bare message. `[42703] column ... feature_ids does not exist` tells an
+ * operator what to do; "column ... does not exist" alone does not, and `[object Object]` — what
+ * Acceptance Round 1 actually got — tells them nothing at all.
+ *
+ * A schema error additionally gets the "apply outstanding migrations" sentence appended, because
+ * that is the only action that resolves it.
+ */
 function safeErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
+  return describeSchemaError(error) ?? formatError(error);
+}
 
-  if (typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string') {
-    return error.message;
-  }
-
-  return 'Unknown error';
+/**
+ * Sprint 98A, BUG-009 — "this database has not applied 20260811100000 yet", as opposed to "the
+ * transaction ran and failed". PostgREST reports an unknown RPC as PGRST202; Postgres itself uses
+ * `42883 undefined_function`. Only these two mean "fall back to the legacy path"; every other error
+ * is a real failure and must not be silently retried against a non-transactional path.
+ */
+function isMissingFunction(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code;
+  return code === 'PGRST202' || code === '42883';
 }
 
 interface ManifestRow {
@@ -185,7 +197,12 @@ function fromFileRow(row: ManifestFileRow): ApplicationManifestFile {
   };
 }
 
-function toFileInsertRow(manifestId: string, projectId: string, file: ApplicationManifestFileDraft) {
+/**
+ * `manifestId` is null for the transactional RPC path (BUG-009): the function assigns the id
+ * itself from the manifest it just inserted, because that id does not exist until the transaction
+ * is already open. The legacy path passes the real id.
+ */
+function toFileInsertRow(manifestId: string | null, projectId: string, file: ApplicationManifestFileDraft) {
   return {
     manifest_id: manifestId,
     project_id: projectId,
@@ -315,18 +332,77 @@ export async function saveApplicationManifest(
       return { ok: true, created: false, manifest: fromManifestRow(latest), files: existingFiles };
     }
 
-    if (latest && latest.status === 'active') {
+    const nextVersion = (latest?.version ?? 0) + 1;
+    const supersedeId = latest && latest.status === 'active' ? latest.id : null;
+
+    const metadata = {
+      fingerprints: draft.fingerprints,
+      mvpCode: draft.mvpCode,
+      featureScope: draft.featureScope,
+      dependencies: draft.dependencies,
+      environmentRequirements: draft.environmentRequirements,
+      runtimeRequirements: draft.runtimeRequirements,
+      requiredServices: draft.requiredServices,
+      buildCommand: draft.buildCommand,
+      outputDirectory: draft.outputDirectory,
+      routes: draft.routes,
+      verificationEndpoints: draft.verificationEndpoints,
+    };
+
+    /*
+     * Sprint 98A, BUG-009 — the transactional path. `builders_save_application_manifest` supersedes,
+     * inserts the manifest and inserts every file row inside one plpgsql transaction, so a failure
+     * anywhere rolls all of it back. Acceptance Round 1 produced an orphaned `active` manifest with
+     * 80 declared files and zero rows precisely because these were three separate round-trips.
+     *
+     * Falls through to the legacy sequential path (with compensating cleanup) when the function is
+     * not present, so a database that has not applied 20260811100000 keeps working unchanged.
+     */
+    const rpc = (
+      typeof client.rpc === 'function'
+        ? await client.rpc('builders_save_application_manifest', {
+            p_project_id: draft.projectId,
+            p_version: nextVersion,
+            p_framework: draft.framework,
+            p_package_manager: draft.packageManager,
+            p_entry_file: draft.entryFile,
+            p_total_files: files.length,
+            p_plan_checksum: draft.planChecksum,
+            p_source_content_checksum: draft.sourceContentChecksum,
+            p_metadata: metadata,
+            p_files: files.map((file) => toFileInsertRow(null, draft.projectId, file)),
+            p_mvp_id: draft.mvpId ?? null,
+            p_source_package_assembled_at: draft.sourcePackageAssembledAt ?? null,
+            p_created_by: options.createdBy ?? null,
+            p_supersede_manifest_id: supersedeId,
+          })
+        : /* No `rpc` on this client (older stub / unsupported transport) — use the legacy path. */
+          { data: null, error: { code: 'PGRST202' } }
+    ) as { data: unknown; error: unknown };
+
+    if (!rpc.error && rpc.data) {
+      const manifestRow = rpc.data as ManifestRow;
+      const insertedFiles = await listApplicationManifestFiles(manifestRow.id);
+
+      return { ok: true, created: true, manifest: fromManifestRow(manifestRow), files: insertedFiles };
+    }
+
+    if (rpc.error && !isMissingFunction(rpc.error)) {
+      /* The transaction ran and genuinely failed — nothing was committed, so there is no orphan. */
+      throw rpc.error;
+    }
+
+    /* ── Legacy fallback: database predates 20260811100000. ── */
+    if (supersedeId) {
       const { error: supersedeError } = await client
         .from('builders_application_manifests')
         .update({ status: 'superseded' })
-        .eq('id', latest.id);
+        .eq('id', supersedeId);
 
       if (supersedeError) {
         throw supersedeError;
       }
     }
-
-    const nextVersion = (latest?.version ?? 0) + 1;
 
     const { data: inserted, error: insertError } = await client
       .from('builders_application_manifests')
@@ -344,19 +420,7 @@ export async function saveApplicationManifest(
         failed_files: 0,
         plan_checksum: draft.planChecksum,
         source_content_checksum: draft.sourceContentChecksum,
-        metadata: {
-          fingerprints: draft.fingerprints,
-          mvpCode: draft.mvpCode,
-          featureScope: draft.featureScope,
-          dependencies: draft.dependencies,
-          environmentRequirements: draft.environmentRequirements,
-          runtimeRequirements: draft.runtimeRequirements,
-          requiredServices: draft.requiredServices,
-          buildCommand: draft.buildCommand,
-          outputDirectory: draft.outputDirectory,
-          routes: draft.routes,
-          verificationEndpoints: draft.verificationEndpoints,
-        },
+        metadata,
         persisted_at: new Date().toISOString(),
         created_by: options.createdBy ?? null,
       })
@@ -375,6 +439,27 @@ export async function saveApplicationManifest(
         .insert(files.map((file) => toFileInsertRow(manifestRow.id, draft.projectId, file)));
 
       if (filesError) {
+        /*
+         * BUG-009 compensating cleanup. This path has no transaction, so the manifest row above is
+         * already committed. Deleting it is what stops the orphan Acceptance Round 1 found — an
+         * `active` manifest declaring 80 files with none behind it. `on delete cascade` removes any
+         * partially-inserted file rows with it.
+         *
+         * Best-effort by nature: if the delete itself fails there is nothing further this path can
+         * do, so the cleanup outcome is reported alongside the original error rather than hidden.
+         */
+        const { error: cleanupError } = await client
+          .from('builders_application_manifests')
+          .delete()
+          .eq('id', manifestRow.id);
+
+        if (cleanupError) {
+          logError('saveApplicationManifest.cleanup', cleanupError);
+          throw new Error(
+            `${safeErrorMessage(filesError)} (an incomplete manifest v${manifestRow.version} could not be removed and must be cleaned up manually)`,
+          );
+        }
+
         throw filesError;
       }
     }

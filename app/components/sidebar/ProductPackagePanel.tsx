@@ -246,6 +246,24 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
               : 'Generate Application'}
           </button>
         )}
+
+        {/*
+         * Sprint 98A, BUG-011 — Stop Generation. Acceptance Test Round 1 had no way to halt a
+         * running generation: stopping a run that was provably persisting nothing required
+         * reloading the page while in-flight AI calls kept spending credits. The pipeline honours
+         * the stop at its next stage boundary, so no write is interrupted midway.
+         */}
+        {codeGeneration.isRunning && (
+          <button
+            type="button"
+            onClick={codeGeneration.cancelGeneration}
+            title="Stop after the current step — already-generated files are kept"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors"
+          >
+            <span className="i-ph:stop-circle w-4 h-4" />
+            Stop Generation
+          </button>
+        )}
       </div>
 
       {codeGeneration.stage === 'failed' && codeGeneration.error && (

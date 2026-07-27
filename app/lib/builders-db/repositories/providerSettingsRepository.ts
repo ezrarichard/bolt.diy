@@ -1,4 +1,5 @@
 import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/client';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 
 /**
  * Shared Provider Settings Repository — Sprint 38.4.
@@ -30,7 +31,7 @@ function unavailable(method: string): void {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[BuildersDB] ${method}() failed:`, error);
+  console.error(`[BuildersDB] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 export interface SharedProviderSettingsInput {

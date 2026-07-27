@@ -1,6 +1,7 @@
 import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/client';
 import type { Project } from '~/lib/stores/projects';
 import type { ProjectArtifact } from '~/lib/projects/artifacts';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 import {
   fromContextTraceRow,
   fromProjectMemberRow,
@@ -55,7 +56,7 @@ function unavailable(method: string): void {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[BuildersDB] ${method}() failed:`, error);
+  console.error(`[BuildersDB] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 /** Postgrest errors are plain objects (not `instanceof Error`) but always carry a string `.message` — this extracts it for either shape. */

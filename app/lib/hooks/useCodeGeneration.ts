@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   getProjectArtifacts,
   isProjectDashboardOpenStore,
@@ -59,6 +59,7 @@ import { workbenchStore } from '~/lib/stores/workbench';
 import { chatStore } from '~/lib/stores/chat';
 import { resetEngineeringTimeline, upsertEngineeringTimelineEvent } from '~/lib/stores/engineeringTimeline';
 import { buildersDbRepository } from '~/lib/builders-db/repositories/buildersDbRepository';
+import { verifyBuildersDbSchema } from '~/lib/builders-db/schemaGuard';
 import { getWorkspaceSnapshotProvider } from '~/lib/workspace-snapshot';
 import { useAuth } from '~/lib/auth/AuthProvider';
 import { useGenerateText } from './useGenerateText';
@@ -321,11 +322,14 @@ async function detectFileOwnershipConflicts(
 /**
  * Sprint 44.2 — builds the Application Manifest from the pipeline's own deterministic
  * plan (see generationPipeline.ts's `OnPlanReady`) and persists it BEFORE any AI
- * file-generation call runs. Phase 1 is purely observational: a persistence failure is
- * recorded on workspace state (`manifestStatus`/`manifestPersistenceError`) and logged as
- * activity, but never blocks or fails the generation the user is watching — see
- * applicationManifestRepository.ts's own header comment on why Phase 3, not this one, is
- * where that becomes a hard precondition.
+ * file-generation call runs.
+ *
+ * Sprint 98A, BUG-010 — persistence failure is now a HARD PRECONDITION, which is what the original
+ * comment here deferred to "Phase 3" and never delivered. The failure is still recorded on
+ * workspace state and logged as activity, and it additionally throws, which
+ * `generationPipeline` turns into a failed run before the first AI call. Acceptance Test Round 1
+ * is the evidence for the change: a four-minute generation ran against a manifest that did not
+ * exist, and every signal the operator could see said it was working.
  */
 function createPlanReadyHandler(
   project: Project,
@@ -362,17 +366,22 @@ function createPlanReadyHandler(
     });
 
     if (!result.ok || !result.manifest || !result.files) {
+      const reason = result.error ?? 'Unknown persistence error';
+
       updateProjectWorkspaceState(project.id, {
         manifestStatus: 'failed',
-        manifestPersistenceError: result.error ?? 'Unknown persistence error',
+        manifestPersistenceError: reason,
       });
-      logActivity(
-        project.id,
-        'manifest_persistence_failed',
-        `Application Manifest could not be prepared: ${result.error}`,
-      );
+      logActivity(project.id, 'manifest_persistence_failed', `Application Manifest could not be prepared: ${reason}`);
 
-      return;
+      /*
+       * Sprint 98A, BUG-010 — THROWS rather than returning. The original contract deferred making
+       * this a hard precondition to "Phase 3", which never arrived; Acceptance Round 1 then ran a
+       * full generation whose every file insert was rejected, because a silent `return` here let
+       * the pipeline continue as if the manifest existed. `generationPipeline` now converts this
+       * into a failed run before any AI call is made.
+       */
+      throw new Error(reason);
     }
 
     // Every file-lifecycle/resume hook below resolves a generated path against these entries.
@@ -731,8 +740,35 @@ export function useCodeGeneration() {
   const { user } = useAuth();
   const [state, setState] = useState<CodeGenerationState>(IDLE_STATE);
 
+  /** Sprint 98A, BUG-011 — the in-flight run's abort controller, so `cancelGeneration` can stop it. */
+  const abortRef = useRef<AbortController | null>(null);
+
   const runGeneration = useCallback(
     async (project: Project, productPackage: ProductPackage, options: { forceRestart?: boolean } = {}) => {
+      /*
+       * Sprint 98A, BUG-008 — schema drift gate. THE FIRST THING THAT HAPPENS, before any state
+       * change, any activity log and above all any AI call. Acceptance Round 1 spent four minutes
+       * and real credits generating files into a database that could not store them, because
+       * nothing checked. A drifted schema now fails fast, loudly, and for free.
+       */
+      const schema = await verifyBuildersDbSchema();
+
+      if (!schema.ok) {
+        setState({ isRunning: false, stage: 'failed', stageLabel: 'Blocked', error: schema.message });
+        updateProjectWorkspaceState(project.id, {
+          lastGenerationStatus: 'failed',
+          lastError: schema.message,
+          lastActivity: 'Generation blocked — BuildersDB schema is out of date',
+        });
+        logActivity(project.id, 'generation_blocked', schema.message);
+
+        return;
+      }
+
+      /* BUG-011 — one controller per run; `cancelGeneration` below aborts it. */
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       setState({ isRunning: true, stage: 'planning', stageLabel: STAGE_GROUP_LABELS.planning });
       logActivity(project.id, 'generation_started', `Code generation started for "${project.name}"`);
       updateProjectWorkspaceState(project.id, {
@@ -813,7 +849,31 @@ export function useCodeGeneration() {
         createResumeHooks(manifestContext),
         mvpScope,
         backendModules,
+        controller.signal,
       );
+
+      /*
+       * Sprint 98A, BUG-011 — a cancellation is an operator DECISION, not a defect. Reported as
+       * its own terminal state so it is never logged as `generation_failed`, never surfaces a red
+       * error the user has to interpret, and never triggers an automatic retry.
+       */
+      if (result.cancelled) {
+        setState({ isRunning: false, stage: 'idle', stageLabel: 'Stopped', result });
+        logActivity(project.id, 'generation_cancelled', 'Generation stopped by the operator');
+        updateProjectWorkspaceState(project.id, {
+          /* Not 'failed' — the run did not fail, it was stopped before completing. */
+          lastGenerationStatus: 'not-generated',
+          lastActivity: 'Generation stopped by the operator',
+          lastError: undefined,
+        });
+        upsertEngineeringTimelineEvent(STAGE_TIMELINE_ID[result.failedStage ?? 'planning'], {
+          label: 'Generation stopped',
+          status: 'failed',
+          detail: 'Stopped by the operator',
+        });
+
+        return;
+      }
 
       if (!result.ok || !result.project) {
         const message = result.issues.find((issue) => issue.severity === 'error')?.message ?? 'Generation failed.';
@@ -1210,5 +1270,17 @@ export function useCodeGeneration() {
 
   const reset = useCallback(() => setState(IDLE_STATE), []);
 
-  return { ...state, runGeneration, resumeApplication, reset };
+  /**
+   * Sprint 98A, BUG-011 — stop a running generation.
+   *
+   * Acceptance Test Round 1 had no way to do this: halting a run that was demonstrably persisting
+   * nothing required reloading the page, and every in-flight AI call kept spending credits until
+   * it did. The pipeline checks the signal at each stage boundary and before each AI call, so the
+   * stop lands at the next checkpoint rather than mid-write — nothing is left half-persisted.
+   */
+  const cancelGeneration = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
+
+  return { ...state, runGeneration, resumeApplication, reset, cancelGeneration };
 }

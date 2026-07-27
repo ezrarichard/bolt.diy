@@ -1,5 +1,6 @@
 import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/client';
 import { addProjectActivity } from '~/lib/builders-db/repositories/buildersDbRepository';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 import type {
   MissingSection,
   ProductAssemblySection,
@@ -32,7 +33,7 @@ function unavailable(method: string): void {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[ProductAssembly] ${method}() failed:`, error);
+  console.error(`[ProductAssembly] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 interface PackageRow {

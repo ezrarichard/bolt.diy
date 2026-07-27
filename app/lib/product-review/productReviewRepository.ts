@@ -17,6 +17,7 @@ import {
   type ProductReviewWriteResult,
 } from './productReviewTypes';
 import type { BusinessAnalystProductReviewOutput } from '~/lib/projects/prompts/productReview';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 
 /**
  * Product Review Repository — Sprint 82 (Business Analyst Product Review workflow).
@@ -39,7 +40,7 @@ function unavailable(method: string): void {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[ProductReview] ${method}() failed:`, error);
+  console.error(`[ProductReview] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 function safeErrorMessage(error: unknown): string {

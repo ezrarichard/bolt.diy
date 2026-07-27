@@ -1,5 +1,6 @@
 import type { User } from '@supabase/supabase-js';
 import { getBuildersDbClient } from '~/lib/builders-db/client';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 
 /**
  * Sprint 41.6 — User Profile Sync.
@@ -32,7 +33,7 @@ function toUserProfile(row: ProfileRow): UserProfile {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[profile] ${method}() failed:`, error);
+  console.error(`[profile] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 export async function fetchUserProfile(userId: string): Promise<UserProfile | null> {

@@ -11,11 +11,11 @@ describe('computeProgress', () => {
     const files = [file('complete'), file('validated'), file('generated'), file('pending'), file('failed')];
     const result = computeProgress(files);
 
-    expect(result).toEqual({ total: 5, completed: 2, percent: 40 });
+    expect(result).toMatchObject({ total: 5, completed: 2, percent: 40, generated: 1, reconciled: true });
   });
 
   it('returns 0% for an empty file list rather than dividing by zero', () => {
-    expect(computeProgress([])).toEqual({ total: 0, completed: 0, percent: 0 });
+    expect(computeProgress([])).toMatchObject({ total: 0, completed: 0, percent: 0, generated: 0 });
   });
 
   it('returns 100% when every file is complete', () => {
@@ -75,5 +75,58 @@ describe('estimateRemainingMs', () => {
 
   it('returns undefined when no time has elapsed yet', () => {
     expect(estimateRemainingMs({ completed: 1, total: 10, elapsedMs: 0 })).toBeUndefined();
+  });
+});
+
+/**
+ * Sprint 98A, BUG-013 — one authoritative source for every counter.
+ *
+ * Acceptance Test Round 1 displayed four disagreeing numbers simultaneously: manifest
+ * `total_files: 80`, "Planned Files (2)", 4 rows in the database, and a header reading
+ * "0 / 2 files complete — 0%" beside "Files by Status: Generated: 2".
+ */
+describe('computeProgress — BUG-013 reconciliation', () => {
+  it('uses the manifest total as the denominator, not the number of rows loaded', () => {
+    const files = [file('complete'), file('generated')];
+    const result = computeProgress(files, 80);
+
+    // The exact Round 1 shape: 80 declared, 2 rows present.
+    expect(result.total).toBe(80);
+    expect(result.declaredTotal).toBe(80);
+    expect(result.reconciled).toBe(false);
+  });
+
+  it('reports generated files separately so 0% never contradicts a visible Generated count', () => {
+    const files = [file('generated'), file('generated')];
+    const result = computeProgress(files, 2);
+
+    expect(result.completed).toBe(0);
+    expect(result.generated).toBe(2);
+    expect(result.reconciled).toBe(true);
+  });
+
+  it('counts in-flight validation and repair as generated, not as nothing', () => {
+    const result = computeProgress([file('generated'), file('validating'), file('repairing')], 3);
+
+    expect(result.generated).toBe(3);
+  });
+
+  it('is reconciled when the manifest total matches the rows present', () => {
+    const files = [file('complete'), file('complete')];
+
+    expect(computeProgress(files, 2)).toMatchObject({ total: 2, percent: 100, reconciled: true });
+  });
+
+  it('never shrinks the total below the rows actually present', () => {
+    // A stale/incorrect declared total must not make progress look better than it is.
+    const files = [file('complete'), file('complete'), file('pending')];
+
+    expect(computeProgress(files, 1).total).toBe(3);
+  });
+
+  it('stays backward compatible when no declared total is supplied', () => {
+    const files = [file('complete'), file('pending')];
+
+    expect(computeProgress(files)).toMatchObject({ total: 2, completed: 1, percent: 50, reconciled: true });
   });
 });

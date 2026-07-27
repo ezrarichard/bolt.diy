@@ -54,9 +54,32 @@ function useElapsedSeconds(activeKey: string | undefined): number {
       return undefined;
     }
 
-    const intervalId = setInterval(() => setElapsed((value) => value + 1), 1000);
+    /*
+     * Sprint 98A, BUG-014 — elapsed is DERIVED FROM A WALL-CLOCK TIMESTAMP, not accumulated one
+     * tick at a time.
+     *
+     * The previous implementation did `setElapsed(value => value + 1)` on a 1s interval, which
+     * silently under-reports whenever the browser throttles timers. Background tabs clamp
+     * `setInterval`, and Chrome's intensive throttling drops it to roughly once per minute after
+     * five minutes — so during Acceptance Test Round 1 ten minutes of real time displayed as ~37
+     * seconds. That misreading is what made a slow-but-healthy generation look stalled and sent
+     * the investigation after a throttling bug in the generation loop, which has no timers in it
+     * at all.
+     *
+     * Reading the clock each tick makes the number correct regardless of how often the tick fires.
+     */
+    const startedAt = Date.now();
+    const update = () => setElapsed(Math.floor((Date.now() - startedAt) / 1000));
 
-    return () => clearInterval(intervalId);
+    const intervalId = setInterval(update, 1000);
+
+    /* A throttled tab fires timers rarely; re-reading on wake corrects the display immediately. */
+    document.addEventListener('visibilitychange', update);
+
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', update);
+    };
   }, [activeKey]);
 
   return elapsed;

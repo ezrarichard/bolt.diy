@@ -2,6 +2,7 @@ import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/c
 import type { MoscowPriority } from '~/lib/projects/prompts/productOwner';
 import { isValidFeatureStatusTransition } from '~/lib/mvp/lifecycleTransitions';
 import { mvpRepository } from '~/lib/mvp/mvpRepository';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 import type {
   Feature,
   FeatureCodeCollision,
@@ -29,7 +30,7 @@ function unavailable(method: string): void {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[Feature] ${method}() failed:`, error);
+  console.error(`[Feature] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 function safeErrorMessage(error: unknown): string {

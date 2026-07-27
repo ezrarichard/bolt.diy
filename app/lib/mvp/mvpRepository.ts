@@ -12,6 +12,7 @@ import type {
 } from './mvpTypes';
 import type { RoadmapSkeletonEntry } from '~/lib/projects/prompts/productOwner';
 import { isValidMvpStatusTransition } from './lifecycleTransitions';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 
 /**
  * MVP Repository — Sprint 45 (foundation), extended Sprint 46B (AI Product Owner: adds
@@ -42,7 +43,7 @@ function unavailable(method: string): void {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[Mvp] ${method}() failed:`, error);
+  console.error(`[Mvp] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 /** Same shape as every other repository's own safeErrorMessage() — a Postgrest error is a plain `{ message }` object, not an `Error` instance. */

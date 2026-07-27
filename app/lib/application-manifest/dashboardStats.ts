@@ -18,18 +18,61 @@ export interface FileForStats {
 /** Statuses that count toward "complete" for the overall progress bar — the resume algorithm's own "trusted, no AI call needed" set (see resumeOrchestrator.ts's `classifyResumeAction`) plus 'complete' itself. */
 const COMPLETE_STATUSES: ReadonlySet<ManifestFileStatus> = new Set(['complete', 'validated']);
 
+/** Content has been produced but not yet validated. A real milestone — see `generated` below. */
+const GENERATED_STATUSES: ReadonlySet<ManifestFileStatus> = new Set(['generated', 'validating', 'repairing']);
+
 export interface ProgressSummary {
   total: number;
   completed: number;
+
+  /** Files with content produced but not yet validated. Reported separately so "0% complete" never contradicts a visible "Generated: N". */
+  generated: number;
   percent: number;
+
+  /**
+   * False when the manifest declares more files than there are rows to count — the signature of a
+   * partial or failed manifest persist. The dashboard shows this rather than rendering a
+   * confident percentage over an incomplete set.
+   */
+  reconciled: boolean;
+
+  /** What the manifest row itself declares, when the caller supplied it. */
+  declaredTotal?: number;
 }
 
-export function computeProgress(files: FileForStats[]): ProgressSummary {
-  const total = files.length;
+/**
+ * Sprint 98A, BUG-013 — one authoritative source for every counter.
+ *
+ * Acceptance Test Round 1 displayed four disagreeing numbers at once: the manifest row said
+ * `total_files: 80`, the dashboard's "Planned Files" table said 2, the database held 4 rows, and
+ * the header read "0 / 2 files complete — 0%" while "Files by Status" simultaneously showed
+ * "Generated: 2". Two separate defects produced that:
+ *
+ *   1. `total` was `files.length` — however many rows happened to be loaded — rather than what the
+ *      manifest declares, so the denominator silently shrank to match whatever had persisted.
+ *   2. `'generated'` counted as neither complete nor in-progress, so files that demonstrably had
+ *      content rendered as 0%.
+ *
+ * `declaredTotal` (the manifest's own `totalFiles`) is now the denominator when supplied, and a
+ * shortfall between it and the rows present is reported as `reconciled: false` instead of being
+ * absorbed into a smaller total.
+ */
+export function computeProgress(files: FileForStats[], declaredTotal?: number): ProgressSummary {
+  const rowCount = files.length;
+  const total = declaredTotal !== undefined && declaredTotal > rowCount ? declaredTotal : rowCount;
+
   const completed = files.filter((file) => COMPLETE_STATUSES.has(file.status)).length;
+  const generated = files.filter((file) => GENERATED_STATUSES.has(file.status)).length;
   const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
 
-  return { total, completed, percent };
+  return {
+    total,
+    completed,
+    generated,
+    percent,
+    reconciled: declaredTotal === undefined || declaredTotal === rowCount,
+    declaredTotal,
+  };
 }
 
 const STATUS_ORDER: ManifestFileStatus[] = [

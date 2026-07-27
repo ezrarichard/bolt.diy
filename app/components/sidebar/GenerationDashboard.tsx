@@ -252,7 +252,12 @@ export function GenerationDashboard({ projectId, refreshKey, liveState }: Genera
     };
   }, [selectedPath, files]);
 
-  const progress = useMemo(() => computeProgress(files), [files]);
+  /*
+   * Sprint 98A, BUG-013 — the manifest row is the authoritative denominator, not however many file
+   * rows happened to load. Passing it is what makes the header, the progress bar, the manifest and
+   * the database agree, and what surfaces a shortfall instead of quietly shrinking the total.
+   */
+  const progress = useMemo(() => computeProgress(files, manifest?.totalFiles), [files, manifest?.totalFiles]);
   const statusGroups = useMemo(() => groupFilesByStatus(files), [files]);
   const categoryGroups = useMemo(() => groupFilesByCategory(files), [files]);
   const dependencyEntry = selectedPath ? getDependencyEntry(files, selectedPath) : null;
@@ -317,11 +322,29 @@ export function GenerationDashboard({ projectId, refreshKey, liveState }: Genera
           <span className="text-xs font-semibold text-bolt-elements-textPrimary">Overall Progress</span>
           <span className="text-xs text-bolt-elements-textSecondary">
             {progress.completed} / {progress.total} files complete — {progress.percent}%
+            {/* BUG-013 — never let "0% complete" sit next to a visible "Generated: N" with no explanation. */}
+            {progress.generated > 0 && (
+              <span className="ml-1 text-bolt-elements-textTertiary">
+                ({progress.generated} generated, awaiting validation)
+              </span>
+            )}
           </span>
         </div>
         <div className="h-2 rounded-full bg-bolt-elements-background-depth-2 overflow-hidden">
           <div className="h-full bg-green-500 transition-all duration-300" style={{ width: `${progress.percent}%` }} />
         </div>
+
+        {/*
+         * BUG-013 — the manifest declares more files than exist as rows. That is the signature of a
+         * partial manifest persist (exactly the BUG-008 outage), so it is stated rather than hidden
+         * behind a confident-looking percentage.
+         */}
+        {!progress.reconciled && (
+          <div className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+            Manifest declares {progress.declaredTotal} file(s) but only {files.length} are recorded — this generation
+            did not persist completely. Check the console for a persistence error before relying on this run.
+          </div>
+        )}
       </div>
 
       {/* Current activity */}

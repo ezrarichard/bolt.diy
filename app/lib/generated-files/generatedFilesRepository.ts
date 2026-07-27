@@ -2,6 +2,7 @@ import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/c
 import { addProjectActivity } from '~/lib/builders-db/repositories/buildersDbRepository';
 import { checkPathSafety } from '~/lib/application-manifest/manifestBuilder';
 import { fnv1aHash } from '~/lib/checksum/fnv1a';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 import type {
   FileConflictState,
   FileOwnership,
@@ -34,7 +35,7 @@ function unavailable(method: string): void {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[GeneratedFiles] ${method}() failed:`, error);
+  console.error(`[GeneratedFiles] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 function safeErrorMessage(error: unknown): string {

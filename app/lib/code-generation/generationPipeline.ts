@@ -153,8 +153,27 @@ const MAX_COMPONENT_NAME_LENGTH = 60;
  * identifier fragment. Building the name word-by-word and stopping BEFORE the word that would
  * cross the character budget guarantees every generated name ends on a whole word.
  */
+/**
+ * Sprint 98A, BUG-012 — the page LABEL, separated from its description.
+ *
+ * The Frontend Engineer writes `pageHierarchy` entries as a name followed by an explanation:
+ *
+ *   "LoginPage — unauthenticated root at /login; renders centered auth card with SignInForm..."
+ *
+ * `toComponentName` used to consume that entire sentence, producing the file
+ * `src/pages/LoginPageUnauthenticatedRootAtLoginRendersPage.tsx` that Acceptance Test Round 1
+ * found in generated output — a name shipped into a customer's repository.
+ *
+ * Splitting on the first description separator recovers "LoginPage". A plain name with no
+ * separator ("Dashboard") is returned untouched, so this narrows behaviour rather than changing it.
+ */
+function extractPageLabel(name: string): string {
+  const head = name.split(/\s+[—–]\s+|\s+-\s+|[:;(]/)[0];
+  return head.trim() || name.trim();
+}
+
 function toComponentName(name: string): string {
-  const words = name
+  const words = extractPageLabel(name)
     .replace(/[^a-zA-Z0-9]+/g, ' ')
     .trim()
     .split(/\s+/)
@@ -182,7 +201,13 @@ function toComponentName(name: string): string {
     pascal += word;
   }
 
-  return `${pascal || 'Home'}Page`;
+  const base = pascal || 'Home';
+
+  /*
+   * BUG-012 — do not double the suffix. Now that the label is extracted, a name that already ends
+   * in "Page" ("LoginPage") is common; the old unconditional append produced "LoginPagePage".
+   */
+  return /page$/i.test(base) ? `${base.slice(0, -4)}Page` : `${base}Page`;
 }
 
 /**
@@ -557,8 +582,37 @@ export async function runGenerationPipeline(
 
   /** Sprint 79 Phase 1 — same "caller resolves async data, pipeline stays DB-agnostic" discipline as `mvpScope` immediately above. Omitted entirely for a project with no Backend Modules planned yet — the `'generating-backend'` stage below is then simply never reached. */
   backendModules?: BackendModulePlan[],
+
+  /**
+   * Sprint 98A, BUG-011 — operator cancellation. Optional and last, so every existing caller is
+   * unaffected. Acceptance Test Round 1 had no way to stop a running generation: halting a run
+   * that was provably writing nothing required reloading the page, and the in-flight AI calls kept
+   * spending credits until it did.
+   */
+  signal?: AbortSignal,
 ): Promise<GenerationResult> {
   const issues: GenerationIssue[] = [];
+
+  /**
+   * Checked at every stage boundary and before every AI call. Returns a `cancelled` result rather
+   * than throwing, so a deliberate stop is never rendered to the operator as a failure — and so
+   * whatever was generated before the stop is still reported in `issues` rather than discarded.
+   */
+  function cancellationResult(stage: GenerationStage): GenerationResult | undefined {
+    if (!signal?.aborted) {
+      return undefined;
+    }
+
+    return {
+      ok: false,
+      cancelled: true,
+      issues: [
+        ...issues,
+        { severity: 'warning', stage, message: `Generation stopped by the operator during ${stage}.` },
+      ],
+      failedStage: stage,
+    };
+  }
 
   async function safeInvoke<T extends unknown[]>(
     hook: ((...args: T) => Promise<void> | void) | undefined,
@@ -577,6 +631,14 @@ export async function runGenerationPipeline(
         stage,
         message: `File lifecycle hook failed: ${error instanceof Error ? error.message : String(error)}`,
       });
+    }
+  }
+
+  {
+    const stopped = cancellationResult('planning');
+
+    if (stopped) {
+      return stopped;
     }
   }
 
@@ -603,11 +665,29 @@ export async function runGenerationPipeline(
     try {
       await onPlanReady(plan);
     } catch (error) {
-      issues.push({
-        severity: 'warning',
-        stage: 'planning',
-        message: `onPlanReady callback failed: ${error instanceof Error ? error.message : String(error)}`,
-      });
+      /*
+       * Sprint 98A, BUG-010 — this used to be a WARNING and generation carried on.
+       *
+       * `onPlanReady` is where the Application Manifest is persisted. Downgrading its failure meant
+       * Acceptance Test Round 1 generated files for over four minutes with no manifest behind them:
+       * nothing could be recorded, resumed, or verified, and the operator saw a healthy progress
+       * bar throughout. A run whose manifest did not persist is not a degraded run — it is a run
+       * whose output cannot be tracked, so it stops here, before the first AI call.
+       */
+      return {
+        ok: false,
+        issues: [
+          ...issues,
+          {
+            severity: 'error',
+            stage: 'planning',
+            message: `Generation stopped — the Application Manifest could not be persisted: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          },
+        ],
+        failedStage: 'planning',
+      };
     }
   }
 
@@ -615,6 +695,14 @@ export async function runGenerationPipeline(
 
   async function getReusable(path: string): Promise<string | undefined> {
     return resumeHooks?.getReusableContent ? await resumeHooks.getReusableContent(path) : undefined;
+  }
+
+  {
+    const stopped = cancellationResult('generating-types');
+
+    if (stopped) {
+      return stopped;
+    }
   }
 
   onProgress({ stage: 'generating-types' });
@@ -659,6 +747,14 @@ export async function runGenerationPipeline(
 
     for (const file of typesResult.files) {
       await safeInvoke(fileHooks?.onFileReady, 'generating-types', file, 'code-gen-types');
+    }
+  }
+
+  {
+    const stopped = cancellationResult('generating-services');
+
+    if (stopped) {
+      return stopped;
     }
   }
 
@@ -712,6 +808,14 @@ export async function runGenerationPipeline(
   }
 
   for (const [index, page] of plan.pages.entries()) {
+    {
+      const stopped = cancellationResult('generating-pages');
+
+      if (stopped) {
+        return stopped;
+      }
+    }
+
     onProgress({ stage: 'generating-pages', detail: `${page.name} (${index + 1}/${plan.pages.length})` });
 
     const pageRole = `code-gen-page:${page.componentName}`;
@@ -776,6 +880,14 @@ export async function runGenerationPipeline(
   }
 
   if (plan.sharedComponents.length > 0) {
+    {
+      const stopped = cancellationResult('generating-components');
+
+      if (stopped) {
+        return stopped;
+      }
+    }
+
     onProgress({ stage: 'generating-components' });
     await safeInvoke(fileHooks?.onFilesStarting, 'generating-components', 'code-gen-components');
 
@@ -820,6 +932,14 @@ export async function runGenerationPipeline(
    * files are one cohesive vertical slice, not independently meaningful on their own.
    */
   for (const module of plan.backendModules ?? []) {
+    {
+      const stopped = cancellationResult('generating-backend');
+
+      if (stopped) {
+        return stopped;
+      }
+    }
+
     onProgress({ stage: 'generating-backend', detail: module.moduleSlug });
 
     const paths = backendModuleFilePaths(module.moduleSlug);
@@ -895,6 +1015,14 @@ export async function runGenerationPipeline(
     }
   }
 
+  {
+    const stopped = cancellationResult('validating');
+
+    if (stopped) {
+      return stopped;
+    }
+  }
+
   onProgress({ stage: 'validating' });
 
   const { files: validatedFiles, issues: validationIssues } = validateGeneratedFiles(generatedFiles, plan);
@@ -904,6 +1032,14 @@ export async function runGenerationPipeline(
 
   if (!hasAnyPage) {
     return { ok: false, issues, failedStage: 'validating' };
+  }
+
+  {
+    const stopped = cancellationResult('assembling');
+
+    if (stopped) {
+      return stopped;
+    }
   }
 
   onProgress({ stage: 'assembling' });

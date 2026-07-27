@@ -465,3 +465,218 @@ describe('listManifestVersions', () => {
     expect(await listManifestVersions('proj-1')).toEqual([]);
   });
 });
+
+/**
+ * Sprint 98A, BUG-009 — transactional manifest persistence.
+ *
+ * The regression: Acceptance Round 1 left an orphaned `active` manifest declaring 80 files with
+ * zero file rows behind it, because the manifest insert and the file insert were separate
+ * round-trips and only the second one failed. These tests pin both halves of the fix — the
+ * transactional RPC when the migration is applied, and compensating cleanup when it is not.
+ */
+describe('saveApplicationManifest — BUG-009 transactional persistence', () => {
+  const MANIFEST_ROW = {
+    id: 'manifest-tx',
+    project_id: 'proj-1',
+    version: 1,
+    status: 'active',
+    source_package_version: null,
+    source_package_assembled_at: null,
+    framework: 'react-vite-ts',
+    package_manager: 'npm',
+    entry_file: 'src/main.tsx',
+    total_files: 1,
+    completed_files: 0,
+    failed_files: 0,
+    plan_checksum: 'fnv1a:deadbeef',
+    source_content_checksum: 'fnv1a:content0',
+    metadata: {},
+    persisted_at: '2026-07-27T00:00:00.000Z',
+    created_by: null,
+    created_at: '2026-07-27T00:00:00.000Z',
+    updated_at: '2026-07-27T00:00:00.000Z',
+    completed_at: null,
+  };
+
+  /** A client whose `rpc` behaves like a database that HAS applied 20260811100000. */
+  function makeTransactionalClient(options: { rpcError?: unknown; latest?: unknown } = {}) {
+    const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) =>
+      options.rpcError ? { data: null, error: options.rpcError } : { data: MANIFEST_ROW, error: null },
+    );
+    const manifestInsert = vi.fn();
+    const manifestUpdate = vi.fn(() => ({ eq: () => Promise.resolve({ error: null }) }));
+    const manifestDelete = vi.fn(() => ({ eq: () => Promise.resolve({ error: null }) }));
+
+    const from = vi.fn((table: string) => {
+      if (table === 'builders_application_manifests') {
+        return {
+          select: () => ({
+            eq: () => ({
+              order: () => ({
+                limit: () => Promise.resolve({ data: options.latest ? [options.latest] : [], error: null }),
+              }),
+            }),
+          }),
+          insert: manifestInsert,
+          update: manifestUpdate,
+          delete: manifestDelete,
+        };
+      }
+
+      if (table === 'builders_application_manifest_files') {
+        return {
+          insert: () => Promise.resolve({ error: null }),
+          select: () => ({ eq: () => ({ order: () => Promise.resolve({ data: [], error: null }) }) }),
+        };
+      }
+
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    return { client: { from, rpc }, rpc, manifestInsert, manifestUpdate, manifestDelete };
+  }
+
+  beforeEach(() => {
+    getBuildersDbClientMock.mockReset();
+  });
+
+  it('uses the transactional RPC and never writes the tables directly', async () => {
+    const { client, rpc, manifestInsert, manifestUpdate } = makeTransactionalClient();
+    getBuildersDbClientMock.mockReturnValue(client);
+
+    const result = await saveApplicationManifest(makeDraft(), makeFiles());
+
+    expect(result.ok).toBe(true);
+    expect(result.created).toBe(true);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc.mock.calls[0][0]).toBe('builders_save_application_manifest');
+
+    // The whole point: no separate insert, no separate supersede.
+    expect(manifestInsert).not.toHaveBeenCalled();
+    expect(manifestUpdate).not.toHaveBeenCalled();
+  });
+
+  it('passes the supersede target to the transaction rather than superseding first', async () => {
+    const latest = { ...MANIFEST_ROW, id: 'manifest-old', version: 4, plan_checksum: 'different' };
+    const { client, rpc, manifestUpdate } = makeTransactionalClient({ latest });
+    getBuildersDbClientMock.mockReturnValue(client);
+
+    await saveApplicationManifest(makeDraft(), makeFiles());
+
+    expect(rpc.mock.calls[0][1]).toMatchObject({ p_supersede_manifest_id: 'manifest-old', p_version: 5 });
+    expect(manifestUpdate).not.toHaveBeenCalled();
+  });
+
+  it('sends files with a null manifest_id — the transaction assigns it', async () => {
+    const { client, rpc } = makeTransactionalClient();
+    getBuildersDbClientMock.mockReturnValue(client);
+
+    await saveApplicationManifest(makeDraft(), makeFiles());
+
+    const files = (rpc.mock.calls[0][1] as unknown as { p_files: Array<Record<string, unknown>> }).p_files;
+
+    expect(files).toHaveLength(1);
+    expect(files[0].manifest_id).toBeNull();
+    expect(files[0].path).toBe('src/App.tsx');
+    expect(files[0]).toHaveProperty('feature_ids');
+  });
+
+  it('reports a genuine transaction failure without falling back', async () => {
+    const { client, manifestInsert } = makeTransactionalClient({
+      rpcError: { code: '23505', message: 'duplicate key value violates unique constraint' },
+    });
+    getBuildersDbClientMock.mockReturnValue(client);
+
+    const result = await saveApplicationManifest(makeDraft(), makeFiles());
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('duplicate key');
+
+    // A real failure must NOT be retried down the non-transactional path.
+    expect(manifestInsert).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the legacy path when the migration is not applied', async () => {
+    const { client, manifestInsert } = makeTransactionalClient({ rpcError: { code: 'PGRST202' } });
+    manifestInsert.mockReturnValue({
+      select: () => ({ single: () => Promise.resolve({ data: MANIFEST_ROW, error: null }) }),
+    });
+    getBuildersDbClientMock.mockReturnValue(client);
+
+    const result = await saveApplicationManifest(makeDraft(), makeFiles());
+
+    expect(result.ok).toBe(true);
+    expect(manifestInsert).toHaveBeenCalled();
+  });
+
+  it('deletes the manifest when the legacy file insert fails — no orphan survives', async () => {
+    const manifestDelete = vi.fn(() => ({ eq: () => Promise.resolve({ error: null }) }));
+    const rpc = vi.fn(async (_fn: string, _args?: Record<string, unknown>) => ({
+      data: null,
+      error: { code: 'PGRST202' },
+    }));
+
+    const from = vi.fn((table: string) => {
+      if (table === 'builders_application_manifests') {
+        return {
+          select: () => ({
+            eq: () => ({ order: () => ({ limit: () => Promise.resolve({ data: [], error: null }) }) }),
+          }),
+          insert: () => ({ select: () => ({ single: () => Promise.resolve({ data: MANIFEST_ROW, error: null }) }) }),
+          update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+          delete: manifestDelete,
+        };
+      }
+
+      if (table === 'builders_application_manifest_files') {
+        // Exactly the BUG-008 failure that produced the orphan in Acceptance Round 1.
+        return {
+          insert: () => Promise.resolve({ error: { code: '42703', message: 'column feature_ids does not exist' } }),
+          select: () => ({ eq: () => ({ order: () => Promise.resolve({ data: [], error: null }) }) }),
+        };
+      }
+
+      throw new Error(`Unexpected table: ${table}`);
+    });
+
+    getBuildersDbClientMock.mockReturnValue({ from, rpc });
+
+    const result = await saveApplicationManifest(makeDraft(), makeFiles());
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('feature_ids');
+    expect(manifestDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('says so explicitly when the orphan cleanup itself fails', async () => {
+    const rpc = vi.fn(async (_fn: string, _args?: Record<string, unknown>) => ({
+      data: null,
+      error: { code: 'PGRST202' },
+    }));
+
+    const from = vi.fn((table: string) => {
+      if (table === 'builders_application_manifests') {
+        return {
+          select: () => ({
+            eq: () => ({ order: () => ({ limit: () => Promise.resolve({ data: [], error: null }) }) }),
+          }),
+          insert: () => ({ select: () => ({ single: () => Promise.resolve({ data: MANIFEST_ROW, error: null }) }) }),
+          update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+          delete: () => ({ eq: () => Promise.resolve({ error: { message: 'delete denied' } }) }),
+        };
+      }
+
+      return {
+        insert: () => Promise.resolve({ error: { message: 'files failed' } }),
+        select: () => ({ eq: () => ({ order: () => Promise.resolve({ data: [], error: null }) }) }),
+      };
+    });
+
+    getBuildersDbClientMock.mockReturnValue({ from, rpc });
+
+    const result = await saveApplicationManifest(makeDraft(), makeFiles());
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('must be cleaned up manually');
+  });
+});

@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { getBuildersDbConfig, isBuildersDbConfigured } from '~/lib/builders-db/client';
 import type { AiUsageEventInput } from './aiUsageTypes';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 
 /**
  * AI Usage Ledger — Sprint 42.1.
@@ -32,7 +33,7 @@ function createAuthedClient(accessToken: string) {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[AiUsage] ${method}() failed:`, error);
+  console.error(`[AiUsage] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 /**

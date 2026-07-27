@@ -28,6 +28,9 @@ export async function generateProject(
   resumeHooks?: ResumeHooks,
   mvpScope?: GenerationPlanScope,
   backendModules?: BackendModulePlan[],
+
+  /** Sprint 98A, BUG-011 — operator cancellation, threaded straight through to the pipeline. */
+  signal?: AbortSignal,
 ): Promise<GenerationResult> {
   const hasAnySection = productPackage.sections.some(
     (section) => section.id !== 'documentation' && section.files.length > 0,
@@ -57,6 +60,7 @@ export async function generateProject(
     resumeHooks,
     mvpScope,
     backendModules,
+    signal,
   );
 }
 

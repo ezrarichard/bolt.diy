@@ -1,5 +1,6 @@
 import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/client';
 import type { RepairAttemptRecord, ValidatorRunResult } from './codeReviewTypes';
+import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 
 /**
  * Repair History Repository — Sprint 39.
@@ -19,7 +20,7 @@ function unavailable(method: string): void {
 }
 
 function logError(method: string, error: unknown): void {
-  console.error(`[BuildersDB] ${method}() failed:`, error);
+  console.error(`[BuildersDB] ${method}() failed: ${formatError(error)}`, toStructuredError(error));
 }
 
 function isAvailable(): boolean {

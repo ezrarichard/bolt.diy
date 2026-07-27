@@ -258,10 +258,66 @@ export function resumePipelineFromRole(
   return getNextAutoRole(project);
 }
 
+export interface PipelineBlock {
+  /** The first role that has no approved artifact and whose own gate is not satisfied. */
+  role: AutoEngineeringRole;
+
+  /** The role whose approved artifact it is waiting for, when one can be identified. */
+  waitingFor?: AutoEngineeringRole;
+
+  /** An operator-facing sentence naming both. */
+  reason: string;
+}
+
+/**
+ * Sprint 98A, BUG-007 — WHY the pipeline has nothing to run.
+ *
+ * `getNextAutoRole` returning `undefined` has two completely different meanings that the caller
+ * previously could not distinguish: "every role is approved" (success) and "the next unapproved
+ * role's gate is not satisfied" (blocked). Acceptance Test Round 1 hit the second one — the
+ * pipeline went IDLE after Frontend with QA and DevOps showing "Waiting…" forever, no error, no
+ * failed state, because both cases exited the loop through the same silent `break`.
+ *
+ * Returns `undefined` when the pipeline is genuinely finished, so a caller can treat a defined
+ * result as "this is stuck, and here is exactly what it is stuck on".
+ */
+export function describePipelineBlock(project: Project): PipelineBlock | undefined {
+  /*
+   * A stall means NOTHING can run. If any role is currently runnable the pipeline is simply mid-
+   * flight, even though other roles further down are still gated — which is the normal state of a
+   * sequential pipeline and must never be reported as a block.
+   */
+  if (getNextAutoRole(project)) {
+    return undefined;
+  }
+
+  const artifacts = getProjectArtifacts(project);
+  const pending = AUTO_ENGINEERING_ROLES.filter((role) => !getLatestApprovedArtifact(artifacts, role.artifactType));
+
+  if (pending.length === 0) {
+    return undefined;
+  }
+
+  /* Nothing is runnable and work remains — the first pending role is what the pipeline is stuck on. */
+  const blocked = pending.find((role) => !role.canGenerate(project)) ?? pending[0];
+
+  const index = AUTO_ENGINEERING_ROLES.findIndex((role) => role.id === blocked.id);
+  const waitingFor = index > 0 ? AUTO_ENGINEERING_ROLES[index - 1] : undefined;
+
+  return {
+    role: blocked,
+    waitingFor,
+    reason: waitingFor
+      ? `${blocked.label} cannot start because ${waitingFor.label}'s approved output ("${waitingFor.artifactType}") is not available.`
+      : `${blocked.label} cannot start because its required inputs are not approved yet.`,
+  };
+}
+
 export const autoEngineeringEngine = {
   roles: AUTO_ENGINEERING_ROLES,
   getNextAutoRole,
   isAutoEngineeringComplete,
   isProjectDefinitionApproved,
   resumePipelineFromRole,
+  describePipelineBlock,
 };
