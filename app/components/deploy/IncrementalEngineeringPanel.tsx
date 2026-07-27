@@ -8,6 +8,7 @@ import { evolutionRepository } from '~/lib/evolution/evolutionRepository';
 import { planIncrementalEngineering } from '~/lib/services/incrementalEngineeringRunner';
 import type { Project } from '~/lib/stores/projects';
 import { BuildersStatusBadge, buildersButtonVariants } from '~/components/ui/builders';
+import { IncrementalExecutionPanel } from './IncrementalExecutionPanel';
 
 /**
  * Incremental Engineering Panel — Sprint 96, Parts 9/11.
@@ -158,6 +159,9 @@ export function IncrementalEngineeringPanel({ project, deployment }: Incremental
                     {plan.selectedRoles.map((role) => INCREMENTAL_ROLE_LABELS[role]).join(' → ')}
                   </div>
                 )}
+
+                {/* Sprint 97 — executing the plan lives with the plan it executes. */}
+                {plan && <IncrementalExecutionPanel project={project} request={request} planRecord={plan} />}
 
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button
