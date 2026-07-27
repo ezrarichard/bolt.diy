@@ -14,6 +14,7 @@ const {
   getActiveApplicationManifestMock,
   getLatestDeploymentVerificationMock,
   getLatestDeliveryPackageMock,
+  getLatestReleaseMock,
 } = vi.hoisted(() => ({
   getDeploymentWithProvidersMock: vi.fn(),
   getDeploymentHistoryMock: vi.fn(),
@@ -24,6 +25,9 @@ const {
 
   // Sprint 93 — and DeliveryPackagePanel, which reads the latest delivery package.
   getLatestDeliveryPackageMock: vi.fn(),
+
+  // Sprint 94 — and ReleasePanel, which reads the latest release.
+  getLatestReleaseMock: vi.fn(),
 }));
 
 vi.mock('~/lib/deployment/deploymentRepository', () => ({
@@ -32,6 +36,7 @@ vi.mock('~/lib/deployment/deploymentRepository', () => ({
     getDeploymentHistory: getDeploymentHistoryMock,
     getLatestDeploymentVerification: getLatestDeploymentVerificationMock,
     getLatestDeliveryPackage: getLatestDeliveryPackageMock,
+    getLatestRelease: getLatestReleaseMock,
   },
 }));
 
@@ -147,6 +152,28 @@ describe('DeploymentStatusCard', () => {
     getLatestDeploymentVerificationMock.mockResolvedValue(null);
     getLatestDeliveryPackageMock.mockReset();
     getLatestDeliveryPackageMock.mockResolvedValue(null);
+    getLatestReleaseMock.mockReset();
+    getLatestReleaseMock.mockResolvedValue(null);
+  });
+
+  it('renders the Release section, sourced from the release domain (Sprint 94)', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(makeDeployment({ status: 'delivery_ready' }));
+    getDeploymentHistoryMock.mockResolvedValue([]);
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    expect(await screen.findByText('Release')).toBeTruthy();
+    await waitFor(() => expect(getLatestReleaseMock).toHaveBeenCalledWith('dep-1'));
+    expect(screen.getByRole('button', { name: 'Create Release' })).toBeTruthy();
+  });
+
+  it('shows the Released lifecycle badge (Sprint 94)', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(makeDeployment({ status: 'released' }));
+    getDeploymentHistoryMock.mockResolvedValue([]);
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    expect(await screen.findByText('Released')).toBeTruthy();
   });
 
   it('renders the Delivery Package section, sourced from the delivery domain (Sprint 93)', async () => {

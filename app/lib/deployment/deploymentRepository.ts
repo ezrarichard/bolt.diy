@@ -20,6 +20,14 @@ import {
 import { isValidDeploymentStatusTransition } from '~/lib/deployment/lifecycleTransitions';
 import { fromDeliveryPackageRow, type BuildersDbDeliveryPackageRow } from '~/lib/deployment/deliveryPackageDbTypes';
 import type { DeliveryPackage, DeliveryPackageRecord } from '~/lib/deployment/deliveryPackageTypes';
+import { fromReleaseRow, type BuildersDbReleaseRow } from '~/lib/deployment/releaseDbTypes';
+import {
+  acceptanceHistoryEvent,
+  type CustomerAcceptanceState,
+  type Release,
+  type ReleaseBaseline,
+  type ReleaseRecord,
+} from '~/lib/deployment/releaseTypes';
 import {
   fromDeploymentVerificationRow,
   toDeploymentVerificationInsert,
@@ -47,6 +55,7 @@ import type {
 
 export type { DeploymentVerification, VerificationReport } from '~/lib/deployment/verificationTypes';
 export type { DeliveryPackage, DeliveryPackageRecord } from '~/lib/deployment/deliveryPackageTypes';
+export type { Release, ReleaseRecord } from '~/lib/deployment/releaseTypes';
 
 export type {
   Deployment,
@@ -1283,6 +1292,301 @@ export async function listDeliveryPackages(deploymentId: string): Promise<Delive
   }
 }
 
+/**
+ * Release Management — Sprint 94, Parts 7/11/14.
+ *
+ * Statuses a release may be created from. `delivery_ready` is the normal case (a release attests
+ * to a packaged, verified delivery); `released`/`maintenance` are the follow-up cases — shipping
+ * 1.0.1 after 1.0.0, or a hotfix release from maintenance — where the Deployment is already past
+ * the transition and only a new release row is added.
+ */
+const RELEASE_ALLOWED_FROM_STATUSES: DeploymentStatus[] = ['delivery_ready', 'released', 'maintenance'];
+
+export type CreateReleaseFailureCode = 'unavailable' | 'not_delivery_ready' | 'duplicate_version' | 'error';
+
+export type CreateReleaseResult =
+  | {
+      ok: true;
+      release: ReleaseRecord;
+
+      /** True when this call moved the Deployment `delivery_ready -> released`. */
+      transitioned: boolean;
+
+      /** How many previously-live releases were marked `superseded` — at most one. */
+      supersededReleases: number;
+    }
+  | { ok: false; code: CreateReleaseFailureCode; message: string };
+
+/**
+ * Part 7/11 — the ONE repository operation that creates a release. Inserts the release,
+ * supersedes the previously-live one, transitions the Deployment to `released` (stamping its
+ * existing `released_at` column), and records exactly one `release_created` history event — all
+ * inside a single Postgres transaction (`builders_create_release`), for the same reason Sprints 92
+ * and 93 use one: a partial failure would leave state that reads as authoritative but is not.
+ *
+ * The release itself is assembled by `releaseManagementService.buildRelease`; nothing is derived
+ * here. This function only persists what it was handed.
+ */
+export async function createRelease(
+  deploymentId: string,
+  projectId: string,
+  release: Release,
+  options: { deliveryPackageId?: string; verificationId?: string; createdBy?: string } = {},
+): Promise<CreateReleaseResult> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('createRelease');
+    return { ok: false, code: 'unavailable', message: 'BuildersDB is not configured.' };
+  }
+
+  try {
+    /*
+     * Checked here as well as inside the transaction so the operator gets an actionable message
+     * rather than a raised Postgres exception. The database check is the enforcement.
+     */
+    const { data: deploymentRow, error: deploymentError } = await client
+      .from('builders_project_deployments')
+      .select('status')
+      .eq('id', deploymentId)
+      .single();
+
+    if (deploymentError) {
+      throw deploymentError;
+    }
+
+    const status = deploymentRow.status as DeploymentStatus;
+
+    if (!RELEASE_ALLOWED_FROM_STATUSES.includes(status)) {
+      return {
+        ok: false,
+        code: 'not_delivery_ready',
+        message: `Generate a delivery package before releasing this Deployment (currently: ${status}).`,
+      };
+    }
+
+    const { data, error } = await client.rpc('builders_create_release', {
+      p_deployment_id: deploymentId,
+      p_project_id: projectId,
+      p_semantic_version: release.semanticVersion,
+      p_release_name: release.releaseName,
+      p_release_type: release.releaseType,
+      p_delivery_package_id: options.deliveryPackageId ?? release.baseline.deliveryPackageId ?? null,
+      p_verification_id: options.verificationId ?? release.baseline.verificationId ?? null,
+      p_manifest_version: release.baseline.manifestVersion ?? null,
+      p_baseline: release.baseline,
+      p_release_notes: release.releaseNotes,
+      p_integrity: release.integrity,
+      p_metadata: release.metadata,
+      p_created_by: options.createdBy ?? null,
+    });
+
+    if (error) {
+      /* The table's `unique (deployment_id, semantic_version)` — surfaced as an actionable message. */
+      if (isUniqueViolation(error)) {
+        return {
+          ok: false,
+          code: 'duplicate_version',
+          message: `Version ${release.semanticVersion} has already been released for this Deployment.`,
+        };
+      }
+
+      throw error;
+    }
+
+    const result = (data ?? {}) as {
+      id?: string;
+      releaseNumber?: number;
+      releaseDate?: string;
+      transitioned?: boolean;
+      supersededReleases?: number;
+    };
+
+    return {
+      ok: true,
+      transitioned: result.transitioned === true,
+      supersededReleases: result.supersededReleases ?? 0,
+      release: {
+        ...release,
+        id: result.id ?? '',
+        deploymentId,
+        projectId,
+        releaseNumber: result.releaseNumber ?? release.releaseNumber,
+        releaseDate: result.releaseDate ?? release.releaseDate,
+        createdAt: result.releaseDate ?? release.releaseDate,
+        updatedAt: result.releaseDate ?? release.releaseDate,
+      },
+    };
+  } catch (error) {
+    logError('createRelease', error);
+
+    /*
+     * Nothing was committed — the transaction is all-or-nothing, so the Deployment is deliberately
+     * left exactly as it was rather than being marked released with no release behind it (Part 14).
+     */
+    return {
+      ok: false,
+      code: 'error',
+      message: 'The release could not be created — the Deployment was left unchanged.',
+    };
+  }
+}
+
+export interface RecordAcceptanceResult {
+  ok: boolean;
+  state?: CustomerAcceptanceState;
+  previousState?: CustomerAcceptanceState;
+  eventRecorded: boolean;
+  message: string;
+}
+
+/**
+ * Part 5/11 — records the customer's decision on a release. Changes RELEASE STATE ONLY: no
+ * engineering artifact, no manifest, no feature and no Deployment status is touched, because a
+ * customer rejecting a release does not un-deploy or un-verify anything that actually happened.
+ *
+ * Writes exactly one canonical history event, chosen by `acceptanceHistoryEvent` (the single place
+ * the five states map onto Part 11's two event names).
+ */
+export async function recordCustomerAcceptance(
+  releaseId: string,
+  state: CustomerAcceptanceState,
+  options: { notes?: string; conditions?: string[]; recordedBy?: string } = {},
+): Promise<RecordAcceptanceResult> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('recordCustomerAcceptance');
+    return { ok: false, eventRecorded: false, message: 'BuildersDB is not configured.' };
+  }
+
+  try {
+    const { data, error } = await client.rpc('builders_record_release_acceptance', {
+      p_release_id: releaseId,
+      p_state: state,
+      p_event_type: acceptanceHistoryEvent(state),
+      p_notes: options.notes ?? null,
+      p_conditions: options.conditions ?? [],
+      p_recorded_by: options.recordedBy ?? null,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const result = (data ?? {}) as {
+      state?: CustomerAcceptanceState;
+      previousState?: CustomerAcceptanceState;
+      eventRecorded?: boolean;
+    };
+
+    return {
+      ok: true,
+      state: result.state ?? state,
+      previousState: result.previousState,
+      eventRecorded: result.eventRecorded === true,
+      message: `Customer response recorded: ${state.replace(/_/g, ' ')}.`,
+    };
+  } catch (error) {
+    logError('recordCustomerAcceptance', error);
+    return { ok: false, eventRecorded: false, message: 'The customer response could not be saved.' };
+  }
+}
+
+/** The most recent release for a deployment, or null when none exists. */
+export async function getLatestRelease(deploymentId: string): Promise<ReleaseRecord | null> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('getLatestRelease');
+    return null;
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_releases')
+      .select('*')
+      .eq('deployment_id', deploymentId)
+      .order('release_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    return data ? fromReleaseRow(data as BuildersDbReleaseRow) : null;
+  } catch (error) {
+    logError('getLatestRelease', error);
+    return null;
+  }
+}
+
+/** Every release for a deployment, newest first — an older release is never overwritten (Part 7). */
+export async function listReleases(deploymentId: string): Promise<ReleaseRecord[]> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('listReleases');
+    return [];
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_releases')
+      .select('*')
+      .eq('deployment_id', deploymentId)
+      .order('release_number', { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    return (data ?? []).map((row) => fromReleaseRow(row as BuildersDbReleaseRow));
+  } catch (error) {
+    logError('listReleases', error);
+    return [];
+  }
+}
+
+/**
+ * Parts 8/9 — the baseline a future change must be compared against. PREPARED, NOT CONSUMED:
+ * nothing in this sprint diffs anything against it. Sprint 95's change management reads this
+ * instead of looking at the latest Deployment, which is the entire point of the distinction — a
+ * Deployment keeps moving, a Release does not.
+ *
+ * Returns the currently-LIVE release's baseline (`release_status = 'released'`), not merely the
+ * newest row, so a superseded release can never be mistaken for the current baseline.
+ */
+export async function getReleaseBaseline(deploymentId: string): Promise<ReleaseBaseline | null> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('getReleaseBaseline');
+    return null;
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_releases')
+      .select('*')
+      .eq('deployment_id', deploymentId)
+      .eq('release_status', 'released')
+      .order('release_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    return data ? fromReleaseRow(data as BuildersDbReleaseRow).baseline : null;
+  } catch (error) {
+    logError('getReleaseBaseline', error);
+    return null;
+  }
+}
+
 export const deploymentRepository = {
   createDeployment,
   getDeploymentByProject,
@@ -1305,4 +1609,9 @@ export const deploymentRepository = {
   recordDeliveryPackage,
   getLatestDeliveryPackage,
   listDeliveryPackages,
+  createRelease,
+  recordCustomerAcceptance,
+  getLatestRelease,
+  listReleases,
+  getReleaseBaseline,
 };

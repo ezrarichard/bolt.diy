@@ -13,6 +13,7 @@ import { getActiveApplicationManifest } from '~/lib/application-manifest/applica
 import { VercelDeployDialog } from '~/components/deploy/VercelDeployDialog';
 import { DeploymentVerificationPanel } from '~/components/deploy/DeploymentVerificationPanel';
 import { DeliveryPackagePanel } from '~/components/deploy/DeliveryPackagePanel';
+import { ReleasePanel } from '~/components/deploy/ReleasePanel';
 import type { ApplicationManifest } from '~/lib/application-manifest/manifestTypes';
 
 /**
@@ -480,6 +481,12 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
         project={project}
         deployment={deployment}
         onPackageGenerated={() => setReloadToken((token) => token + 1)}
+      />
+
+      <ReleasePanel
+        project={project}
+        deployment={deployment}
+        onReleaseChanged={() => setReloadToken((token) => token + 1)}
       />
 
       {showVercelDialog && (
