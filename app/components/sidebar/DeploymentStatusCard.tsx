@@ -12,6 +12,7 @@ import { assessEnvironmentReadiness } from '~/lib/services/environmentReadinessS
 import { getActiveApplicationManifest } from '~/lib/application-manifest/applicationManifestRepository';
 import { VercelDeployDialog } from '~/components/deploy/VercelDeployDialog';
 import { DeploymentVerificationPanel } from '~/components/deploy/DeploymentVerificationPanel';
+import { DeliveryPackagePanel } from '~/components/deploy/DeliveryPackagePanel';
 import type { ApplicationManifest } from '~/lib/application-manifest/manifestTypes';
 
 /**
@@ -57,6 +58,8 @@ function deploymentStatusPresentation(status: DeploymentStatus): { status: Build
       return { status: 'active', label: 'Deployed' };
     case 'verified':
       return { status: 'active', label: 'Verified' };
+    case 'delivery_ready':
+      return { status: 'success', label: 'Delivery Ready' };
     case 'released':
       return { status: 'success', label: 'Released' };
     case 'maintenance':
@@ -167,7 +170,9 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
   });
   const isEnvironmentReady =
     deployment.status === 'environment_ready' ||
-    ['deploying', 'deployed', 'verified', 'released', 'maintenance', 'archived'].includes(deployment.status);
+    ['deploying', 'deployed', 'verified', 'delivery_ready', 'released', 'maintenance', 'archived'].includes(
+      deployment.status,
+    );
   const { vercel } = deployment;
   const canDeployToVercel = deployment.status === 'environment_ready' || deployment.status === 'failed';
   const isDeploying = deployment.status === 'deploying';
@@ -469,6 +474,12 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
         deployment={deployment}
         manifest={manifest}
         onVerificationComplete={() => setReloadToken((token) => token + 1)}
+      />
+
+      <DeliveryPackagePanel
+        project={project}
+        deployment={deployment}
+        onPackageGenerated={() => setReloadToken((token) => token + 1)}
       />
 
       {showVercelDialog && (

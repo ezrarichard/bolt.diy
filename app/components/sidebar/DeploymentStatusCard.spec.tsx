@@ -13,6 +13,7 @@ const {
   getDeploymentHistoryMock,
   getActiveApplicationManifestMock,
   getLatestDeploymentVerificationMock,
+  getLatestDeliveryPackageMock,
 } = vi.hoisted(() => ({
   getDeploymentWithProvidersMock: vi.fn(),
   getDeploymentHistoryMock: vi.fn(),
@@ -20,6 +21,9 @@ const {
 
   // Sprint 92 — the card now renders DeploymentVerificationPanel, which reads the latest report.
   getLatestDeploymentVerificationMock: vi.fn(),
+
+  // Sprint 93 — and DeliveryPackagePanel, which reads the latest delivery package.
+  getLatestDeliveryPackageMock: vi.fn(),
 }));
 
 vi.mock('~/lib/deployment/deploymentRepository', () => ({
@@ -27,6 +31,7 @@ vi.mock('~/lib/deployment/deploymentRepository', () => ({
     getDeploymentWithProviders: getDeploymentWithProvidersMock,
     getDeploymentHistory: getDeploymentHistoryMock,
     getLatestDeploymentVerification: getLatestDeploymentVerificationMock,
+    getLatestDeliveryPackage: getLatestDeliveryPackageMock,
   },
 }));
 
@@ -140,6 +145,28 @@ describe('DeploymentStatusCard', () => {
     getActiveApplicationManifestMock.mockResolvedValue(null);
     getLatestDeploymentVerificationMock.mockReset();
     getLatestDeploymentVerificationMock.mockResolvedValue(null);
+    getLatestDeliveryPackageMock.mockReset();
+    getLatestDeliveryPackageMock.mockResolvedValue(null);
+  });
+
+  it('renders the Delivery Package section, sourced from the delivery domain (Sprint 93)', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(makeDeployment({ status: 'verified' }));
+    getDeploymentHistoryMock.mockResolvedValue([]);
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    expect(await screen.findByText('Delivery Package')).toBeTruthy();
+    await waitFor(() => expect(getLatestDeliveryPackageMock).toHaveBeenCalledWith('dep-1'));
+    expect(screen.getByRole('button', { name: 'Generate Package' })).toBeTruthy();
+  });
+
+  it('shows the Delivery Ready lifecycle badge (Sprint 93)', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(makeDeployment({ status: 'delivery_ready' }));
+    getDeploymentHistoryMock.mockResolvedValue([]);
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    expect(await screen.findByText('Delivery Ready')).toBeTruthy();
   });
 
   it('renders the Verification section, sourced from the Deployment verification domain (Sprint 92)', async () => {

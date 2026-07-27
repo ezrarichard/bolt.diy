@@ -18,6 +18,8 @@ import {
   type BuildersDbProjectDeploymentRow,
 } from '~/lib/deployment/deploymentDbTypes';
 import { isValidDeploymentStatusTransition } from '~/lib/deployment/lifecycleTransitions';
+import { fromDeliveryPackageRow, type BuildersDbDeliveryPackageRow } from '~/lib/deployment/deliveryPackageDbTypes';
+import type { DeliveryPackage, DeliveryPackageRecord } from '~/lib/deployment/deliveryPackageTypes';
 import {
   fromDeploymentVerificationRow,
   toDeploymentVerificationInsert,
@@ -44,6 +46,7 @@ import type {
 } from '~/lib/deployment/deploymentTypes';
 
 export type { DeploymentVerification, VerificationReport } from '~/lib/deployment/verificationTypes';
+export type { DeliveryPackage, DeliveryPackageRecord } from '~/lib/deployment/deliveryPackageTypes';
 
 export type {
   Deployment,
@@ -616,6 +619,7 @@ const VERCEL_ATTACH_ALLOWED_FROM_STATUSES: DeploymentStatus[] = [
   'deploying',
   'deployed',
   'verified',
+  'delivery_ready',
   'released',
   'maintenance',
   'archived',
@@ -821,7 +825,7 @@ export async function getDeploymentHistory(deploymentId: string): Promise<Deploy
  * event, see `recordDeploymentVerification`). Every other status is refused: verifying a
  * Deployment that has not actually deployed would be verifying nothing.
  */
-const VERIFICATION_ALLOWED_FROM_STATUSES: DeploymentStatus[] = ['deployed', 'verified'];
+const VERIFICATION_ALLOWED_FROM_STATUSES: DeploymentStatus[] = ['deployed', 'verified', 'delivery_ready'];
 
 export type StartVerificationFailureCode = 'unavailable' | 'not_deployed' | 'already_running' | 'error';
 
@@ -1084,6 +1088,201 @@ export async function listDeploymentVerifications(deploymentId: string): Promise
   }
 }
 
+/**
+ * Customer Delivery Package — Sprint 93, Parts 9/15/16.
+ *
+ * Statuses a package may be generated from. `verified` is the normal case (the package's whole
+ * purpose is to attest to a verified deployment); `delivery_ready` is the explicitly-supported
+ * REGENERATION state — a redeploy, a re-verification or a corrected environment variable changes
+ * the delivery story, and the customer should get an updated document without the lifecycle event
+ * being written twice.
+ */
+const DELIVERY_PACKAGE_ALLOWED_FROM_STATUSES: DeploymentStatus[] = ['verified', 'delivery_ready'];
+
+export type RecordDeliveryPackageFailureCode = 'unavailable' | 'not_verified' | 'error';
+
+export type RecordDeliveryPackageResult =
+  | {
+      ok: true;
+      record: DeliveryPackageRecord;
+
+      /** True when this call moved the Deployment `verified -> delivery_ready`. */
+      transitioned: boolean;
+
+      /** `delivery_package_generated` on the first package, `delivery_package_updated` on a regeneration. */
+      eventType: string;
+    }
+  | { ok: false; code: RecordDeliveryPackageFailureCode; message: string };
+
+/**
+ * Part 9/15 — the ONE repository operation that persists a Delivery Package. Allocates the next
+ * `package_number`, inserts the package, transitions `verified -> delivery_ready` when the
+ * Deployment is still `verified`, and records exactly one canonical history event — all inside a
+ * single Postgres transaction (`builders_record_delivery_package`), for the same reason Sprint 92's
+ * verification finaliser uses one: a partial failure here would leave state that reads as
+ * authoritative but is not (a Deployment claiming `delivery_ready` with no package behind it, or a
+ * stored package the lifecycle and history never acknowledge).
+ *
+ * The package itself is assembled by `deliveryPackageService.buildDeliveryPackage`; nothing is
+ * derived here. This function only persists what it was handed.
+ */
+export async function recordDeliveryPackage(
+  deploymentId: string,
+  projectId: string,
+  pkg: DeliveryPackage,
+  options: { verificationId?: string; generatedBy?: string } = {},
+): Promise<RecordDeliveryPackageResult> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('recordDeliveryPackage');
+    return { ok: false, code: 'unavailable', message: 'BuildersDB is not configured.' };
+  }
+
+  try {
+    /*
+     * Checked here as well as inside the transaction so the operator gets an actionable message
+     * rather than a raised Postgres exception. The database check is the one that actually
+     * enforces it — this one is for the human.
+     */
+    const { data: deploymentRow, error: deploymentError } = await client
+      .from('builders_project_deployments')
+      .select('status')
+      .eq('id', deploymentId)
+      .single();
+
+    if (deploymentError) {
+      throw deploymentError;
+    }
+
+    const status = deploymentRow.status as DeploymentStatus;
+
+    if (!DELIVERY_PACKAGE_ALLOWED_FROM_STATUSES.includes(status)) {
+      return {
+        ok: false,
+        code: 'not_verified',
+        message: `This Deployment must be verified before a delivery package can be generated (currently: ${status}).`,
+      };
+    }
+
+    const { data, error } = await client.rpc('builders_record_delivery_package', {
+      p_deployment_id: deploymentId,
+      p_project_id: projectId,
+      p_package_version: pkg.packageMetadata.packageVersion,
+      p_generator_version: pkg.packageMetadata.generatorVersion,
+      p_manifest_version: pkg.versionSummary.manifestVersion ?? null,
+      p_verification_id: options.verificationId ?? null,
+      p_completeness_score: pkg.completeness.score,
+      p_completeness_level: pkg.completeness.level,
+      p_delivery_summary: pkg,
+      p_generated_by: options.generatedBy ?? null,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const result = (data ?? {}) as {
+      id?: string;
+      packageNumber?: number;
+      generatedAt?: string;
+      transitioned?: boolean;
+      eventType?: string;
+    };
+
+    return {
+      ok: true,
+      transitioned: result.transitioned === true,
+      eventType: result.eventType ?? 'delivery_package_generated',
+      record: {
+        id: result.id ?? '',
+        deploymentId,
+        projectId,
+        packageNumber: result.packageNumber ?? pkg.versionSummary.packageNumber,
+        packageVersion: pkg.packageMetadata.packageVersion,
+        generatorVersion: pkg.packageMetadata.generatorVersion,
+        status: 'generated',
+        manifestVersion: pkg.versionSummary.manifestVersion,
+        verificationId: options.verificationId,
+        completenessScore: pkg.completeness.score,
+        completenessLevel: pkg.completeness.level,
+        deliverySummary: pkg,
+        generatedAt: result.generatedAt ?? pkg.packageMetadata.deliveredAt,
+        generatedBy: options.generatedBy,
+        createdAt: result.generatedAt ?? pkg.packageMetadata.deliveredAt,
+      },
+    };
+  } catch (error) {
+    logError('recordDeliveryPackage', error);
+
+    /*
+     * Nothing was committed — the transaction is all-or-nothing, so the Deployment is deliberately
+     * left exactly as it was rather than being marked delivery_ready without a package behind it.
+     */
+    return {
+      ok: false,
+      code: 'error',
+      message: 'The delivery package could not be saved — the Deployment was left unchanged.',
+    };
+  }
+}
+
+/** The most recent package for a deployment, or null when none has been generated. */
+export async function getLatestDeliveryPackage(deploymentId: string): Promise<DeliveryPackageRecord | null> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('getLatestDeliveryPackage');
+    return null;
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_delivery_packages')
+      .select('*')
+      .eq('deployment_id', deploymentId)
+      .order('package_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    return data ? fromDeliveryPackageRow(data as BuildersDbDeliveryPackageRow) : null;
+  } catch (error) {
+    logError('getLatestDeliveryPackage', error);
+    return null;
+  }
+}
+
+/** Every package for a deployment, newest first — an older package is never overwritten (Part 9). */
+export async function listDeliveryPackages(deploymentId: string): Promise<DeliveryPackageRecord[]> {
+  const client = getBuildersDbClient();
+
+  if (!client) {
+    unavailable('listDeliveryPackages');
+    return [];
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_delivery_packages')
+      .select('*')
+      .eq('deployment_id', deploymentId)
+      .order('package_number', { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    return (data ?? []).map((row) => fromDeliveryPackageRow(row as BuildersDbDeliveryPackageRow));
+  } catch (error) {
+    logError('listDeliveryPackages', error);
+    return [];
+  }
+}
+
 export const deploymentRepository = {
   createDeployment,
   getDeploymentByProject,
@@ -1103,4 +1302,7 @@ export const deploymentRepository = {
   recordDeploymentVerification,
   getLatestDeploymentVerification,
   listDeploymentVerifications,
+  recordDeliveryPackage,
+  getLatestDeliveryPackage,
+  listDeliveryPackages,
 };

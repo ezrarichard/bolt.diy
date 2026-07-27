@@ -20,6 +20,7 @@ describe('isValidDeploymentStatusTransition', () => {
       'deploying',
       'deployed',
       'verified',
+      'delivery_ready',
       'released',
     ];
 
@@ -42,11 +43,22 @@ describe('isValidDeploymentStatusTransition', () => {
     expect(isValidDeploymentStatusTransition('planning', 'failed')).toBe(true);
     expect(isValidDeploymentStatusTransition('deploying', 'failed')).toBe(true);
     expect(isValidDeploymentStatusTransition('verified', 'failed')).toBe(true);
+    expect(isValidDeploymentStatusTransition('delivery_ready', 'failed')).toBe(true);
+  });
+
+  it('places delivery_ready between verified and released (Sprint 93)', () => {
+    expect(isValidDeploymentStatusTransition('verified', 'delivery_ready')).toBe(true);
+    expect(isValidDeploymentStatusTransition('delivery_ready', 'released')).toBe(true);
+
+    // Packaging is not releasing — verified may no longer jump straight to released.
+    expect(isValidDeploymentStatusTransition('verified', 'released')).toBe(false);
+    expect(isValidDeploymentStatusTransition('deployed', 'delivery_ready')).toBe(false);
   });
 
   it('allows failed to resume back into any pre-released state', () => {
     expect(isValidDeploymentStatusTransition('failed', 'planning')).toBe(true);
     expect(isValidDeploymentStatusTransition('failed', 'environment_ready')).toBe(true);
+    expect(isValidDeploymentStatusTransition('failed', 'delivery_ready')).toBe(true);
   });
 
   it('does not allow failed to jump directly to released', () => {

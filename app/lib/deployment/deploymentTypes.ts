@@ -18,6 +18,11 @@
  * no-skip/no-regress, mirroring `MvpStatus`'s existing convention, with `failed` playing the
  * same "can interrupt any pre-released state, resumes back into one of them" role `blocked`
  * plays for `MvpStatus`.
+ *
+ * Sprint 93 inserts `delivery_ready` between `verified` and `released`: the Customer Delivery
+ * Package has been assembled and the application is ready to hand over. Deliberately NOT the same
+ * as `released` (which stays out of scope until Sprint 94's Release Management) — packaging a
+ * handover artifact is not the same act as releasing to production.
  */
 export type DeploymentStatus =
   | 'planning'
@@ -29,6 +34,7 @@ export type DeploymentStatus =
   | 'deploying'
   | 'deployed'
   | 'verified'
+  | 'delivery_ready'
   | 'released'
   | 'maintenance'
   | 'archived'
