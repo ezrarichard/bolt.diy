@@ -49,7 +49,9 @@ interface ExecutionRow {
   recommended_roles: IncrementalRoleId[] | null;
   selected_roles: IncrementalRoleId[] | null;
   overrides: RoleOverride[] | null;
-  current_role: IncrementalRoleId | null;
+
+  /** `active_role` in the table — `current_role` is a reserved SQL identifier. See the migration. */
+  active_role: IncrementalRoleId | null;
   completed_roles: IncrementalRoleId[] | null;
   skipped_roles: IncrementalRoleId[] | null;
   failed_roles: IncrementalRoleId[] | null;
@@ -123,7 +125,7 @@ function fromExecutionRow(row: ExecutionRow, extras: Partial<IncrementalExecutio
     recommendedRoles: row.recommended_roles ?? [],
     selectedRoles: row.selected_roles ?? [],
     overrides: row.overrides ?? [],
-    currentRole: row.current_role ?? undefined,
+    currentRole: row.active_role ?? undefined,
     completedRoles: row.completed_roles ?? [],
     skippedRoles: row.skipped_roles ?? [],
     failedRoles: row.failed_roles ?? [],
@@ -375,7 +377,7 @@ export async function updateExecution(executionId: string, params: UpdateExecuti
   }
 
   if (params.currentRole !== undefined) {
-    patch.current_role = params.currentRole;
+    patch.active_role = params.currentRole;
   }
 
   if (params.completedRoles !== undefined) {

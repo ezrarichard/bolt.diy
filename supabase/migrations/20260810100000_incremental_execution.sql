@@ -60,7 +60,11 @@ create table if not exists builders_incremental_executions (
   selected_roles jsonb not null default '[]'::jsonb,
   overrides jsonb not null default '[]'::jsonb,
 
-  current_role text,
+  -- NOT `current_role`: that is a reserved SQL-standard identifier (a niladic function in
+  -- PostgreSQL, like `current_user`/`session_user`), so a bare column of that name fails to parse.
+  -- Renamed rather than quoted — a column that only works when quoted is a trap for every later
+  -- query. The application-level field stays `currentRole`; only the column name differs.
+  active_role text,
   completed_roles jsonb not null default '[]'::jsonb,
   skipped_roles jsonb not null default '[]'::jsonb,
   failed_roles jsonb not null default '[]'::jsonb,
