@@ -15,6 +15,7 @@ import { DeploymentVerificationPanel } from '~/components/deploy/DeploymentVerif
 import { DeliveryPackagePanel } from '~/components/deploy/DeliveryPackagePanel';
 import { ReleasePanel } from '~/components/deploy/ReleasePanel';
 import { ProductEvolutionPanel } from '~/components/deploy/ProductEvolutionPanel';
+import { IncrementalEngineeringPanel } from '~/components/deploy/IncrementalEngineeringPanel';
 import type { ApplicationManifest } from '~/lib/application-manifest/manifestTypes';
 
 /**
@@ -491,6 +492,8 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
       />
 
       <ProductEvolutionPanel project={project} deployment={deployment} />
+
+      <IncrementalEngineeringPanel project={project} deployment={deployment} />
 
       {showVercelDialog && (
         <VercelDeployDialog

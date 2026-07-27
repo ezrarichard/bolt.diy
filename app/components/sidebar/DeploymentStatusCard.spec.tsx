@@ -31,15 +31,19 @@ const {
 }));
 
 // Sprint 95 — and ProductEvolutionPanel, which reads its own evolution domain.
-const { listChangeRequestsMock, listImpactAnalysesMock } = vi.hoisted(() => ({
+const { listChangeRequestsMock, listImpactAnalysesMock, listIncrementalPlansMock } = vi.hoisted(() => ({
   listChangeRequestsMock: vi.fn(),
   listImpactAnalysesMock: vi.fn(),
+
+  // Sprint 96 — and IncrementalEngineeringPanel, which reads the incremental plans.
+  listIncrementalPlansMock: vi.fn(),
 }));
 
 vi.mock('~/lib/evolution/evolutionRepository', () => ({
   evolutionRepository: {
     listChangeRequests: listChangeRequestsMock,
     listImpactAnalyses: listImpactAnalysesMock,
+    listIncrementalPlans: listIncrementalPlansMock,
   },
 }));
 
@@ -171,6 +175,18 @@ describe('DeploymentStatusCard', () => {
     listChangeRequestsMock.mockResolvedValue([]);
     listImpactAnalysesMock.mockReset();
     listImpactAnalysesMock.mockResolvedValue([]);
+    listIncrementalPlansMock.mockReset();
+    listIncrementalPlansMock.mockResolvedValue([]);
+  });
+
+  it('renders the Incremental Engineering section, sourced from its own domain (Sprint 96)', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(makeDeployment({ status: 'released' }));
+    getDeploymentHistoryMock.mockResolvedValue([]);
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    expect(await screen.findByText('Incremental Engineering')).toBeTruthy();
+    await waitFor(() => expect(listIncrementalPlansMock).toHaveBeenCalledWith('dep-1'));
   });
 
   it('renders the Product Evolution section, sourced from the evolution domain (Sprint 95)', async () => {
