@@ -14,6 +14,7 @@ import { VercelDeployDialog } from '~/components/deploy/VercelDeployDialog';
 import { DeploymentVerificationPanel } from '~/components/deploy/DeploymentVerificationPanel';
 import { DeliveryPackagePanel } from '~/components/deploy/DeliveryPackagePanel';
 import { ReleasePanel } from '~/components/deploy/ReleasePanel';
+import { ProductEvolutionPanel } from '~/components/deploy/ProductEvolutionPanel';
 import type { ApplicationManifest } from '~/lib/application-manifest/manifestTypes';
 
 /**
@@ -488,6 +489,8 @@ export function DeploymentStatusCard({ project }: DeploymentStatusCardProps) {
         deployment={deployment}
         onReleaseChanged={() => setReloadToken((token) => token + 1)}
       />
+
+      <ProductEvolutionPanel project={project} deployment={deployment} />
 
       {showVercelDialog && (
         <VercelDeployDialog

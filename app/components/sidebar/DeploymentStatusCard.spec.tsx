@@ -30,6 +30,19 @@ const {
   getLatestReleaseMock: vi.fn(),
 }));
 
+// Sprint 95 — and ProductEvolutionPanel, which reads its own evolution domain.
+const { listChangeRequestsMock, listImpactAnalysesMock } = vi.hoisted(() => ({
+  listChangeRequestsMock: vi.fn(),
+  listImpactAnalysesMock: vi.fn(),
+}));
+
+vi.mock('~/lib/evolution/evolutionRepository', () => ({
+  evolutionRepository: {
+    listChangeRequests: listChangeRequestsMock,
+    listImpactAnalyses: listImpactAnalysesMock,
+  },
+}));
+
 vi.mock('~/lib/deployment/deploymentRepository', () => ({
   deploymentRepository: {
     getDeploymentWithProviders: getDeploymentWithProvidersMock,
@@ -154,6 +167,20 @@ describe('DeploymentStatusCard', () => {
     getLatestDeliveryPackageMock.mockResolvedValue(null);
     getLatestReleaseMock.mockReset();
     getLatestReleaseMock.mockResolvedValue(null);
+    listChangeRequestsMock.mockReset();
+    listChangeRequestsMock.mockResolvedValue([]);
+    listImpactAnalysesMock.mockReset();
+    listImpactAnalysesMock.mockResolvedValue([]);
+  });
+
+  it('renders the Product Evolution section, sourced from the evolution domain (Sprint 95)', async () => {
+    getDeploymentWithProvidersMock.mockResolvedValue(makeDeployment({ status: 'released' }));
+    getDeploymentHistoryMock.mockResolvedValue([]);
+
+    render(<DeploymentStatusCard project={makeProject()} />);
+
+    expect(await screen.findByText('Product Evolution')).toBeTruthy();
+    await waitFor(() => expect(listChangeRequestsMock).toHaveBeenCalledWith('dep-1'));
   });
 
   it('renders the Release section, sourced from the release domain (Sprint 94)', async () => {
