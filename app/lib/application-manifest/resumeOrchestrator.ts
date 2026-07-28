@@ -8,6 +8,7 @@ import {
   listApplicationManifestFiles,
   saveApplicationManifest,
 } from './applicationManifestRepository';
+import { resolvePhaseResumePlan, type PhaseResumePlan } from './phaseModel';
 import type {
   ApplicationManifest,
   ApplicationManifestFile,
@@ -220,6 +221,15 @@ export interface PrepareManifestResult {
 
   /** Sprint 49, Part 4/11 — any Feature ID `manifestBuilder.ts`'s `validateFeatureIds` stripped from a file draft before persistence (an out-of-scope or unrecognized ID), deduplicated. Empty when nothing was rejected — including every legacy/no-MVP run, which never has candidate Feature IDs to reject in the first place. */
   rejectedFeatureIds: string[];
+
+  /**
+   * Sprint 99B — where the Progressive Phase Runner will pick up, DERIVED from the persisted file
+   * statuses (`resolvePhaseResumePlan`), never stored. Undefined only when the manifest could not
+   * be prepared at all, or when every phase is already finished. A fresh manifest resolves to
+   * Phase 1; a run interrupted mid-backend resolves to Phase 3/4/5 with the earlier phases
+   * reported `completed`, which is what stops resume from re-entering them.
+   */
+  phasePlan?: PhaseResumePlan;
 }
 
 /**
@@ -371,6 +381,13 @@ export async function prepareManifestForGeneration(input: {
     };
   }
 
+  /*
+   * Sprint 99B — the resume phase plan is derived from whatever file statuses were just
+   * persisted/reused, using the SAME `backendModules` this run planned with, so payment/admin
+   * modules land in the same phases the pipeline will run them in.
+   */
+  const phaseContext = { backendModules: input.plan.backendModules };
+
   if (!result.created) {
     // Unchanged plan/content — plain resume against the SAME manifest, nothing to carry forward.
     return {
@@ -382,6 +399,7 @@ export async function prepareManifestForGeneration(input: {
       carriedForwardCount: 0,
       crossMvpTransition: false,
       rejectedFeatureIds,
+      phasePlan: resolvePhaseResumePlan(result.files, phaseContext),
     };
   }
 
@@ -396,6 +414,7 @@ export async function prepareManifestForGeneration(input: {
       crossMvpTransition,
       rejectedFeatureIds,
       previousMvpId,
+      phasePlan: resolvePhaseResumePlan(result.files, phaseContext),
     };
   }
 
@@ -442,6 +461,7 @@ export async function prepareManifestForGeneration(input: {
     crossMvpTransition,
     previousMvpId,
     rejectedFeatureIds,
+    phasePlan: resolvePhaseResumePlan(refreshedFiles, phaseContext),
   };
 }
 

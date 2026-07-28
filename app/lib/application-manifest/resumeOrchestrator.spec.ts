@@ -481,3 +481,89 @@ describe('prepareManifestForGeneration', () => {
     expect(result.error).toBe('insert failed');
   });
 });
+
+/**
+ * Sprint 99B — resume is phase-aware. Nothing about the carry-forward machinery above changed;
+ * what is new is that the result carries a DERIVED phase plan (`resolvePhaseResumePlan`) computed
+ * from the very file statuses that were just persisted or reused.
+ */
+describe('prepareManifestForGeneration — phase-aware resume (Sprint 99B)', () => {
+  beforeEach(() => {
+    getActiveApplicationManifestMock.mockReset();
+    listApplicationManifestFilesMock.mockReset();
+    saveApplicationManifestMock.mockReset();
+    carryForwardFileMock.mockReset();
+  });
+
+  const files = [
+    { id: 'f-navbar', path: 'src/components/Navbar.tsx', category: 'components', featureIds: [], status: 'complete' },
+    { id: 'f-types', path: 'src/types/index.ts', category: 'types', featureIds: [], status: 'validated' },
+    { id: 'f-home', path: 'src/pages/HomePage.tsx', category: 'pages', featureIds: [], status: 'complete' },
+    {
+      id: 'f-rides',
+      path: 'src/features/rides/service.ts',
+      category: 'backend',
+      featureIds: ['FEAT-001'],
+      status: 'failed',
+    },
+    {
+      id: 'f-payments',
+      path: 'src/features/payments/service.ts',
+      category: 'backend',
+      featureIds: ['FEAT-002'],
+      status: 'queued',
+    },
+  ];
+
+  it('resumes at the lowest incomplete phase and reports the earlier ones complete', async () => {
+    getActiveApplicationManifestMock.mockResolvedValue(null);
+    listApplicationManifestFilesMock.mockResolvedValue([]);
+    saveApplicationManifestMock.mockResolvedValue({
+      ok: true,
+      created: false,
+      manifest: { id: 'manifest-1', version: 1, totalFiles: files.length },
+      files,
+    });
+
+    const result = await prepareManifestForGeneration({
+      projectId: 'proj-1',
+      plan: makePlan({ types: 't', services: 's', pages: 'p', components: 'c' }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.resumed).toBe(true);
+    expect(result.phasePlan?.activePhase).toBe(3);
+    expect(result.phasePlan?.completedPhases).toEqual([1, 2]);
+
+    // Only the ACTIVE phase's unfinished file regenerates; Payments (Phase 4) waits its turn.
+    expect(result.phasePlan?.regeneratePaths).toEqual(['src/features/rides/service.ts']);
+
+    // Everything already validated/complete is reused via the existing checksum path.
+    expect(result.phasePlan?.reusablePaths).toEqual([
+      'src/components/Navbar.tsx',
+      'src/types/index.ts',
+      'src/pages/HomePage.tsx',
+    ]);
+  });
+
+  it('a legacy manifest (every file pending) resumes at Phase 1 and reuses nothing — no migration', async () => {
+    const legacy = files.map((file) => ({ ...file, status: 'pending' }));
+    getActiveApplicationManifestMock.mockResolvedValue(null);
+    listApplicationManifestFilesMock.mockResolvedValue([]);
+    saveApplicationManifestMock.mockResolvedValue({
+      ok: true,
+      created: true,
+      manifest: { id: 'manifest-1', version: 1, totalFiles: legacy.length },
+      files: legacy,
+    });
+
+    const result = await prepareManifestForGeneration({
+      projectId: 'proj-1',
+      plan: makePlan({ types: 't', services: 's', pages: 'p', components: 'c' }),
+    });
+
+    expect(result.phasePlan?.activePhase).toBe(1);
+    expect(result.phasePlan?.completedPhases).toEqual([]);
+    expect(result.phasePlan?.reusablePaths).toEqual([]);
+  });
+});

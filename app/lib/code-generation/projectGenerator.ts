@@ -3,6 +3,7 @@ import type { ProductPackage } from '~/lib/product-assembly/assemblyTypes';
 import {
   runGenerationPipeline,
   type FileLifecycleHooks,
+  type GenerationPhaseHooks,
   type OnPlanReady,
   type ResumeHooks,
 } from './generationPipeline';
@@ -31,6 +32,9 @@ export async function generateProject(
 
   /** Sprint 98A, BUG-011 — operator cancellation, threaded straight through to the pipeline. */
   signal?: AbortSignal,
+
+  /** Sprint 99B — the Progressive Phase Runner's lifecycle, threaded straight through exactly like `signal` above. */
+  phaseHooks?: GenerationPhaseHooks,
 ): Promise<GenerationResult> {
   const hasAnySection = productPackage.sections.some(
     (section) => section.id !== 'documentation' && section.files.length > 0,
@@ -61,6 +65,7 @@ export async function generateProject(
     mvpScope,
     backendModules,
     signal,
+    phaseHooks,
   );
 }
 

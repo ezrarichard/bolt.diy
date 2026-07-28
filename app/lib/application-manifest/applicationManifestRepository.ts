@@ -215,7 +215,20 @@ function toFileInsertRow(manifestId: string | null, projectId: string, file: App
     dependencies: file.dependencies,
     required: file.required,
     source_kind: file.sourceKind,
-    status: 'pending',
+
+    /*
+     * Sprint 99B — planned files are inserted `queued`, not `pending`. `queued` has meant
+     * "scheduled, generation hasn't started" since Sprint 44.2 Phase 4 (see
+     * `ManifestFileStatus`'s own comment, which reserved it for exactly this) — the Progressive
+     * Phase Runner is the scheduler it was reserved for: `phaseModel.ts` promotes one phase's
+     * files `queued → pending` at a time, so files belonging to a future phase are visibly not
+     * yet activated instead of every file claiming to be in play from the first second.
+     *
+     * No migration: the column and the value both already exist, the RPC takes the status from
+     * the row (`coalesce(file ->> 'status', 'pending')`), and every manifest written before this
+     * sprint keeps its `pending` rows and is treated as "one phase, already fully activated."
+     */
+    status: 'queued',
     priority: file.priority ?? null,
     queue_position: file.queuePosition ?? null,
     feature_ids: file.featureIds,
@@ -507,10 +520,59 @@ export async function listManifestVersions(projectId: string): Promise<Applicati
   }
 }
 
+/**
+ * Sprint 99B — phase activation, the ONLY write the Progressive Phase Runner performs.
+ *
+ * Promotes the given files `queued → pending`. Deliberately narrow in three ways:
+ *
+ *  - It filters on `status = 'queued'`, so a file that is already generating/generated/complete
+ *    (a resumed run's earlier phases) can never be dragged backwards by re-activating a phase.
+ *  - It writes nothing else — no phase column, no counters, no timestamps.
+ *  - An empty id list is a no-op success, which is exactly what a legacy manifest produces
+ *    (every file is already `pending`), so replaying activation against one changes nothing.
+ *
+ * Never throws — same defensive contract as every other function in this module.
+ */
+export async function activateManifestFiles(
+  manifestId: string,
+  fileIds: string[],
+): Promise<{ ok: boolean; activated: number; error?: string }> {
+  if (fileIds.length === 0) {
+    return { ok: true, activated: 0 };
+  }
+
+  const client = getBuildersDbClient();
+
+  if (!isAvailable() || !client) {
+    unavailable('activateManifestFiles');
+    return { ok: false, activated: 0, error: 'BuildersDB is not configured.' };
+  }
+
+  try {
+    const { data, error } = await client
+      .from('builders_application_manifest_files')
+      .update({ status: 'pending' })
+      .eq('manifest_id', manifestId)
+      .eq('status', 'queued')
+      .in('id', fileIds)
+      .select('id');
+
+    if (error) {
+      throw error;
+    }
+
+    return { ok: true, activated: (data ?? []).length };
+  } catch (error) {
+    logError('activateManifestFiles', error);
+    return { ok: false, activated: 0, error: safeErrorMessage(error) };
+  }
+}
+
 export const applicationManifestRepository = {
   isAvailable,
   getActiveApplicationManifest,
   listApplicationManifestFiles,
   saveApplicationManifest,
   listManifestVersions,
+  activateManifestFiles,
 };

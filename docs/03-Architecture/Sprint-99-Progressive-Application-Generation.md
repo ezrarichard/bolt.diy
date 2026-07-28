@@ -1,7 +1,7 @@
 # Sprint 99 — Progressive Application Generation
 ## Technical Design & Implementation Roadmap
 
-**Status:** Checkpoint A implemented, unit-verified and LIVE-verified. Checkpoints B–D not started.
+**Status:** Checkpoints A and B implemented, unit-verified and verified in a controlled run. Checkpoints C–D not started.
 **Implementation started:** 28 July 2026
 **Author:** Claude (Claude Code)
 **Date:** 28 July 2026
@@ -495,3 +495,179 @@ persists all six.
    aborted after 3 calls with `terminationReason: 'provider-error'`, populated `last_error`, and did
    **not** mark the run cancelled — a live confirmation of both the non-retryable guard and
    AR2-BUG-007, obtained for free.
+
+
+---
+
+## 20. Implementation record — Checkpoint B / Sprint 99B (29 July 2026)
+
+**Delivered: the Progressive Phase Runner.** Deterministic phase orchestration with full backward
+compatibility. Checkpoint C (Early Preview, incremental WebContainer writes, preview lifecycle, HMR)
+and Checkpoint D (progress UI) are **not** implemented and were explicitly out of scope.
+
+### 20.1 What was built
+
+| File | Change |
+|---|---|
+| `app/lib/application-manifest/phaseModel.ts` | **New.** The whole phase concept as pure functions: `phaseForFile`, `derivePhaseStates`, `resolveActivePhase`, `isPhaseComplete`, `resolvePhaseActivation`, `resolvePhaseResumePlan`. Types-only imports — no repository, no BuildersDB, no store, no AI call. |
+| `app/lib/code-generation/generationPipeline.ts` | Each generation stage became a **phase unit** (`generateTypes` / `generateServices` / `generatePage` / `generateComponents` / `generateBackendModule`), and a phase runner executes them in ascending phase order. New optional `GenerationPhaseHooks` (`onPhaseActivating` / `onPhaseCompleted` / `onPhaseSkipped`), invoked through the existing `safeInvoke`. |
+| `app/lib/code-generation/projectGenerator.ts` | Threads `phaseHooks` through, exactly like `signal`. |
+| `app/lib/application-manifest/applicationManifestRepository.ts` | Planned files insert as **`queued`**, not `pending`. New `activateManifestFiles(manifestId, fileIds)` — the single write phase activation performs (`queued → pending`, filtered on `status = 'queued'`). |
+| `app/lib/application-manifest/resumeOrchestrator.ts` | `PrepareManifestResult` gains a derived `phasePlan` (`resolvePhaseResumePlan`) — active phase, completed/skipped phases, regenerate set, reuse set. |
+| `app/lib/hooks/useCodeGeneration.ts` | `createPhaseHooks` — turns the pipeline's phase lifecycle into the `queued → pending` promotion plus activity-log reporting. Non-blocking: an activation failure is recorded, never fatal. |
+
+**No schema migration. No new table. No new column. No data conversion.** `queued` is an existing
+`ManifestFileStatus` value (reserved for exactly this in Sprint 44.2 Phase 4) and the transactional
+RPC already takes each row's status from the row (`coalesce(file ->> 'status', 'pending')`).
+
+### 20.2 Phase assignment
+
+`phaseForFile(file, { backendModules })` — deterministic, pure, no AI call, no database lookup:
+
+| Phase | Rule |
+|---|---|
+| 1 Preview Foundation | `entry` / `config` / `styles` / `components` |
+| 2 Public Journey | non-admin `pages`, plus the shared `types` / `services` |
+| 3 Backend | `backend` files whose module matches neither payments nor admin — **the default** |
+| 4 Payments | `backend` files whose module matches a payment token |
+| 5 Admin | admin `pages`, and `backend` files whose module matches an admin token |
+| 6 Integration | `documentation` and `other`, plus the validate/assemble tail |
+
+Matching is on whole **tokens** (lowercased, split on non-alphanumerics and camelCase boundaries),
+never substrings — `company` is not a payment module, `dashboard` is not an admin page. Tokens are
+drawn from the module slug, its `featureIds`, and **only those `apiEndpoints` that name the module**:
+`BackendModulePlan.apiEndpoints` is documented as the project-wide list, so matching it unfiltered
+would classify every module in a project that sells anything as Payments.
+
+**Known limitation (carried deliberately).** `Feature.moduleSlug` defaults to the Feature's own code,
+so a real RunRide-style plan has slugs like `FEAT-005` that carry no semantics. Those modules
+classify to **Phase 3 by the sprint's own unmatched-module default** — safe, ordered, and never a
+failure, but not payment-aware. Semantic slugs (`payments`, `admin`) classify correctly today. Making
+feature-code modules payment/admin-aware needs a module-scoped semantic signal (e.g. `Feature.title`
+on `BackendModulePlan`), which is a model change this sprint was explicitly told not to make.
+
+### 20.3 Phase activation
+
+Planned files are inserted `queued`. The runner activates one phase at a time
+(`queued → pending`), in ascending order, and never activates a later phase before an earlier one:
+
+```
+queued → pending → generating → generated → validated → complete
+```
+
+Only one phase sits between `onPhaseActivating` and `onPhaseCompleted`, because the runner loop is
+sequential. `derivePhaseStates` enforces the same invariant on the read side: if a later phase
+somehow has in-flight files while an earlier one is unfinished, only the lowest is reported `active`.
+
+### 20.4 Phase completion (derived, never stored)
+
+`completed` · `active` · `pending` · `failed` · `skipped`, recomputed from `ManifestFileStatus`:
+
+- `skipped` — **only** when the phase contains zero files.
+- `active` — lowest unfinished phase with at least one activated file.
+- `pending` — unfinished, everything still `queued`.
+- `failed` — nothing in flight and something failed.
+- `completed` — every blocking file finished (`generated` / `validated` / `complete` / `skipped`).
+
+**Scaffold files do not gate a phase.** `package.json`, `index.html`, `src/main.tsx`, `README.md` are
+written by `projectScaffolder.ts` during assembly, after every AI phase — letting one gate its phase
+would deadlock the runner (Phase 1 could never complete, so Phase 2 could never activate). They are
+still assigned to, and activated with, their phase; they simply do not decide its completion.
+
+### 20.5 Resume
+
+`resolvePhaseResumePlan` loads the existing manifest (no new version), finds the lowest incomplete
+phase, and reports:
+
+- **reuse** — every `generated` / `validated` / `complete` file, through the unchanged
+  `getReusableFileContent` / checksum path.
+- **regenerate** — only the ACTIVE phase's `queued` / `pending` / `failed` / interrupted files.
+- **never re-enter** a completed phase: `resolvePhaseActivation().alreadyComplete` suppresses
+  activation, and the pipeline's own `getReusable` short-circuits those units with no AI call. This
+  is the direct fix for Round 2's six needlessly-regenerated shared components.
+
+The one thing a completed phase's activation may still do is promote its own still-`queued` scaffold
+rows — nothing that is already finished is ever pushed backwards (`activateManifestFiles` filters on
+`status = 'queued'`).
+
+### 20.6 Backward compatibility
+
+| Surface | Behaviour |
+|---|---|
+| Existing manifests (all `pending`) | Activation set is empty — a no-op. Reads as "one phase, already activated"; generates exactly as today. |
+| `GenerationStage` | Unchanged. No member added, renamed or removed; phases report under existing stages. |
+| `runGenerationPipeline` / `generateProject` | `phaseHooks` is optional and last — every existing caller is untouched, verified by a test that runs the pipeline with no hooks at all. |
+| Schema | No migration, no backfill, no conversion. |
+| Sprint 99A behaviour | Untouched — backend batching, zero-output guard, `terminationReason` and non-retryable classification all still pass their own specs. |
+| Quick Build | Untouched. |
+
+**Behaviour change worth naming:** shared components (Phase 1) are now generated **before**
+types/services/pages (Phase 2). The components prompt takes only component names and design notes,
+so it has no dependency on types; two existing pipeline specs asserted the old fixed order and were
+updated to encode the phase order instead.
+
+### 20.7 Tests
+
+New: `phaseModel.spec.ts` (34), `phaseRunner.spec.ts` (7). Extended:
+`applicationManifestRepository.spec.ts` (+4, queued insert and activation), `resumeOrchestrator.spec.ts`
+(+2, phase-aware resume). Covering every case the sprint asked for — `phaseForFile`, payment
+classification, admin classification, unmatched backend default, skipped phase, phase completion,
+queued activation, resume from the current phase, reuse of validated files, legacy-manifest
+compatibility.
+
+- **353 tests passing** across `code-generation/`, `application-manifest/`, `backend-generation/`,
+  `generated-files/` and `hooks/`.
+- TypeScript clean (`tsc --noEmit`); lint 0 errors (43 pre-existing warnings).
+- Production build clean (`npm run build`).
+
+### 20.8 Controlled verification — RunRide (29 July 2026)
+
+Deliberately narrow, per the sprint's "generate only enough to verify orchestration": the **real**
+pipeline, the **real** manifest builder and the **real** phase model, driven over RunRide's own
+package shape (8 pages including 2 admin, 6 shared components, 4 backend modules), with the provider
+answered by a local stub and the manifest held in memory. **No provider spend, no BuildersDB writes,
+no external services provisioned, no application generated.**
+
+```
+planned files: 49
+all queued at plan time: true
+phase 1: 14 files   phase 2: 8    phase 3: 12   phase 4: 6   phase 5: 8   phase 6: 1
+
+ACTIVATE phase 1: 14 in phase, 14 activated; queued elsewhere: 35   → COMPLETE 1
+ACTIVATE phase 2:  8 in phase,  8 activated; queued elsewhere: 27   → COMPLETE 2
+ACTIVATE phase 3: 12 in phase, 12 activated; queued elsewhere: 15   → COMPLETE 3
+ACTIVATE phase 4:  6 in phase,  6 activated; queued elsewhere:  9   → COMPLETE 4
+ACTIVATE phase 5:  8 in phase,  8 activated; queued elsewhere:  1   → COMPLETE 5
+ACTIVATE phase 6:  1 in phase,  1 activated; queued elsewhere:  0   → COMPLETE 6
+
+activation order: 1 → 2 → 3 → 4 → 5 → 6      duplicate activation: false
+final phase states: 1:completed 2:completed 3:completed 4:completed 5:completed 6:completed
+row count stable: true   duplicate paths: false   files left queued: 0
+
+RESUME (phases 1-2 complete, one Phase 3 module failed, phases 4-6 untouched):
+  active phase: 3          completed phases: 1, 2
+  regenerate: 6 file(s)    reuse: 28 file(s)
+  phase 1 alreadyComplete: true, would activate: 0 file(s)
+```
+
+| Success condition | Result |
+|---|---|
+| Files start `queued` | ✓ 49/49 |
+| Phase 1 activates first | ✓ |
+| Later phases remain `queued` | ✓ 35 queued at Phase 1 activation |
+| Completed Phase 1 does not reactivate | ✓ `alreadyComplete`, 0 activated |
+| Resume starts from the correct phase | ✓ Phase 3, the failed module only |
+| Skipped phases advance correctly | ✓ (covered by `phaseRunner.spec.ts`: no-payments project skips 4 and 5 and still completes) |
+| No duplicate activation | ✓ each phase activated exactly once |
+| No manifest corruption | ✓ row count stable, no duplicate paths, nothing left `queued` |
+
+**One defect found and fixed during verification.** A phase whose only remaining files are scaffold
+derives as `completed` (scaffold is non-blocking), and the first version of the activation guard then
+skipped activation entirely — leaving `README.md` `queued` forever. The guard now suppresses
+activation only when there is genuinely nothing to promote.
+
+### 20.9 Not done
+
+Checkpoint C (Early Preview, incremental WebContainer writes, preview lifecycle, HMR) and Checkpoint
+D (phase-scoped progress UI, AR2-BUG-006). Phase membership is now available to the UI through
+`derivePhaseStates` whenever Checkpoint D is picked up; nothing in the UI reads it yet.

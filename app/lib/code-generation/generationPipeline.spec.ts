@@ -222,17 +222,23 @@ describe('runGenerationPipeline — file lifecycle hooks (Sprint 44.2 Phase 2, i
     expect(result.ok).toBe(true);
 
     /*
-     * types and services each get a starting/ready pair before pages ever begin.
+     * Sprint 99B — the shared-components batch belongs to Phase 1 (Preview Foundation) and so now
+     * runs BEFORE types/services/pages, which are Phase 2. The lifecycle contract this test
+     * actually guards is unchanged: each unit gets its starting/ready pair, in phase order, before
+     * the run finishes.
+     *
      * `onFilesStarting`'s path is the canonical EXPECTED path (known before the AI call);
      * `onFileReady`'s path is whatever the stub actually returned — deliberately not
      * asserted to be identical, since a real model isn't guaranteed to match its own
      * prompt's requested path either (see manifestBuilder.ts's own header comment on
      * this — reconciliation, not equality, is Phase 2's answer to that gap).
      */
-    expect(events[0]).toBe('starting:code-gen-types:src/types/index.ts');
-    expect(events[1]).toBe('ready:code-gen-types:src/stub.ts');
-    expect(events[2]).toBe('starting:code-gen-services:src/services/api.ts');
-    expect(events[3]).toBe('ready:code-gen-services:src/stub.ts');
+    expect(events[0]).toBe('starting:code-gen-components:(batch)');
+    expect(events[1]).toBe('ready:code-gen-components:src/stub.ts');
+    expect(events[2]).toBe('starting:code-gen-types:src/types/index.ts');
+    expect(events[3]).toBe('ready:code-gen-types:src/stub.ts');
+    expect(events[4]).toBe('starting:code-gen-services:src/services/api.ts');
+    expect(events[5]).toBe('ready:code-gen-services:src/stub.ts');
 
     // Every 'starting' has a corresponding 'ready' later in the same run — nothing is generated without a lifecycle event.
     const startingCount = events.filter((e) => e.startsWith('starting:')).length;
@@ -259,19 +265,18 @@ describe('runGenerationPipeline — file lifecycle hooks (Sprint 44.2 Phase 2, i
   });
 
   it('a page failure preserves already-persisted files — onStageFailed fires only for the failed page, prior onFileReady calls stand', async () => {
-    let callCount = 0;
+    /*
+     * Sprint 99B — this used to key off a call COUNT ("every call from the third onward fails"),
+     * which silently depended on the pipeline's old fixed stage order. The phase runner orders
+     * units by phase (components first), so the count no longer identifies the page. Keying off
+     * the page's own prompt keeps the test's original intent exactly — every one of the PAGE's
+     * attempts fails, so it exhausts `generateRoleWithRecovery`'s bounded retry and reports
+     * failed, while every earlier unit succeeds and stays persisted.
+     */
     const generate: GenerateFn = async (...args) => {
-      callCount += 1;
+      const [, prompt] = args;
 
-      /*
-       * The default (empty Product Package) plan calls generate() in order: types,
-       * services, then the one page. callForFiles() retries a failure up to 2 more times
-       * (generateRoleWithRecovery's bounded retry) before giving up, so every call from
-       * the page's first attempt onward must fail for the page to actually exhaust
-       * retries and report failed — a single failed call would just get silently
-       * retried-and-succeed, which is not what this test is checking.
-       */
-      if (callCount >= 3) {
+      if (prompt.includes('HomePage')) {
         return { ok: false, error: 'model quota exceeded' };
       }
 
@@ -299,8 +304,8 @@ describe('runGenerationPipeline — file lifecycle hooks (Sprint 44.2 Phase 2, i
       },
     );
 
-    // types/services succeeded and were persisted before the page exhausted its retries — that prior work is untouched, even though the overall run still fails validation (its only page never materialized).
-    expect(readyPaths.filter((path) => path === 'src/stub.ts')).toHaveLength(2);
+    // components/types/services succeeded and were persisted before the page exhausted its retries — that prior work is untouched, even though the overall run still fails validation (its only page never materialized).
+    expect(readyPaths.filter((path) => path === 'src/stub.ts')).toHaveLength(3);
     expect(failedPaths).toContain('src/pages/HomePage.tsx');
     expect(result.failedStage).toBe('validating');
   });

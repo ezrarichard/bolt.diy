@@ -29,6 +29,7 @@ import { validateBuildReadiness } from './generationValidator';
 import { fnv1aHash } from '~/lib/checksum/fnv1a';
 import { backendModuleFilePathList, backendModuleFilePaths } from '~/lib/backend-generation/backendModuleTypes';
 import type { BackendModulePlan } from '~/lib/backend-generation/backendModuleTypes';
+import { GENERATION_PHASE_NUMBERS, phaseForFile, type GenerationPhase } from '~/lib/application-manifest/phaseModel';
 import type {
   GenerateFn,
   GeneratedFile,
@@ -76,6 +77,26 @@ import type {
  */
 
 const CODE_GENERATION_MAX_OUTPUT_TOKENS = 8192;
+
+/**
+ * Sprint 99B — the phase whose "generation unit" is the deterministic validate/assemble tail
+ * rather than an AI call, so the runner loop skips it and the tail activates/completes it itself.
+ */
+const INTEGRATION_PHASE: GenerationPhase = 6;
+
+/**
+ * The existing `GenerationStage` each phase reports issues/cancellation under. Purely for
+ * attribution — no stage was added, renamed or removed, so every existing consumer
+ * (`STAGE_GROUP_LABELS`, `STAGE_TIMELINE_ID`, workspace `currentStage`) is untouched.
+ */
+const STAGE_FOR_PHASE: Record<GenerationPhase, GenerationStage> = {
+  1: 'generating-components',
+  2: 'generating-pages',
+  3: 'generating-backend',
+  4: 'generating-backend',
+  5: 'generating-backend',
+  6: 'validating',
+};
 
 interface ResolvedDrafts {
   requirements?: RequirementsDraft;
@@ -571,6 +592,29 @@ export interface ResumeHooks {
 }
 
 /**
+ * Sprint 99B (Progressive Phase Runner) — the runner's lifecycle, kept in exactly the same
+ * "pipeline emits, caller persists" shape as `FileLifecycleHooks`/`OnPlanReady` above: this module
+ * still never touches the manifest, BuildersDB or any store. The caller
+ * (useCodeGeneration.ts) is what turns `onPhaseActivating` into the `queued → pending` promotion
+ * for that phase's manifest rows.
+ *
+ *  - `onPhaseActivating` — fired once, immediately before the phase's first AI call. Exactly one
+ *    phase is ever between `onPhaseActivating` and `onPhaseCompleted`.
+ *  - `onPhaseCompleted`  — fired once the phase's units have all run (a unit that failed
+ *    non-fatally, e.g. one bad page, still completes the phase; the file's own `failed` status is
+ *    what records it, which is what makes phase completion derivable from file status alone).
+ *  - `onPhaseSkipped`    — the phase has no work at all (no payments module, no admin pages).
+ *
+ * Every hook is optional and wrapped in the same `safeInvoke` as the file hooks, so a throwing
+ * hook degrades to a warning issue and never fails a run.
+ */
+export interface GenerationPhaseHooks {
+  onPhaseActivating?: (phase: GenerationPhase) => Promise<void> | void;
+  onPhaseCompleted?: (phase: GenerationPhase) => Promise<void> | void;
+  onPhaseSkipped?: (phase: GenerationPhase) => Promise<void> | void;
+}
+
+/**
  * Runs the full pipeline for one project against its already-assembled Product
  * Package, reporting progress via `onProgress` as each stage starts. Always resolves
  * (never throws) — a stage failure becomes `{ ok: false, failedStage, issues }` rather
@@ -599,6 +643,9 @@ export async function runGenerationPipeline(
    * spending credits until it did.
    */
   signal?: AbortSignal,
+
+  /** Sprint 99B — optional and last, so every existing caller keeps today's behaviour exactly; omitted, the runner still orders generation by phase but reports nothing. */
+  phaseHooks?: GenerationPhaseHooks,
 ): Promise<GenerationResult> {
   const issues: GenerationIssue[] = [];
 
@@ -707,24 +754,85 @@ export async function runGenerationPipeline(
     return resumeHooks?.getReusableContent ? await resumeHooks.getReusableContent(path) : undefined;
   }
 
-  {
+  /**
+   * Sprint 99B — every AI generation unit, tagged with the phase that owns it by the SAME pure
+   * function the manifest side uses (`phaseForFile`), so the runner's execution order and the
+   * manifest's `queued → pending` activation can never disagree. A unit returns a
+   * `GenerationResult` to abort the whole run, or `undefined` to continue — exactly the two
+   * behaviours each stage already had when it was written inline.
+   */
+  interface PhaseUnit {
+    phase: GenerationPhase;
+    run: () => Promise<GenerationResult | undefined>;
+  }
+
+  const units: PhaseUnit[] = [];
+
+  const typesPath = 'src/types/index.ts';
+  units.push({
+    phase: phaseForFile({ path: typesPath, category: 'types' }),
+    run: generateTypes,
+  });
+
+  const servicesPath = 'src/services/api.ts';
+  units.push({
+    phase: phaseForFile({ path: servicesPath, category: 'services' }),
+    run: generateServices,
+  });
+
+  for (const [index, page] of plan.pages.entries()) {
+    units.push({
+      phase: phaseForFile({
+        path: `src/pages/${page.fileName}`,
+        category: 'pages',
+        componentName: page.componentName,
+        displayName: page.name,
+      }),
+      run: () => generatePage(page, index),
+    });
+  }
+
+  if (plan.sharedComponents.length > 0) {
+    units.push({
+      phase: phaseForFile({ path: 'src/components/', category: 'components' }),
+      run: generateComponents,
+    });
+  }
+
+  for (const module of plan.backendModules ?? []) {
+    units.push({
+      phase: phaseForFile(
+        {
+          path: backendModuleFilePaths(module.moduleSlug).types,
+          category: 'backend',
+          featureIds: module.featureIds,
+        },
+        { backendModules: plan.backendModules },
+      ),
+      run: () => generateBackendModule(module),
+    });
+  }
+
+  async function generateTypes(): Promise<GenerationResult | undefined> {
     const stopped = cancellationResult('generating-types');
 
     if (stopped) {
       return stopped;
     }
-  }
 
-  onProgress({ stage: 'generating-types' });
+    onProgress({ stage: 'generating-types' });
 
-  const reusableTypes = await getReusable('src/types/index.ts');
+    const reusableTypes = await getReusable(typesPath);
 
-  if (reusableTypes !== undefined) {
-    const reusedFile = { path: 'src/types/index.ts', content: reusableTypes };
-    generatedFiles.push(reusedFile);
-    await safeInvoke(fileHooks?.onFileReady, 'generating-types', reusedFile, 'code-gen-types-reused');
-  } else {
-    await safeInvoke(fileHooks?.onFilesStarting, 'generating-types', 'code-gen-types', 'src/types/index.ts');
+    if (reusableTypes !== undefined) {
+      const reusedFile = { path: typesPath, content: reusableTypes };
+      generatedFiles.push(reusedFile);
+      await safeInvoke(fileHooks?.onFileReady, 'generating-types', reusedFile, 'code-gen-types-reused');
+
+      return undefined;
+    }
+
+    await safeInvoke(fileHooks?.onFilesStarting, 'generating-types', 'code-gen-types', typesPath);
 
     const typesResult = await callForFiles(
       buildSharedTypesPrompt({
@@ -738,13 +846,7 @@ export async function runGenerationPipeline(
     );
 
     if (!typesResult.ok) {
-      await safeInvoke(
-        fileHooks?.onStageFailed,
-        'generating-types',
-        'code-gen-types',
-        typesResult.error,
-        'src/types/index.ts',
-      );
+      await safeInvoke(fileHooks?.onStageFailed, 'generating-types', 'code-gen-types', typesResult.error, typesPath);
 
       return {
         ok: false,
@@ -758,26 +860,30 @@ export async function runGenerationPipeline(
     for (const file of typesResult.files) {
       await safeInvoke(fileHooks?.onFileReady, 'generating-types', file, 'code-gen-types');
     }
+
+    return undefined;
   }
 
-  {
+  async function generateServices(): Promise<GenerationResult | undefined> {
     const stopped = cancellationResult('generating-services');
 
     if (stopped) {
       return stopped;
     }
-  }
 
-  onProgress({ stage: 'generating-services' });
+    onProgress({ stage: 'generating-services' });
 
-  const reusableServices = await getReusable('src/services/api.ts');
+    const reusableServices = await getReusable(servicesPath);
 
-  if (reusableServices !== undefined) {
-    const reusedFile = { path: 'src/services/api.ts', content: reusableServices };
-    generatedFiles.push(reusedFile);
-    await safeInvoke(fileHooks?.onFileReady, 'generating-services', reusedFile, 'code-gen-services-reused');
-  } else {
-    await safeInvoke(fileHooks?.onFilesStarting, 'generating-services', 'code-gen-services', 'src/services/api.ts');
+    if (reusableServices !== undefined) {
+      const reusedFile = { path: servicesPath, content: reusableServices };
+      generatedFiles.push(reusedFile);
+      await safeInvoke(fileHooks?.onFileReady, 'generating-services', reusedFile, 'code-gen-services-reused');
+
+      return undefined;
+    }
+
+    await safeInvoke(fileHooks?.onFilesStarting, 'generating-services', 'code-gen-services', servicesPath);
 
     const servicesResult = await callForFiles(
       buildServicesPrompt({
@@ -800,7 +906,7 @@ export async function runGenerationPipeline(
         'generating-services',
         'code-gen-services',
         servicesResult.error,
-        'src/services/api.ts',
+        servicesPath,
       );
 
       return {
@@ -815,15 +921,15 @@ export async function runGenerationPipeline(
     for (const file of servicesResult.files) {
       await safeInvoke(fileHooks?.onFileReady, 'generating-services', file, 'code-gen-services');
     }
+
+    return undefined;
   }
 
-  for (const [index, page] of plan.pages.entries()) {
-    {
-      const stopped = cancellationResult('generating-pages');
+  async function generatePage(page: GenerationPlanPage, index: number): Promise<GenerationResult | undefined> {
+    const stopped = cancellationResult('generating-pages');
 
-      if (stopped) {
-        return stopped;
-      }
+    if (stopped) {
+      return stopped;
     }
 
     onProgress({ stage: 'generating-pages', detail: `${page.name} (${index + 1}/${plan.pages.length})` });
@@ -836,7 +942,8 @@ export async function runGenerationPipeline(
       const reusedFile = { path: pagePath, content: reusablePage };
       generatedFiles.push(reusedFile);
       await safeInvoke(fileHooks?.onFileReady, 'generating-pages', reusedFile, `${pageRole}-reused`);
-      continue;
+
+      return undefined;
     }
 
     await safeInvoke(fileHooks?.onFilesStarting, 'generating-pages', pageRole, pagePath);
@@ -865,7 +972,8 @@ export async function runGenerationPipeline(
         filePath: page.fileName,
       });
       await safeInvoke(fileHooks?.onStageFailed, 'generating-pages', pageRole, pageResult.error, pagePath);
-      continue;
+
+      return undefined;
     }
 
     /*
@@ -887,15 +995,15 @@ export async function runGenerationPipeline(
     for (const extraFile of extraPageFiles) {
       await safeInvoke(fileHooks?.onFileReady, 'generating-pages', extraFile, pageRole);
     }
+
+    return undefined;
   }
 
-  if (plan.sharedComponents.length > 0) {
-    {
-      const stopped = cancellationResult('generating-components');
+  async function generateComponents(): Promise<GenerationResult | undefined> {
+    const stopped = cancellationResult('generating-components');
 
-      if (stopped) {
-        return stopped;
-      }
+    if (stopped) {
+      return stopped;
     }
 
     onProgress({ stage: 'generating-components' });
@@ -928,6 +1036,8 @@ export async function runGenerationPipeline(
         componentsResult.error,
       );
     }
+
+    return undefined;
   }
 
   /*
@@ -941,13 +1051,11 @@ export async function runGenerationPipeline(
    * batched call — never a partial regeneration of just one of its six files, since the six
    * files are one cohesive vertical slice, not independently meaningful on their own.
    */
-  for (const module of plan.backendModules ?? []) {
-    {
-      const stopped = cancellationResult('generating-backend');
+  async function generateBackendModule(module: BackendModulePlan): Promise<GenerationResult | undefined> {
+    const stopped = cancellationResult('generating-backend');
 
-      if (stopped) {
-        return stopped;
-      }
+    if (stopped) {
+      return stopped;
     }
 
     onProgress({ stage: 'generating-backend', detail: module.moduleSlug });
@@ -968,7 +1076,8 @@ export async function runGenerationPipeline(
           `code-gen-backend:${module.moduleSlug}-reused`,
         );
       }
-      continue;
+
+      return undefined;
     }
 
     const backendRole = `code-gen-backend:${module.moduleSlug}`;
@@ -1093,6 +1202,51 @@ export async function runGenerationPipeline(
         moduleFailed = true;
       }
     }
+
+    return undefined;
+  }
+
+  /*
+   * ── The phase runner itself (Sprint 99B) ──
+   *
+   * Phases run in ascending order, exactly once each. A phase with no units of its own is
+   * reported `skipped` and the runner advances — that is the whole of the "a project with no
+   * payments simply skips Phase 4" behaviour, with no special-casing anywhere else. Only one
+   * phase is ever in flight, because this loop is sequential and `onPhaseCompleted` fires before
+   * the next `onPhaseActivating`.
+   *
+   * Phase 6 (Integration) has no generation unit — it owns the validate/assemble tail below — so
+   * it is activated after this loop rather than inside it.
+   */
+  for (const phase of GENERATION_PHASE_NUMBERS) {
+    if (phase === INTEGRATION_PHASE) {
+      continue;
+    }
+
+    const phaseUnits = units.filter((unit) => unit.phase === phase);
+
+    if (phaseUnits.length === 0) {
+      await safeInvoke(phaseHooks?.onPhaseSkipped, STAGE_FOR_PHASE[phase], phase);
+      continue;
+    }
+
+    const stoppedBeforePhase = cancellationResult(STAGE_FOR_PHASE[phase]);
+
+    if (stoppedBeforePhase) {
+      return stoppedBeforePhase;
+    }
+
+    await safeInvoke(phaseHooks?.onPhaseActivating, STAGE_FOR_PHASE[phase], phase);
+
+    for (const unit of phaseUnits) {
+      const stop = await unit.run();
+
+      if (stop) {
+        return stop;
+      }
+    }
+
+    await safeInvoke(phaseHooks?.onPhaseCompleted, STAGE_FOR_PHASE[phase], phase);
   }
 
   {
@@ -1102,6 +1256,8 @@ export async function runGenerationPipeline(
       return stopped;
     }
   }
+
+  await safeInvoke(phaseHooks?.onPhaseActivating, 'validating', INTEGRATION_PHASE);
 
   onProgress({ stage: 'validating' });
 
@@ -1199,6 +1355,8 @@ export async function runGenerationPipeline(
   if (!buildValidation.ok) {
     return { ok: false, issues: allIssues, failedStage: 'validating' };
   }
+
+  await safeInvoke(phaseHooks?.onPhaseCompleted, 'assembling', INTEGRATION_PHASE);
 
   return { ok: true, project: generatedProject, issues: allIssues };
 }

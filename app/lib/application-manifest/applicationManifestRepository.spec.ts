@@ -10,9 +10,8 @@ vi.mock('~/lib/builders-db/client', () => ({
   isBuildersDbConfigured: () => true,
 }));
 
-const { saveApplicationManifest, getActiveApplicationManifest, listManifestVersions } = await import(
-  './applicationManifestRepository'
-);
+const { saveApplicationManifest, getActiveApplicationManifest, listManifestVersions, activateManifestFiles } =
+  await import('./applicationManifestRepository');
 
 function makeDraft(overrides: Partial<ApplicationManifestDraft> = {}): ApplicationManifestDraft {
   return {
@@ -678,5 +677,116 @@ describe('saveApplicationManifest — BUG-009 transactional persistence', () => 
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain('must be cleaned up manually');
+  });
+});
+
+/**
+ * Sprint 99B — plan-time `queued` and the one write phase activation performs. No migration is
+ * involved in either: `queued` is an existing `ManifestFileStatus` value and the RPC already takes
+ * each row's status from the row itself.
+ */
+describe('Sprint 99B — queued planning and phase activation', () => {
+  beforeEach(() => {
+    getBuildersDbClientMock.mockReset();
+  });
+
+  it('inserts planned files as queued, not pending, on the transactional path', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        id: 'manifest-1',
+        project_id: 'proj-1',
+        version: 1,
+        status: 'active',
+        framework: 'react-vite-ts',
+        package_manager: 'npm',
+        entry_file: 'src/main.tsx',
+        total_files: 1,
+        completed_files: 0,
+        failed_files: 0,
+        plan_checksum: 'fnv1a:deadbeef',
+        source_content_checksum: 'fnv1a:content0',
+        metadata: {},
+        persisted_at: '2026-07-29T00:00:00.000Z',
+        created_by: null,
+        created_at: '2026-07-29T00:00:00.000Z',
+        updated_at: '2026-07-29T00:00:00.000Z',
+        completed_at: null,
+        mvp_id: null,
+        source_package_version: null,
+        source_package_assembled_at: null,
+      },
+      error: null,
+    }));
+
+    const from = vi.fn(() => ({
+      select: () => ({
+        eq: () => ({
+          order: () => ({
+            limit: () => Promise.resolve({ data: [], error: null }),
+            then: undefined,
+          }),
+        }),
+      }),
+    }));
+
+    getBuildersDbClientMock.mockReturnValue({ from, rpc });
+
+    await saveApplicationManifest(makeDraft(), makeFiles());
+
+    const files = (rpc.mock.calls[0] as unknown as [string, { p_files: { status: string }[] }])[1].p_files;
+    expect(files.every((file) => file.status === 'queued')).toBe(true);
+  });
+
+  it('activateManifestFiles promotes only queued rows of that manifest', async () => {
+    const filters: Record<string, unknown> = {};
+    const update = vi.fn(() => ({
+      eq: (column: string, value: unknown) => {
+        filters[column] = value;
+        return {
+          eq: (innerColumn: string, innerValue: unknown) => {
+            filters[innerColumn] = innerValue;
+            return {
+              in: (inColumn: string, ids: string[]) => {
+                filters[inColumn] = ids;
+                return { select: () => Promise.resolve({ data: ids.map((id) => ({ id })), error: null }) };
+              },
+            };
+          },
+        };
+      },
+    }));
+
+    getBuildersDbClientMock.mockReturnValue({ from: () => ({ update }) });
+
+    const result = await activateManifestFiles('manifest-1', ['file-a', 'file-b']);
+
+    expect(result).toEqual({ ok: true, activated: 2 });
+    expect(update).toHaveBeenCalledWith({ status: 'pending' });
+    expect(filters).toEqual({ manifest_id: 'manifest-1', status: 'queued', id: ['file-a', 'file-b'] });
+  });
+
+  it('activating an empty set is a no-op success — what a legacy (all-pending) manifest produces', async () => {
+    const from = vi.fn();
+    getBuildersDbClientMock.mockReturnValue({ from });
+
+    expect(await activateManifestFiles('manifest-1', [])).toEqual({ ok: true, activated: 0 });
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed activation instead of throwing', async () => {
+    getBuildersDbClientMock.mockReturnValue({
+      from: () => ({
+        update: () => ({
+          eq: () => ({
+            eq: () => ({ in: () => ({ select: () => Promise.resolve({ data: null, error: { message: 'boom' } }) }) }),
+          }),
+        }),
+      }),
+    });
+
+    const result = await activateManifestFiles('manifest-1', ['file-a']);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('boom');
   });
 });

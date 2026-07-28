@@ -21,7 +21,7 @@ import type {
   GenerationResult,
   GenerationStage,
 } from '~/lib/code-generation/codeGenerationTypes';
-import type { FileLifecycleHooks, ResumeHooks } from '~/lib/code-generation/generationPipeline';
+import type { FileLifecycleHooks, GenerationPhaseHooks, ResumeHooks } from '~/lib/code-generation/generationPipeline';
 import { prepareManifestForGeneration } from '~/lib/application-manifest/resumeOrchestrator';
 import { mvpRepository } from '~/lib/mvp/mvpRepository';
 import { featureRepository } from '~/lib/features/featureRepository';
@@ -30,9 +30,11 @@ import type { BackendDraft } from '~/lib/projects/prompts/backend';
 import { deriveBackendModulePlans } from '~/lib/backend-generation/backendModulePlanner';
 import type { BackendModulePlan } from '~/lib/backend-generation/backendModuleTypes';
 import {
+  activateManifestFiles,
   getActiveApplicationManifest,
   listApplicationManifestFiles,
 } from '~/lib/application-manifest/applicationManifestRepository';
+import { describePhase, resolvePhaseActivation, type GenerationPhase } from '~/lib/application-manifest/phaseModel';
 import type { ApplicationManifestFile } from '~/lib/application-manifest/manifestTypes';
 import {
   computeFileChecksum,
@@ -451,6 +453,107 @@ function createResumeHooks(context: ManifestGenerationContext): ResumeHooks {
   };
 }
 
+/**
+ * Sprint 99B — implements generationPipeline.ts's `GenerationPhaseHooks` against the manifest
+ * `createPlanReadyHandler` just persisted. This is the only place phase orchestration touches the
+ * database, and it performs exactly one kind of write: promoting the activating phase's `queued`
+ * files to `pending` (`activateManifestFiles`).
+ *
+ * Three properties matter here, and all three fall out of `phaseModel.ts` being pure:
+ *
+ *  - **A completed phase is never re-entered.** `resolvePhaseActivation` reports
+ *    `alreadyComplete` from the file statuses the manifest was loaded with, so a resumed run
+ *    logs the phase as already complete and activates nothing — the Round 2 defect where six
+ *    already-validated shared components were regenerated.
+ *  - **No phase state is stored.** Every decision is recomputed from `ManifestFileStatus`.
+ *  - **A legacy manifest is unaffected.** Its files are already `pending`, so the activation set
+ *    is empty and this degrades to logging.
+ *
+ * Every failure is recorded (workspace state + activity) and swallowed — the same non-blocking
+ * contract `createFileLifecycleHooks` already follows. A phase that cannot be activated must not
+ * stop a generation the operator is watching; the files still generate, they are simply reported
+ * as `queued` until their own status transitions overwrite it.
+ */
+function createPhaseHooks(
+  project: Project,
+  context: ManifestGenerationContext,
+  backendModules: BackendModulePlan[],
+): GenerationPhaseHooks {
+  const phaseContext = { backendModules };
+
+  async function activate(phase: GenerationPhase, unitsPlanned: boolean): Promise<void> {
+    if (!context.manifestId) {
+      return;
+    }
+
+    const { name } = describePhase(phase);
+    const activation = resolvePhaseActivation(context.files, phase, phaseContext);
+
+    if (activation.files.length === 0) {
+      logActivity(project.id, 'generation_phase_skipped', `Phase ${phase} — ${name}: no files planned, skipped`);
+      return;
+    }
+
+    /*
+     * A completed phase is not re-entered — but "completed" is derived from BLOCKING files only, so
+     * a phase can be complete while its deterministic scaffold rows are still `queued` (they are
+     * written at assembly, long after their phase ran). Those are still promoted; what is
+     * suppressed is re-activating work that is genuinely finished.
+     */
+    if (activation.alreadyComplete && activation.activateFileIds.length === 0) {
+      logActivity(
+        project.id,
+        'generation_phase_skipped',
+        `Phase ${phase} — ${name}: already complete (${activation.files.length} file(s)), not re-entered`,
+      );
+
+      return;
+    }
+
+    const result = await activateManifestFiles(context.manifestId, activation.activateFileIds);
+
+    if (!result.ok) {
+      updateProjectWorkspaceState(project.id, {
+        manifestPersistenceError: `Phase ${phase} (${name}) could not be activated: ${result.error}`,
+      });
+      logActivity(
+        project.id,
+        'generation_phase_activation_failed',
+        `Phase ${phase} — ${name} could not be activated: ${result.error}`,
+      );
+
+      return;
+    }
+
+    // Keep the in-memory snapshot in step with the rows, so a later phase's `alreadyComplete` check reads the same reality.
+    const activated = new Set(activation.activateFileIds);
+    context.files = context.files.map((file) => (activated.has(file.id) ? { ...file, status: 'pending' } : file));
+
+    logActivity(
+      project.id,
+      'generation_phase_started',
+      `Phase ${phase} — ${name}: ${activation.files.length} file(s) in phase, ${result.activated} activated` +
+        (unitsPlanned ? '' : ' (no AI work in this phase)'),
+    );
+  }
+
+  return {
+    async onPhaseActivating(phase) {
+      await activate(phase, true);
+    },
+
+    async onPhaseSkipped(phase) {
+      /* No generation unit — but the phase's own deterministic files (scaffold, documentation) still belong to it, so they are activated rather than left queued. */
+      await activate(phase, false);
+    },
+
+    async onPhaseCompleted(phase) {
+      const { name } = describePhase(phase);
+      logActivity(project.id, 'generation_phase_completed', `Phase ${phase} — ${name} complete`);
+    },
+  };
+}
+
 /** role (e.g. "code-gen-page:HomePage", "code-gen-components", "scaffold") -> the manifest file category an UNPLANNED file returned under that role most likely belongs to — only used by the reconciliation path (requirement G), never for matching an already-planned file (that's a straight path lookup). */
 function categoryForRole(role: string): string {
   if (role.startsWith('code-gen-page')) {
@@ -850,6 +953,9 @@ export function useCodeGeneration() {
         mvpScope,
         backendModules,
         controller.signal,
+
+        // Sprint 99B — the Progressive Phase Runner's activation/reporting; see `createPhaseHooks`.
+        createPhaseHooks(project, manifestContext, backendModules),
       );
 
       /*
