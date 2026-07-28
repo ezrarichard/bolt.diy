@@ -161,6 +161,43 @@ Generate exactly these six files for the "${input.moduleSlug}" module:
 - "${input.paths.apiAdapter}" — a one-line passthrough that imports and re-exports "${input.paths.routes}".`;
 }
 
+/**
+ * Sprint 99, Checkpoint A — the batched variant of `buildBackendModulePrompt` above.
+ *
+ * Asks for only the batch's 1–2 files instead of all six, because six provably do not fit the
+ * pipeline's 8192-token output ceiling (see backendModuleBatches.ts). The full six-path contract is
+ * still shown as context so the model writes files that import each other correctly — it is just
+ * told, unambiguously, which subset to return THIS time.
+ */
+export function buildBackendModuleBatchPrompt(
+  input: BackendModulePromptInput & { batchLabel: string; batchPaths: string[] },
+): string {
+  const descriptions: Record<string, string> = {
+    [input.paths.types]: 'module-local TypeScript interfaces for the tables above.',
+    [input.paths.validators]: 'one validation function per endpoint/operation.',
+    [input.paths.repository]:
+      'the ONLY file that imports "@supabase/supabase-js"; one typed method per query the service needs.',
+    [input.paths.service]: `business logic, calling "${input.paths.repository}" only.`,
+    [input.paths.routes]:
+      `thin HTTP handlers calling "${input.paths.service}", validated via "${input.paths.validators}".`,
+    [input.paths.apiAdapter]: `a one-line passthrough that imports and re-exports "${input.paths.routes}".`,
+  };
+
+  return `Project: ${input.projectName}
+Module: ${input.moduleSlug} (implements Feature(s): ${formatList(input.featureIds)})
+
+${specSection('Database Tables This Module May Access', formatList(input.databaseTables))}
+${specSection('Planned API Endpoints', formatList(input.apiEndpoints))}
+
+For context, the complete "${input.moduleSlug}" module consists of these six files:
+${[input.paths.types, input.paths.validators, input.paths.repository, input.paths.service, input.paths.routes, input.paths.apiAdapter].map((path) => `- "${path}"`).join('\n')}
+
+Right now, generate ONLY the ${input.batchPaths.length === 1 ? 'file' : 'files'} for this batch (${input.batchLabel}) — return no others:
+${input.batchPaths.map((path) => `- "${path}" — ${descriptions[path] ?? 'as specified above.'}`).join('\n')}
+
+Write complete, working implementations. Assume the other files listed above exist at exactly those paths and import from them normally.`;
+}
+
 export interface SharedComponentsPromptInput {
   projectName: string;
   componentNames: string[];

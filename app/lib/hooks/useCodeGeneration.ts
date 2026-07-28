@@ -857,7 +857,14 @@ export function useCodeGeneration() {
        * its own terminal state so it is never logged as `generation_failed`, never surfaces a red
        * error the user has to interpret, and never triggers an automatic retry.
        */
-      if (result.cancelled) {
+      /*
+       * Sprint 99, AR2-BUG-007 — ONLY a genuine operator stop may be persisted as `cancelled`.
+       * Acceptance Round 2 twice recorded a run that died of 96 consecutive provider failures as
+       * "Generation stopped by the operator", because this branch keyed off `result.cancelled`
+       * alone and every internal abort routed through the same signal. A run that ends any other
+       * way now falls through to the failure branch below and keeps a real `lastError`.
+       */
+      if (result.cancelled && result.terminationReason === 'operator-cancelled') {
         setState({ isRunning: false, stage: 'idle', stageLabel: 'Stopped', result });
         logActivity(project.id, 'generation_cancelled', 'Generation stopped by the operator');
         updateProjectWorkspaceState(project.id, {

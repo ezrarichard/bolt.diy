@@ -1,14 +1,20 @@
 import { getProjectArtifacts, type Project } from '~/lib/stores/projects';
 import { parseArtifactContent } from '~/lib/projects/artifacts';
 import { extractJsonPayload, looksTruncated } from '~/lib/projects/draftParsing';
-import { generateRoleWithRecovery } from '~/lib/projects/roleGenerationRecovery';
+import { generateRoleWithRecovery, type RoleGenerationFailureKind } from '~/lib/projects/roleGenerationRecovery';
+import { isNonRetryableProviderError } from './providerErrors';
+import {
+  backendModuleBatches,
+  splitBatch,
+  type BackendModuleBatch,
+} from '~/lib/backend-generation/backendModuleBatches';
 import type { RequirementsDraft } from '~/lib/projects/prompts/requirements';
 import type { DatabaseDraft } from '~/lib/projects/prompts/database';
 import type { BackendDraft } from '~/lib/projects/prompts/backend';
 import type { FrontendDraft } from '~/lib/projects/prompts/frontend';
 import type { ProductAssemblySection, ProductPackage } from '~/lib/product-assembly/assemblyTypes';
 import {
-  buildBackendModulePrompt,
+  buildBackendModuleBatchPrompt,
   buildPagePrompt,
   buildServicesPrompt,
   buildSharedComponentsPrompt,
@@ -384,14 +390,17 @@ async function callForFiles(
 
   /** Sprint 79 Phase 1 — every existing call site omits this and keeps getting `CODE_GENERATION_SYSTEM_PROMPT` unchanged; only the new `'generating-backend'` stage passes `BACKEND_GENERATION_SYSTEM_PROMPT` (see that constant's own comment on why the frontend-only system prompt is actively wrong for backend code). */
   systemPrompt: string = CODE_GENERATION_SYSTEM_PROMPT,
-): Promise<{ ok: true; files: GeneratedFile[] } | { ok: false; error: string }> {
+
+  /** Sprint 99 — lets a batched backend call keep its budget while the six-file legacy path is unchanged. */
+  maxOutputTokens: number = CODE_GENERATION_MAX_OUTPUT_TOKENS,
+): Promise<{ ok: true; files: GeneratedFile[] } | { ok: false; error: string; kind: RoleGenerationFailureKind }> {
   const outcome = await generateRoleWithRecovery({
     projectId,
     roleKey,
     system: systemPrompt,
     prompt,
     contextBlock: '',
-    maxOutputTokens: CODE_GENERATION_MAX_OUTPUT_TOKENS,
+    maxOutputTokens,
     parseDraft: (rawText) => {
       const result = parseGeneratedFilesResponse(rawText);
       return result.ok ? { ok: true, draft: result.files } : { ok: false, error: result.error };
@@ -401,7 +410,7 @@ async function callForFiles(
   });
 
   if (!outcome.ok) {
-    return { ok: false, error: outcome.message };
+    return { ok: false, error: outcome.message, kind: outcome.kind };
   }
 
   return { ok: true, files: outcome.draft };
@@ -606,6 +615,7 @@ export async function runGenerationPipeline(
     return {
       ok: false,
       cancelled: true,
+      terminationReason: 'operator-cancelled',
       issues: [
         ...issues,
         { severity: 'warning', stage, message: `Generation stopped by the operator during ${stage}.` },
@@ -964,54 +974,124 @@ export async function runGenerationPipeline(
     const backendRole = `code-gen-backend:${module.moduleSlug}`;
     await safeInvoke(fileHooks?.onFilesStarting, 'generating-backend', backendRole);
 
-    const backendResult = await callForFiles(
-      buildBackendModulePrompt({
-        projectName: project.name,
-        moduleSlug: module.moduleSlug,
-        featureIds: module.featureIds,
-        databaseTables: module.databaseTables,
-        apiEndpoints: module.apiEndpoints,
-        paths,
-      }),
-      generate,
-      project.id,
-      backendRole,
-      BACKEND_GENERATION_SYSTEM_PROMPT,
-    );
-
-    if (!backendResult.ok) {
-      issues.push({
-        severity: 'error',
-        stage: 'generating-backend',
-        message: `${module.moduleSlug}: ${backendResult.error}`,
-      });
-      await safeInvoke(fileHooks?.onStageFailed, 'generating-backend', backendRole, backendResult.error);
-      continue;
-    }
-
     /*
-     * Conservative on purpose (unlike the pages/components stages, which trust extra AI-returned
-     * files under a prefixed folder): a database Repository is high-stakes enough that only the
-     * six explicitly-requested canonical paths for THIS module are accepted — anything else the
-     * AI returned is dropped and reported, never silently written as an "unplanned" backend file.
+     * Sprint 99, AR2-BUG-008 — the six files are requested in small batches rather than one call.
+     * Acceptance Round 2 lost all 96 backend files to the 8192-token output ceiling: a controlled
+     * replication of the old six-file prompt returned `finishReason: "length"`, cut off mid-string.
+     * See backendModuleBatches.ts.
      */
-    const expectedPaths = new Set(pathList);
-    const acceptedFiles = backendResult.files.filter((file) => expectedPaths.has(file.path));
-    const unexpectedFiles = backendResult.files.filter((file) => !expectedPaths.has(file.path));
+    let moduleFailed = false;
 
-    for (const unexpected of unexpectedFiles) {
-      issues.push({
-        severity: 'warning',
-        stage: 'generating-backend',
-        message: `${module.moduleSlug}: unexpected file path outside this module's planned set was dropped: ${unexpected.path}`,
-        filePath: unexpected.path,
-      });
-    }
+    for (const initialBatch of backendModuleBatches(module.moduleSlug)) {
+      if (moduleFailed) {
+        break;
+      }
 
-    generatedFiles.push(...acceptedFiles);
+      /* At most one retry, and only ever with a SMALLER batch — retrying the same size just truncates again. */
+      const attempts: BackendModuleBatch[][] = [[initialBatch]];
+      let batchSucceeded = false;
+      let lastFailure = '';
 
-    for (const file of acceptedFiles) {
-      await safeInvoke(fileHooks?.onFileReady, 'generating-backend', file, backendRole);
+      for (let attempt = 0; attempt < attempts.length && !batchSucceeded && !moduleFailed; attempt++) {
+        const accepted: GeneratedFile[] = [];
+        let attemptFailed = false;
+
+        for (const batch of attempts[attempt]) {
+          const batchRole = `${backendRole}:${batch.id}`;
+          const batchResult = await callForFiles(
+            buildBackendModuleBatchPrompt({
+              projectName: project.name,
+              moduleSlug: module.moduleSlug,
+              featureIds: module.featureIds,
+              databaseTables: module.databaseTables,
+              apiEndpoints: module.apiEndpoints,
+              paths,
+              batchLabel: batch.label,
+              batchPaths: batch.paths,
+            }),
+            generate,
+            project.id,
+            batchRole,
+            BACKEND_GENERATION_SYSTEM_PROMPT,
+          );
+
+          if (!batchResult.ok) {
+            /*
+             * Sprint 99 — a billing/auth/quota refusal cannot succeed on any retry. Acceptance
+             * Round 2 spent ~800 paid calls learning that. Abort the whole run immediately.
+             */
+            if (isNonRetryableProviderError(batchResult.error)) {
+              const message = `${module.moduleSlug} (${batch.label}): ${batchResult.error}`;
+              issues.push({ severity: 'error', stage: 'generating-backend', message });
+              await safeInvoke(fileHooks?.onStageFailed, 'generating-backend', batchRole, message);
+
+              return {
+                ok: false,
+                issues,
+                failedStage: 'generating-backend',
+                terminationReason: 'provider-error',
+              };
+            }
+
+            lastFailure = `${batchResult.error} (kind: ${batchResult.kind})`;
+            attemptFailed = true;
+            break;
+          }
+
+          const expected = new Set(batch.paths);
+          const batchAccepted = batchResult.files.filter((file) => expected.has(file.path));
+          const returnedPaths = batchResult.files.map((file) => file.path);
+
+          /*
+           * AR2-BUG-008, the defect itself: this used to fall through silently, leaving the files
+           * `generating` with a null `last_error` while the stage reported success. A batch that
+           * returns none of its expected paths is a FAILURE, and says exactly what it got.
+           */
+          if (batchAccepted.length === 0) {
+            lastFailure =
+              `returned no expected files. Expected: ${batch.paths.join(', ')}. ` +
+              `Returned: ${returnedPaths.length > 0 ? returnedPaths.join(', ') : '(none)'}.`;
+            attemptFailed = true;
+            break;
+          }
+
+          for (const unexpected of returnedPaths.filter((path) => !expected.has(path))) {
+            issues.push({
+              severity: 'warning',
+              stage: 'generating-backend',
+              message: `${module.moduleSlug}: unexpected file path outside this batch's planned set was dropped: ${unexpected}`,
+              filePath: unexpected,
+            });
+          }
+
+          accepted.push(...batchAccepted);
+        }
+
+        if (!attemptFailed) {
+          generatedFiles.push(...accepted);
+
+          for (const file of accepted) {
+            await safeInvoke(fileHooks?.onFileReady, 'generating-backend', file, backendRole);
+          }
+
+          batchSucceeded = true;
+          break;
+        }
+
+        /* One bounded retry, with the batch split smaller. No split available ⇒ the module fails. */
+        const smaller = attempt === 0 ? splitBatch(initialBatch) : undefined;
+
+        if (smaller) {
+          attempts.push(smaller);
+        }
+      }
+
+      if (!batchSucceeded) {
+        const message = `${module.moduleSlug} (${initialBatch.label}): ${lastFailure}`;
+        issues.push({ severity: 'error', stage: 'generating-backend', message });
+        await safeInvoke(fileHooks?.onStageFailed, 'generating-backend', backendRole, message);
+        moduleFailed = true;
+      }
     }
   }
 
@@ -1031,7 +1111,7 @@ export async function runGenerationPipeline(
   const hasAnyPage = validatedFiles.some((file) => file.path.startsWith('src/pages/'));
 
   if (!hasAnyPage) {
-    return { ok: false, issues, failedStage: 'validating' };
+    return { ok: false, issues, failedStage: 'validating', terminationReason: 'phase-failed' };
   }
 
   {

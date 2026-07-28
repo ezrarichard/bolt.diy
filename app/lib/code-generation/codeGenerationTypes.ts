@@ -85,9 +85,29 @@ export interface GenerationResult {
    * Sprint 98A, BUG-011 — true when the operator stopped the run. Distinct from `ok: false`
    * without it, which means the run FAILED: a cancellation is a deliberate decision and must not
    * be reported to the user as a defect, retried automatically, or logged as an error.
+   *
+   * Sprint 99, AR2-BUG-007 — set ONLY when `terminationReason` is 'operator-cancelled'. Acceptance
+   * Round 2 twice recorded a run that died of 96 consecutive provider failures as
+   * "Generation stopped by the operator", because `cancelled` was derived from the abort signal
+   * alone and every internal abort routes through that same signal.
    */
   cancelled?: boolean;
+
+  /**
+   * Sprint 99, AR2-BUG-007 — why the run ended, when it did not end by completing. Lets the
+   * caller tell an operator decision apart from a provider outage, a failed phase and an internal
+   * abort, all four of which previously arrived indistinguishable as `cancelled: true`.
+   */
+  terminationReason?: TerminationReason;
 }
+
+/**
+ * Sprint 99, AR2-BUG-007 — the four ways a generation run can end other than by completing.
+ * Only 'operator-cancelled' may ever be persisted as the `cancelled` workspace state (see
+ * Sprint 98C's GenerationStatus); the other three are genuine failures and must carry a real
+ * `lastError` so the operator learns what happened.
+ */
+export type TerminationReason = 'operator-cancelled' | 'provider-error' | 'phase-failed' | 'internal-abort';
 
 /**
  * Same shape as useGenerateText().generate — every function in this domain accepts a

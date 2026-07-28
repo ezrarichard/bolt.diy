@@ -105,6 +105,9 @@ beforeEach(() => {
   generateProjectMock.mockResolvedValue({
     ok: false,
     cancelled: true,
+
+    // Sprint 99, AR2-BUG-007 — the real pipeline now tags every termination; only this value may persist `cancelled`.
+    terminationReason: 'operator-cancelled',
     project: undefined,
     issues: [{ severity: 'info', message: 'Generation stopped by the operator.' }],
     failedStage: 'planning',
@@ -181,6 +184,37 @@ describe('useCodeGeneration — cancelled run state (Sprint 98C)', () => {
     expect(result.current.isRunning).toBe(false);
     expect(result.current.stageLabel).toBe('Stopped');
     expect(result.current.error).toBeUndefined();
+  });
+
+  it('never persists cancelled for an internal abort (Sprint 99, AR2-BUG-007)', async () => {
+    /*
+     * Acceptance Round 2 twice recorded a run that died of 96 consecutive provider failures as
+     * "Generation stopped by the operator". A result that is aborted but NOT operator-cancelled
+     * must land in the failure branch with a real lastError.
+     */
+    generateProjectMock.mockResolvedValue({
+      ok: false,
+      cancelled: true,
+      terminationReason: 'provider-error',
+      project: undefined,
+      issues: [{ severity: 'error', message: 'FEAT-005 (types & validators): credit balance is too low.' }],
+      failedStage: 'generating-backend',
+    });
+
+    const { result } = renderHook(() => useCodeGeneration());
+
+    await act(async () => {
+      await result.current.runGeneration(project, productPackage);
+    });
+
+    const terminal = workspacePatches().at(-1);
+    expect(terminal?.lastGenerationStatus).toBe('failed');
+    expect(terminal?.lastError).toContain('credit balance is too low');
+
+    expect(addProjectActivityMock.mock.calls.some(([entry]) => entry.activityType === 'generation_cancelled')).toBe(
+      false,
+    );
+    expect(upsertTimelineMock.mock.calls.some(([, patch]) => patch.status === 'cancelled')).toBe(false);
   });
 
   it('leaves a failed run untouched — cancellation handling did not swallow real failures', async () => {

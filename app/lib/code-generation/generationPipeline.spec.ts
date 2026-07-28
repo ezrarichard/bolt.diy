@@ -680,9 +680,17 @@ describe('runGenerationPipeline — generating-backend stage (Sprint 79 Phase 1,
         return stubGenerate('', '', {});
       }
 
-      // The backend stage's own system prompt is distinct from the frontend one — fail only that call.
+      /*
+       * The backend stage's own system prompt is distinct from the frontend one — fail only that call.
+       *
+       * Sprint 99: this used to say 'model quota exceeded', which is now classified NON-retryable and
+       * deliberately aborts the whole run (see providerErrors.ts — Acceptance Round 2 spent ~800 paid
+       * calls retrying exactly that class of error). The original intent of this test is that a
+       * TRANSIENT module failure doesn't abort the pipeline, so it now uses a transient error;
+       * backendBatchGeneration.spec.ts covers the abort-on-billing/quota path.
+       */
       if (system.includes('Backend Engineer')) {
-        return { ok: false, error: 'model quota exceeded' };
+        return { ok: false, error: 'upstream connect error: socket hang up' };
       }
 
       return stubGenerate(system, '', {});
@@ -702,7 +710,7 @@ describe('runGenerationPipeline — generating-backend stage (Sprint 79 Phase 1,
 
     expect(result.ok).toBe(true);
     expect(
-      result.issues.some((issue) => issue.stage === 'generating-backend' && issue.message.includes('quota exceeded')),
+      result.issues.some((issue) => issue.stage === 'generating-backend' && issue.message.includes('socket hang up')),
     ).toBe(true);
   });
 });
