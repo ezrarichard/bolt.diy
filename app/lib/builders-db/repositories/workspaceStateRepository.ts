@@ -1,5 +1,5 @@
 import { getBuildersDbClient, isBuildersDbConfigured } from '~/lib/builders-db/client';
-import { DEFAULT_WORKSPACE_STATE, type ProjectWorkspaceState } from '~/lib/projects/workspaceState';
+import { DEFAULT_WORKSPACE_STATE, toGenerationStatus, type ProjectWorkspaceState } from '~/lib/projects/workspaceState';
 import { formatError, toStructuredError } from '~/lib/builders-db/repositories/structuredError';
 
 /**
@@ -52,7 +52,7 @@ interface WorkspaceStateRow {
 function fromRow(row: WorkspaceStateRow): ProjectWorkspaceState {
   return {
     lastOpenedSection: row.last_opened_section ?? undefined,
-    lastGenerationStatus: row.last_generation_status as ProjectWorkspaceState['lastGenerationStatus'],
+    lastGenerationStatus: toGenerationStatus(row.last_generation_status),
     lastGenerationTime: row.last_generation_time ?? undefined,
     lastPreviewStatus: row.last_preview_status as ProjectWorkspaceState['lastPreviewStatus'],
     generatedApplicationExists: row.generated_application_exists,

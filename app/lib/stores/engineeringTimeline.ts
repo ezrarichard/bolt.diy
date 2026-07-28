@@ -8,7 +8,12 @@ import { atom } from 'nanostores';
  * generation events aren't chat turns, just local progress state to render alongside it.
  */
 
-export type EngineeringTimelineStatus = 'active' | 'done' | 'failed';
+/**
+ * Sprint 98C, DEF-2 — 'cancelled' is a neutral terminal state, not a failure: an operator
+ * stopping a run is a decision, so the timeline must not render it in red alongside genuine
+ * pipeline errors.
+ */
+export type EngineeringTimelineStatus = 'active' | 'done' | 'failed' | 'cancelled';
 
 export interface EngineeringTimelineEvent {
   id: string;

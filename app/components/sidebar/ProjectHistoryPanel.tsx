@@ -29,6 +29,9 @@ export const ACTIVITY_ICON: Record<string, string> = {
   generation_started: 'i-ph:rocket-launch-duotone text-purple-500',
   generation_stage_completed: 'i-ph:gear-duotone text-blue-500',
   generation_failed: 'i-ph:x-circle-duotone text-red-500',
+
+  /* Sprint 98C, DEF-2 — an operator stop is neutral history, not a failure; explicit so it doesn't fall through to DEFAULT_ACTIVITY_ICON's generic dot. */
+  generation_cancelled: 'i-ph:stop-circle-duotone text-bolt-elements-textTertiary',
   filesystem_written: 'i-ph:file-code-duotone text-blue-500',
   preview_started: 'i-ph:play-circle-duotone text-green-500',
   role_output_saved: 'i-ph:user-check-duotone text-purple-500',

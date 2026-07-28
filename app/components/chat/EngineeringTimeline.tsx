@@ -6,6 +6,9 @@ const STATUS_ICON: Record<EngineeringTimelineEvent['status'], string> = {
   active: 'i-svg-spinners:3-dots-fade text-bolt-elements-item-contentAccent',
   done: 'i-ph:check-circle-fill text-green-500',
   failed: 'i-ph:x-circle-fill text-red-500',
+
+  // Sprint 98C, DEF-2 — neutral stop glyph in the tertiary text colour; deliberately not red.
+  cancelled: 'i-ph:stop-circle-fill text-bolt-elements-textTertiary',
 };
 
 /** Renders `engineeringTimelineStore` above the message list; hides itself entirely for chat sessions that never triggered code generation. */

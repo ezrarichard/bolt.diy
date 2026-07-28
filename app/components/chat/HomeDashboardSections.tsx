@@ -132,7 +132,7 @@ const STATUS_TONE_CLASSES: Record<ApplicationStatusTone, string> = {
   warning: 'bg-amber-500',
 };
 
-/** The four states from the spec, mapped from workspaceState.lastGenerationStatus. */
+/** The states from the spec, mapped from workspaceState.lastGenerationStatus (plus Sprint 98C's 'cancelled'). */
 function getApplicationStatusMeta(project: Project): { label: string; tone: ApplicationStatusTone } {
   const status = project.workspaceState?.lastGenerationStatus;
 
@@ -146,6 +146,11 @@ function getApplicationStatusMeta(project: Project): { label: string; tone: Appl
 
   if (status === 'failed') {
     return { label: 'Needs Repair', tone: 'warning' };
+  }
+
+  // Sprint 98C, DEF-1 — a stopped run reads as neutral, not as a failure and not as never-started.
+  if (status === 'cancelled') {
+    return { label: 'Stopped', tone: 'neutral' };
   }
 
   return { label: 'Not Generated', tone: 'neutral' };

@@ -10,7 +10,32 @@
  * `Project` alone rather than needing its own async BuildersDB calls.
  */
 
-export type GenerationStatus = 'not-generated' | 'generating' | 'generated' | 'failed';
+/**
+ * Sprint 98C, DEF-1 — 'cancelled' is its own terminal state, distinct from 'failed' (the run
+ * broke) and from 'not-generated' (the run never happened). Persisted verbatim, so a reload
+ * and any future resume logic can tell "the operator stopped this" from either neighbour.
+ * Rows written before this sprint recorded a cancellation as 'not-generated'; they keep that
+ * value and simply read back as never-generated, which is the pre-98C behaviour.
+ */
+export type GenerationStatus = 'not-generated' | 'generating' | 'generated' | 'failed' | 'cancelled';
+
+const GENERATION_STATUSES: readonly GenerationStatus[] = [
+  'not-generated',
+  'generating',
+  'generated',
+  'failed',
+  'cancelled',
+];
+
+/**
+ * Narrows a persisted `last_generation_status` string onto the union. Anything unrecognised
+ * (a value written by a newer build, or hand-edited data) degrades to 'not-generated' rather
+ * than leaking an invalid member into code that switches on this type.
+ */
+export function toGenerationStatus(value: string | null | undefined): GenerationStatus {
+  return GENERATION_STATUSES.includes(value as GenerationStatus) ? (value as GenerationStatus) : 'not-generated';
+}
+
 export type PreviewStatus = 'not-available' | 'available' | 'stopped' | 'failed';
 
 export interface ProjectWorkspaceState {

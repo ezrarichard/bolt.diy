@@ -861,14 +861,21 @@ export function useCodeGeneration() {
         setState({ isRunning: false, stage: 'idle', stageLabel: 'Stopped', result });
         logActivity(project.id, 'generation_cancelled', 'Generation stopped by the operator');
         updateProjectWorkspaceState(project.id, {
-          /* Not 'failed' — the run did not fail, it was stopped before completing. */
-          lastGenerationStatus: 'not-generated',
+          /*
+           * Sprint 98C, DEF-1 — 'cancelled', not 'failed' (the run did not fail) and not
+           * 'not-generated' (which erased the fact that a run had been started and stopped,
+           * so a reload could not tell a cancelled project from an untouched one).
+           */
+          lastGenerationStatus: 'cancelled',
+          currentStage: result.failedStage ?? 'planning',
           lastActivity: 'Generation stopped by the operator',
           lastError: undefined,
         });
         upsertEngineeringTimelineEvent(STAGE_TIMELINE_ID[result.failedStage ?? 'planning'], {
           label: 'Generation stopped',
-          status: 'failed',
+
+          // Sprint 98C, DEF-2 — neutral terminal state; a red failure marker misreports an operator decision.
+          status: 'cancelled',
           detail: 'Stopped by the operator',
         });
 
