@@ -266,6 +266,31 @@ export function ProductPackagePanel({ project }: ProductPackagePanelProps) {
         )}
       </div>
 
+      {/*
+       * Sprint 99C — Early Preview. From Phase 1 onward the application is already being served,
+       * so the panel says so instead of leaving the customer waiting on an overall progress number.
+       * Deliberately a single line: the phase-by-phase progress display is Sprint 99D's work.
+       */}
+      {codeGeneration.previewMessage && codeGeneration.previewState !== 'not-available' && (
+        <div className="rounded-lg border border-green-500/30 bg-green-500/5 p-3 text-xs text-green-700 dark:text-green-400">
+          <div className="flex items-center gap-2">
+            <span
+              className={
+                codeGeneration.previewState === 'booting'
+                  ? 'i-ph:circle-notch w-4 h-4 animate-spin'
+                  : 'i-ph:check-circle w-4 h-4'
+              }
+            />
+            <span className="font-medium">{codeGeneration.previewMessage}</span>
+          </div>
+          {codeGeneration.timeToPreviewMs !== undefined && (
+            <div className="mt-1 text-bolt-elements-textTertiary">
+              Preview became available {Math.round(codeGeneration.timeToPreviewMs / 1000)}s after generation started.
+            </div>
+          )}
+        </div>
+      )}
+
       {codeGeneration.stage === 'failed' && codeGeneration.error && (
         <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-600 dark:text-red-400">
           <div className="font-semibold mb-1">Generation failed</div>

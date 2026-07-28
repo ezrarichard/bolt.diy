@@ -1,7 +1,7 @@
 # Sprint 99 — Progressive Application Generation
 ## Technical Design & Implementation Roadmap
 
-**Status:** Checkpoints A and B implemented, unit-verified and verified in a controlled run. Checkpoints C–D not started.
+**Status:** Checkpoints A, B and C implemented and verified (C live-verified end to end). Checkpoint D not started.
 **Implementation started:** 28 July 2026
 **Author:** Claude (Claude Code)
 **Date:** 28 July 2026
@@ -671,3 +671,161 @@ activation only when there is genuinely nothing to promote.
 Checkpoint C (Early Preview, incremental WebContainer writes, preview lifecycle, HMR) and Checkpoint
 D (phase-scoped progress UI, AR2-BUG-006). Phase membership is now available to the UI through
 `derivePhaseStates` whenever Checkpoint D is picked up; nothing in the UI reads it yet.
+
+
+---
+
+## 21. Implementation record — Checkpoint C / Sprint 99C (29 July 2026)
+
+**Delivered: Early Preview and the incremental workspace.** Preview availability is now decoupled
+from generation completion: the application is written, installed and served after **Phase 1**, and
+every later phase updates the running workspace. Checkpoint D (phase progress UI, manifest
+integrity, `total_files` reconciliation) is **not** implemented.
+
+### 21.1 What was built
+
+| File | Change |
+|---|---|
+| `app/lib/code-generation/incrementalWorkspace.ts` | **New, pure.** `planIncrementalWrite` (delta + duplicate suppression), `decideInstall` (checksum-based reinstall), the preview lifecycle machine (`nextPreviewState`/`isPreviewAvailable`/`describePreviewState`), and `buildPreviewShellFiles`. |
+| `app/lib/code-generation/webcontainerWriter.ts` | **New:** `writeGeneratedFilesToWebContainer(projectId, files)`, `beginWorkspaceSession`, `ensureWorkspaceRunning`, `propagatePhaseUpdateToPreview`. `writeGeneratedProjectToWebContainer` is now a wrapper over the incremental writer plus stale-file cleanup — contract unchanged for every existing caller. |
+| `app/lib/code-generation/generationPipeline.ts` | New `onPhaseFiles` hook: each phase's output is handed over as it completes. Phase 1's batch carries the deterministic scaffold and a placeholder shell per not-yet-generated page. `buildScaffold` is shared by Phase 1 and final assembly so `package.json` cannot drift between them. |
+| `app/lib/application-manifest/phaseModel.ts` | `categoryForPath` / `phaseForPath` — phase classification for restored content that carries no category (resume). |
+| `app/lib/stores/workbench.ts` | `refreshAllPreviews()` — exposes the previews store's existing reload for the HMR fallback. |
+| `app/lib/hooks/useCodeGeneration.ts` | `createWorkspacePhaseController` (write → install → dev server → preview, then delta updates), `applyOwnershipPolicy` shared by incremental and whole-project writes, preview state on `CodeGenerationState`, preview-preserving failure branches, and a phase-ordered resume. |
+| `app/components/sidebar/ProductPackagePanel.tsx` | The "Preview Ready — Builders is continuing generation." banner. |
+
+### 21.2 Workspace lifecycle
+
+```
+Phase 1 completes
+  → write (generated + scaffold + page shells)   [incremental, deduped]
+  → npm install                                   [once]
+  → npm run dev                                   [once]
+  → dev server reports a port                     → PREVIEW AVAILABLE
+Phase N completes (N > 1)
+  → write only that phase's delta
+  → reinstall ONLY if package.json checksum changed
+  → HMR settles, else controlled reload
+Run completes
+  → whole-project write (re-writes only what changed) → validation/repair → complete
+```
+
+**Page shells.** `App.tsx` routes to every planned page, so a workspace that boots at Phase 1 would
+otherwise fail module resolution for pages Phases 2/5 have not generated (design risk R3). Phase 1
+therefore writes a valid placeholder module at each missing page path. Shells are workspace-only —
+never persisted, never versioned, never counted as generated files — and are overwritten by the real
+page as soon as its phase produces it.
+
+**Install once.** `package.json` is scaffolded with the backend dependency anticipated from
+`plan.backendModules` (the same signal `needsSupabaseEnv` uses), so the file is normally
+byte-identical from Phase 1 to completion and the checksum comparison finds nothing to do. A run
+that genuinely adds a dependency later reinstalls exactly once. The dev server is spawned at most
+once per session — a second one against the same WebContainer is the duplicate-process failure mode
+Sprint 44 traced a five-minute hang to. The build-repair loop is passed `ensureWorkspaceRunning`
+instead of `installAndStartDevServer` for the same reason.
+
+### 21.3 Preview lifecycle
+
+```
+not-available → booting → preview-ready → updating → ready → generation-complete
+```
+
+The transition table's single most important property, asserted by its own exhaustive test: **no
+event reachable from a later phase — `phase-failed` included — returns an available preview to an
+unavailable state.** A failed later phase reports the failure, keeps `previewAvailable: true`, and
+leaves the run retryable. A boot failure before any preview existed is reported and generation
+continues unaffected — Early Preview is an improvement, never a new failure mode.
+
+### 21.4 Resume
+
+`resumeApplication` reconstructs the workspace phase-first: the restored Phase 1 (entry, config,
+styles, components) is written and started before anything else, so the preview returns at the same
+point in the sequence as in a fresh run; the remaining phases are written into the already-running
+workspace and propagated by HMR. Restored content carries no category, so `phaseForPath` classifies
+it. A resumed GENERATION (not restore) is unchanged from Sprint 99B: completed phases are reused,
+never regenerated, and their reused content is what Phase 1 writes to the workspace.
+
+### 21.5 Tests
+
+New: `incrementalWorkspace.spec.ts` (19), `webcontainerWriter.spec.ts` (14),
+`useCodeGeneration.earlyPreview.spec.ts` (12). Extended: `useCodeGeneration.cancellation.spec.ts`
+(the workspace surface must stay untouched by a cancelled run). Covering every case the sprint
+listed — incremental writes, wrapper compatibility, preview available after Phase 1, the HMR path,
+the reload fallback, no duplicate writes, install once, reinstall only after a checksum change,
+preview survival across a later phase failure, and resume reconstructing the preview.
+
+**2,680 tests passing** across `app/lib` and `app/components`; TypeScript clean; lint 0 errors
+(43 pre-existing warnings); production build clean.
+
+### 21.6 Live verification — RunRide, 29 July 2026
+
+A real run of the **existing** RunRide Product Package (no Discovery/Requirements/Product
+Owner/Engineering/Product Package re-run), against the real provider and the real WebContainer,
+stopped once the orchestration evidence was captured — the application was deliberately **not**
+generated to completion.
+
+**Timeline (from `builders_project_activity`):**
+
+| Time | Event |
+|---|---|
+| 19:20:25 | `generation_started` |
+| 19:20:28 | `Phase 1 — Preview Foundation: 20 file(s) in phase, 0 activated` |
+| 19:21:56 | `Phase 1: 30 file(s) written to the workspace (5983ms)` |
+| 19:22:20 | `Dependencies installed (first-install) in 23s` |
+| 19:22:25 | `preview_started: Preview Ready — Builders is continuing generation. (120s from the start of the run)` |
+| 19:22:25 | `Phase 1 complete` · `Phase 2 — Public Journey: already complete (12 file(s)), not re-entered` |
+| 19:22:31 | `Phase 2: 12 file(s) written to the workspace, 10 unchanged (2095ms)` |
+| 19:22:31 | `preview_updated: Phase 2 reached the preview via HMR` |
+| 19:22:31 | `Phase 3 — Backend: 96 file(s) in phase` — generation continues with the preview serving |
+
+**Measurements**
+
+| Measurement | Result |
+|---|---|
+| Phase 1 generation | ~88s (activation → files ready) |
+| Workspace write (Phase 1, 30 files) | 5,983 ms |
+| `npm install` | 23s (once) |
+| Dev server → served port | ~5s |
+| **Time to preview** | **120s** (target ≈180s) |
+| Later-phase write (Phase 2, 12 files) | 2,095 ms, **10 of 12 skipped as unchanged** |
+
+**Evidence captured**
+
+- The WebContainer served the application at `…webcontainer-api.io/` (port 5173) while the
+  Engineering Timeline read *Generating — FEAT-001* and *Preview ready — Preview Ready — Builders is
+  continuing generation.* — generation and preview genuinely concurrent.
+- The preview rendered a page shell (*"This page is still being generated"*) for a route whose real
+  page had not landed yet, and the workbench diff for
+  `src/pages/TermsWaiverCancellationAndRefundPage.tsx` shows the shell being replaced by the real
+  592-line page **after** the preview was already serving — incremental update, verified.
+- `builders_project_workspace_state` for the project read `preview_available: true`,
+  `last_preview_status: 'available'`, `last_generation_status: 'generating'`,
+  `last_activity: 'Preview Ready — Builders is continuing generation.'` — availability persisted
+  independently of completion.
+- Phase classification held on real data: Phase 1 = 20, Phase 2 = 12 (10 public pages + types +
+  services; the 4 admin pages classified to Phase 5), Phase 3 = 96 (16 modules × 6).
+- Sprint 99B backward compatibility confirmed live: the manifest predates 99B, so every file was
+  already `pending` and each phase activated **0** files — exactly the documented no-op.
+
+**Not verified live:** preview survival across a later phase FAILURE. No phase failed during the
+observed window, and manufacturing a provider failure mid-run was out of scope. The property is
+covered by the exhaustive state-machine test and by the two hook-level tests that assert the failure
+branches persist `previewAvailable: true`.
+
+### 21.7 Defects found
+
+1. **The panel banner does not survive Phase 1 closing the dashboard.** `useCodeGeneration`'s state
+   lives in `ProductPackagePanel`; Phase 1 closes the Project Dashboard (Sprint 38.1 behaviour), the
+   panel unmounts, and a later re-open mounts a *new* hook instance with empty state. The banner text
+   still reaches the customer through the Engineering Timeline entry (a global store) and through
+   `workspaceState.lastActivity`, both verified live — but the panel's own banner and the
+   time-to-preview line are invisible in the normal flow. **Sprint 99D should own preview/phase status
+   in a store rather than in hook state.**
+2. **Stop Generation is unavailable after the dashboard is re-opened**, for the same reason: the
+   abort controller belongs to the unmounted hook instance. Pre-existing (Sprint 98A), but Early
+   Preview makes it reachable in the normal flow, since Phase 1 now closes the dashboard mid-run.
+
+### 21.8 Not done
+
+Checkpoint D: phase-scoped progress UI (AR2-BUG-006), manifest integrity, `total_files`
+reconciliation, and the final Acceptance Round 2 verification.

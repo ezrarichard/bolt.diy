@@ -87,6 +87,16 @@ export class WorkbenchStore {
     return this.#previewsStore.previews;
   }
 
+  /**
+   * Sprint 99C — the controlled reload the progressive runner falls back to when a phase's files
+   * were written but HMR did not settle (see `propagatePhaseUpdateToPreview` in
+   * webcontainerWriter.ts). Delegates to the previews store's own existing refresh path rather
+   * than introducing a second way to reload a preview.
+   */
+  refreshAllPreviews() {
+    this.#previewsStore.refreshAllPreviews();
+  }
+
   get files() {
     return this.#filesStore.files;
   }

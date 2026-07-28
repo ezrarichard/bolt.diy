@@ -30,6 +30,14 @@ const { generateProjectMock, updateProjectWorkspaceStateMock, upsertTimelineMock
 
 const writeToWebContainerMock = vi.fn();
 const installAndStartDevServerMock = vi.fn();
+const beginWorkspaceSessionMock = vi.fn();
+const writeFilesToWebContainerMock = vi.fn(async () => ({ written: [], skipped: [] }));
+const ensureWorkspaceRunningMock = vi.fn(async () => ({
+  ok: true,
+  installed: false,
+  installReason: 'unchanged' as const,
+  devServerStarted: false,
+}));
 const generateTextMock = vi.fn();
 const prepareManifestMock = vi.fn();
 
@@ -38,6 +46,13 @@ vi.mock('~/lib/code-generation/webcontainerWriter', () => ({
   writeGeneratedProjectToWebContainer: writeToWebContainerMock,
   installAndStartDevServer: installAndStartDevServerMock,
   readGeneratedFileFromWebContainer: vi.fn(),
+
+  /* Sprint 99C — the Early Preview workspace surface. A cancelled run must touch none of these. */
+  beginWorkspaceSession: beginWorkspaceSessionMock,
+  writeGeneratedFilesToWebContainer: writeFilesToWebContainerMock,
+  ensureWorkspaceRunning: ensureWorkspaceRunningMock,
+  propagatePhaseUpdateToPreview: vi.fn(async () => 'hmr'),
+  waitForDevServerReady: vi.fn(async () => ({ ok: true, url: 'http://localhost:5173' })),
 }));
 vi.mock('~/lib/stores/projects', () => ({
   updateProjectWorkspaceState: updateProjectWorkspaceStateMock,

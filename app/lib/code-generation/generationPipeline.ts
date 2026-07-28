@@ -24,7 +24,8 @@ import {
 } from './prompts';
 import { REACT_VITE_TS_TEMPLATE_ID, resolveTemplate } from './templateResolver';
 import { scaffoldReactViteProject } from './projectScaffolder';
-import { resolveRequiredDependencies } from './dependencyValidation';
+import { KNOWN_DEPENDENCY_VERSIONS, resolveRequiredDependencies } from './dependencyValidation';
+import { buildPreviewShellFiles } from './incrementalWorkspace';
 import { validateBuildReadiness } from './generationValidator';
 import { fnv1aHash } from '~/lib/checksum/fnv1a';
 import { backendModuleFilePathList, backendModuleFilePaths } from '~/lib/backend-generation/backendModuleTypes';
@@ -612,6 +613,19 @@ export interface GenerationPhaseHooks {
   onPhaseActivating?: (phase: GenerationPhase) => Promise<void> | void;
   onPhaseCompleted?: (phase: GenerationPhase) => Promise<void> | void;
   onPhaseSkipped?: (phase: GenerationPhase) => Promise<void> | void;
+
+  /**
+   * Sprint 99C — this phase's OUTPUT, handed over the moment the phase finishes rather than at the
+   * end of the run. Fires immediately before `onPhaseCompleted`.
+   *
+   * Phase 1's batch additionally contains the deterministic scaffold and a placeholder shell for
+   * every page a later phase will generate — the minimum set that can boot a dev server. Later
+   * phases carry only the files that phase produced.
+   *
+   * The pipeline still writes nothing itself (its "no AI call here ever touches the filesystem"
+   * contract is intact); the caller decides what a phase's files mean for the workspace.
+   */
+  onPhaseFiles?: (phase: GenerationPhase, files: GeneratedFile[]) => Promise<void> | void;
 }
 
 /**
@@ -811,6 +825,65 @@ export async function runGenerationPipeline(
       ),
       run: () => generateBackendModule(module),
     });
+  }
+
+  /**
+   * Sprint 86 (Parts 1/3) — the dependency + Supabase-env decision, extracted so Phase 1's early
+   * scaffold and the final assembly resolve them the SAME way.
+   *
+   * Phase 1 seeds the resolution with `@supabase/supabase-js` whenever backend modules are
+   * planned, using the identical `plan.backendModules` signal `needsSupabaseEnv` already uses.
+   * Without that seed, Phase 1's `package.json` would lack a dependency Phase 3 inevitably adds,
+   * and the run would pay for a second `npm install` mid-flight on every project with a backend.
+   * With it, the file is normally byte-identical from Phase 1 to completion, so the checksum
+   * comparison in `ensureWorkspaceRunning` finds nothing to do.
+   */
+  function buildScaffold(files: GeneratedFile[], anticipateBackendDependencies: boolean): GeneratedFile[] {
+    const template = resolveTemplate(REACT_VITE_TS_TEMPLATE_ID);
+    const hasBackend = Boolean(plan.backendModules && plan.backendModules.length > 0);
+    const baseDependencies =
+      anticipateBackendDependencies && hasBackend
+        ? { ...template.dependencies, '@supabase/supabase-js': KNOWN_DEPENDENCY_VERSIONS['@supabase/supabase-js'] }
+        : template.dependencies;
+
+    return scaffoldReactViteProject({
+      projectName: project.name,
+      description: project.description,
+      template,
+      pages: plan.pages,
+      resolvedDependencies: resolveRequiredDependencies(files, baseDependencies),
+      needsSupabaseEnv: hasBackend || Boolean(project.databaseActivation?.schema),
+    });
+  }
+
+  /**
+   * Sprint 99C — the minimum set that makes a workspace BOOT at the end of Phase 1: the phase's own
+   * generated components, the deterministic scaffold (package.json, vite config, index.html,
+   * main.tsx, App.tsx, index.css), and a placeholder shell for every page `App.tsx` routes to but
+   * no phase has generated yet.
+   *
+   * The shells are what make early preview honest rather than a broken module-resolution screen
+   * (design risk R3): `App.tsx` imports every planned page from a fixed path, and Phases 2/5 have
+   * not run yet. They are workspace-only — never persisted, never versioned, never counted — and
+   * each is overwritten by the real page as soon as its phase produces it.
+   */
+  function buildPhaseWorkspaceFiles(phase: GenerationPhase, phaseOutput: GeneratedFile[]): GeneratedFile[] {
+    /* Shells belong to Phase 1 only — by Phase 2 every remaining page either exists or is about to be generated into its own phase. */
+    const shells =
+      phase === 1
+        ? buildPreviewShellFiles(
+            plan.pages,
+            generatedFiles.map((file) => file.path),
+          )
+        : [];
+
+    /*
+     * The scaffold rides along with EVERY phase, not just the first: it is cheap (deterministic,
+     * and the incremental writer skips it when byte-identical) and it keeps `package.json` in the
+     * workspace accurate as later phases introduce dependencies — which is precisely the signal
+     * `ensureWorkspaceRunning` reinstalls on.
+     */
+    return [...phaseOutput, ...buildScaffold([...generatedFiles, ...shells], true), ...shells];
   }
 
   async function generateTypes(): Promise<GenerationResult | undefined> {
@@ -1230,6 +1303,8 @@ export async function runGenerationPipeline(
       continue;
     }
 
+    const filesBeforePhase = generatedFiles.length;
+
     const stoppedBeforePhase = cancellationResult(STAGE_FOR_PHASE[phase]);
 
     if (stoppedBeforePhase) {
@@ -1245,6 +1320,21 @@ export async function runGenerationPipeline(
         return stop;
       }
     }
+
+    /*
+     * Sprint 99C — the phase's output goes to the workspace HERE, not at the end of the run.
+     * Phase 1 additionally carries the deterministic scaffold and a placeholder shell for every
+     * page a later phase will generate, because that is the minimum set that can actually boot a
+     * dev server (`buildPhaseOneWorkspaceFiles`). This is the whole mechanism behind "preview in
+     * ~3 minutes instead of ~40": nothing about generation changed, only when its output reaches
+     * the workspace.
+     */
+    await safeInvoke(
+      phaseHooks?.onPhaseFiles,
+      STAGE_FOR_PHASE[phase],
+      phase,
+      buildPhaseWorkspaceFiles(phase, generatedFiles.slice(filesBeforePhase)),
+    );
 
     await safeInvoke(phaseHooks?.onPhaseCompleted, STAGE_FOR_PHASE[phase], phase);
   }
@@ -1283,36 +1373,16 @@ export async function runGenerationPipeline(
   const template = resolveTemplate(REACT_VITE_TS_TEMPLATE_ID);
 
   /*
-   * Sprint 86 (Part 1) — the single biggest blocker Sprint 85's assessment identified:
-   * `template.dependencies` only ever covers the scaffold's own imports, so a generated
-   * Backend Module's `@supabase/supabase-js` import (or any other known package a future
-   * prompt starts allowing) was never added to `package.json`, guaranteeing a broken
-   * `npm run build`. Resolved here, once, over every AI-generated + backend file, BEFORE
-   * `package.json` is scaffolded, so it's correct on the very first write rather than
-   * patched in afterward.
-   */
-  const resolvedDependencies = resolveRequiredDependencies(validatedFiles, template.dependencies);
-
-  /*
-   * Sprint 86 (Part 3) — a project needs its own Supabase credentials at runtime exactly
-   * when it has a generated Backend Module (whose repository.ts calls
-   * `@supabase/supabase-js`) or an already-generated real database schema (Database
-   * Activation, `project.databaseActivation.schema` — see productAssembler.ts's own
-   * `buildDatabaseActivationFiles`). Neither implies the other structurally, so both are
-   * checked; a frontend-only project with neither gets a `.env.example` with no invented
-   * Supabase entries.
+   * Sprint 86 (Parts 1/3) — dependency resolution over every AI-generated + backend file, and the
+   * Supabase-env decision, both now inside `buildScaffold` (see its own comment) so that Phase 1's
+   * early scaffold and this final one cannot drift. `anticipateBackendDependencies: false` here:
+   * by this point every backend file genuinely exists, so the real scan is authoritative and there
+   * is nothing to anticipate.
    */
   const needsSupabaseEnv =
     Boolean(plan.backendModules && plan.backendModules.length > 0) || Boolean(project.databaseActivation?.schema);
 
-  const scaffoldFiles = scaffoldReactViteProject({
-    projectName: project.name,
-    description: project.description,
-    template,
-    pages: plan.pages,
-    resolvedDependencies,
-    needsSupabaseEnv,
-  });
+  const scaffoldFiles = buildScaffold(validatedFiles, false);
 
   /*
    * Requirement F — deterministic scaffold files must be persisted too, not just

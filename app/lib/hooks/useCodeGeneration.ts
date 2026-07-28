@@ -11,11 +11,24 @@ import { ARTIFACT_TYPES, getApprovedArtifactContent } from '~/lib/projects/artif
 import type { ProductOwnerDraft } from '~/lib/projects/prompts/productOwner';
 import { generateProject } from '~/lib/code-generation/projectGenerator';
 import {
-  installAndStartDevServer,
+  beginWorkspaceSession,
+  ensureWorkspaceRunning,
+  propagatePhaseUpdateToPreview,
   readGeneratedFileFromWebContainer,
+  waitForDevServerReady,
+  writeGeneratedFilesToWebContainer,
   writeGeneratedProjectToWebContainer,
 } from '~/lib/code-generation/webcontainerWriter';
+import {
+  describePreviewState,
+  isPreviewAvailable,
+  nextPreviewState,
+  PREVIEW_READY_BANNER,
+  type PreviewLifecycleEvent,
+  type PreviewLifecycleState,
+} from '~/lib/code-generation/incrementalWorkspace';
 import type {
+  GeneratedFile,
   GenerateFn,
   GenerationPlanScope,
   GenerationResult,
@@ -34,7 +47,12 @@ import {
   getActiveApplicationManifest,
   listApplicationManifestFiles,
 } from '~/lib/application-manifest/applicationManifestRepository';
-import { describePhase, resolvePhaseActivation, type GenerationPhase } from '~/lib/application-manifest/phaseModel';
+import {
+  describePhase,
+  phaseForPath,
+  resolvePhaseActivation,
+  type GenerationPhase,
+} from '~/lib/application-manifest/phaseModel';
 import type { ApplicationManifestFile } from '~/lib/application-manifest/manifestTypes';
 import {
   computeFileChecksum,
@@ -133,9 +151,28 @@ export interface CodeGenerationState {
 
   /** Sprint 49, Part 8 — files this run could not overwrite automatically and why (see fileOwnership.ts). Minimum UI plumbing per this sprint's own "implement only the minimum UI necessary" instruction — a future review panel reads this rather than the engine inventing a second place to store it. Empty/undefined for a run that found nothing to preserve. */
   conflicts?: FileConflict[];
+
+  /**
+   * Sprint 99C — where the PREVIEW is, independently of where generation is. `stage` above still
+   * reports the generation stage; this reports whether the customer can look at their application
+   * yet, which from this sprint on are two different questions.
+   */
+  previewState?: PreviewLifecycleState;
+
+  /** The banner to show while the preview is usable and generation continues — see `describePreviewState`. */
+  previewMessage?: string;
+
+  /** Sprint 99C — seconds from "Generate Application" to a serving preview; the number this sprint exists to reduce. Set once, when the dev server first reports ready. */
+  timeToPreviewMs?: number;
 }
 
 const IDLE_STATE: CodeGenerationState = { isRunning: false, stage: 'idle', stageLabel: 'Idle' };
+
+/** Sprint 99C — how long a phase's write is given to settle through HMR before the controlled reload fallback runs. */
+const HMR_SETTLE_TIMEOUT_MS = 4000;
+
+/** Sprint 99C — how long Phase 1's dev server is given to report a served port before the run continues without an early preview (generation itself is never blocked on this). */
+const PHASE_ONE_PREVIEW_TIMEOUT_MS = 90_000;
 
 function logActivity(projectId: string, activityType: string, description: string): void {
   buildersDbRepository
@@ -554,6 +591,218 @@ function createPhaseHooks(
   };
 }
 
+/**
+ * Sprint 99C — the ownership/conflict policy, extracted so the INCREMENTAL phase writes and the
+ * final whole-project write apply exactly the same rule (Sprint 49, Parts 7/9).
+ *
+ * A protected path is rewritten with the content captured before generation started rather than
+ * dropped: omitting it would make the whole-project write's stale-file cleanup delete it, which is
+ * the opposite of "preserve". A protected path with no live content to preserve is genuinely
+ * dropped — there is nothing to protect.
+ */
+function applyOwnershipPolicy(
+  files: GeneratedFile[],
+  protectedPaths: Set<string>,
+  preservedContent: Map<string, string>,
+): GeneratedFile[] {
+  if (protectedPaths.size === 0) {
+    return files;
+  }
+
+  return files
+    .filter((file) => !protectedPaths.has(file.path) || preservedContent.has(file.path))
+    .map((file) => (protectedPaths.has(file.path) ? { ...file, content: preservedContent.get(file.path)! } : file));
+}
+
+/** Sprint 99C — everything the run needs to know about the workspace and the preview, independently of generation progress. */
+interface WorkspaceRunContext {
+  previewState: PreviewLifecycleState;
+
+  /** The `package.json` most recently written — what `ensureWorkspaceRunning` compares against to decide on a reinstall. */
+  packageJson?: string;
+  startedAt: number;
+
+  /** Sprint 99C timing evidence, in milliseconds from the start of the run. */
+  timings: {
+    phaseOneFilesReadyMs?: number;
+    workspaceWriteMs?: number;
+    installMs?: number;
+    devServerReadyMs?: number;
+    timeToPreviewMs?: number;
+  };
+}
+
+/**
+ * Sprint 99C — the Early Preview controller: turns each completed phase's files into a workspace
+ * update, and (after Phase 1 only) into a running dev server.
+ *
+ * This is the sprint's headline behaviour in one place:
+ *
+ *  - **Phase 1** — write, install once, start the dev server, wait for a served port, and set
+ *    `previewAvailable`. Generation does NOT wait for any of this beyond the write; if the boot
+ *    fails the run continues and the preview simply never becomes available early.
+ *  - **Later phases** — write only that phase's delta, reinstall only if `package.json` actually
+ *    changed, then let HMR settle with a controlled reload as the fallback.
+ *  - **Failure** — nothing in here can take an available preview away; that guarantee lives in
+ *    `nextPreviewState` and is asserted by its own test.
+ *
+ * Every step is best-effort with respect to generation: a workspace error is reported (activity log
+ * + workspace state) and never fails a run that is otherwise producing files.
+ */
+function createWorkspacePhaseController(
+  project: Project,
+  workspace: WorkspaceRunContext,
+  protectedPaths: Set<string>,
+  preservedContent: Map<string, string>,
+  onStateChange: (patch: Partial<CodeGenerationState>) => void,
+): { onPhaseFiles: NonNullable<GenerationPhaseHooks['onPhaseFiles']> } {
+  function setPreviewState(event: PreviewLifecycleEvent): void {
+    workspace.previewState = nextPreviewState(workspace.previewState, event);
+    onStateChange({
+      previewState: workspace.previewState,
+      previewMessage: describePreviewState(workspace.previewState),
+    });
+  }
+
+  async function bootPreview(): Promise<void> {
+    const installStartedAt = Date.now();
+    const run = await ensureWorkspaceRunning({
+      projectId: project.id,
+      packageJson: workspace.packageJson,
+    });
+    workspace.timings.installMs = Date.now() - installStartedAt;
+
+    if (!run.ok) {
+      setPreviewState('boot-failed');
+      logActivity(project.id, 'preview_boot_failed', `Early preview could not start: ${run.error}`);
+      updateProjectWorkspaceState(project.id, { lastPreviewStatus: 'failed' });
+
+      return;
+    }
+
+    logActivity(
+      project.id,
+      'dependencies_installed',
+      `Dependencies ${run.installed ? 'installed' : 'already installed'} (${run.installReason}) in ${Math.round(
+        (workspace.timings.installMs ?? 0) / 1000,
+      )}s`,
+    );
+
+    const ready = await waitForDevServerReady(PHASE_ONE_PREVIEW_TIMEOUT_MS);
+    workspace.timings.devServerReadyMs = Date.now() - installStartedAt;
+
+    if (!ready.ok) {
+      setPreviewState('boot-failed');
+      logActivity(project.id, 'preview_boot_failed', `Early preview did not become ready: ${ready.error}`);
+
+      return;
+    }
+
+    setPreviewState('dev-server-ready');
+    workspace.timings.timeToPreviewMs = Date.now() - workspace.startedAt;
+
+    /*
+     * The moment preview availability stops depending on generation completion. The workbench is
+     * revealed here, mid-run, rather than after assembly.
+     */
+    workbenchStore.showWorkbench.set(true);
+    workbenchStore.currentView.set('preview');
+    upsertEngineeringTimelineEvent('preview-ready', {
+      label: 'Preview ready',
+      status: 'done',
+      detail: PREVIEW_READY_BANNER,
+    });
+    onStateChange({ timeToPreviewMs: workspace.timings.timeToPreviewMs });
+    updateProjectWorkspaceState(project.id, {
+      previewAvailable: true,
+      lastPreviewStatus: 'available',
+      workbenchFilesCreated: true,
+      lastActivity: PREVIEW_READY_BANNER,
+    });
+    logActivity(
+      project.id,
+      'preview_started',
+      `${PREVIEW_READY_BANNER} (${Math.round(workspace.timings.timeToPreviewMs / 1000)}s from the start of the run)`,
+    );
+  }
+
+  return {
+    async onPhaseFiles(phase, files) {
+      const writable = applyOwnershipPolicy(files, protectedPaths, preservedContent);
+      const packageJson = writable.find((file) => file.path === 'package.json');
+
+      if (packageJson) {
+        workspace.packageJson = packageJson.content;
+      }
+
+      const writeStartedAt = Date.now();
+
+      try {
+        const { written, skipped } = await writeGeneratedFilesToWebContainer(project.id, writable);
+        const elapsed = Date.now() - writeStartedAt;
+
+        if (phase === 1) {
+          workspace.timings.phaseOneFilesReadyMs = writeStartedAt - workspace.startedAt;
+          workspace.timings.workspaceWriteMs = elapsed;
+        }
+
+        logActivity(
+          project.id,
+          'filesystem_written',
+          `Phase ${phase}: ${written.length} file(s) written to the workspace` +
+            (skipped.length > 0 ? `, ${skipped.length} unchanged` : '') +
+            ` (${elapsed}ms)`,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logActivity(project.id, 'filesystem_write_failed', `Phase ${phase} workspace write failed: ${message}`);
+
+        return;
+      }
+
+      if (phase === 1) {
+        /* Close the dashboard before the workbench is revealed — see this file's header comment on the Sprint 38.1 race. */
+        isProjectDashboardOpenStore.set(false);
+        setPreviewState('phase-one-written');
+        updateProjectWorkspaceState(project.id, { workbenchFilesCreated: true });
+        await bootPreview();
+
+        return;
+      }
+
+      if (!isPreviewAvailable(workspace.previewState)) {
+        /* No early preview to update (it never booted, or this project's Phase 1 failed) — the end-of-run path still installs and launches exactly as it did before this sprint. */
+        return;
+      }
+
+      setPreviewState('phase-written');
+
+      /*
+       * A later phase only reinstalls when `package.json` genuinely changed — e.g. the first
+       * backend module adding `@supabase/supabase-js`. `ensureWorkspaceRunning` compares checksums
+       * and no-ops otherwise, and never starts a second dev server.
+       */
+      const run = await ensureWorkspaceRunning({ projectId: project.id, packageJson: workspace.packageJson });
+
+      if (run.installed) {
+        logActivity(
+          project.id,
+          'dependencies_installed',
+          `Phase ${phase}: package.json changed — dependencies reinstalled`,
+        );
+      }
+
+      const settled = await propagatePhaseUpdateToPreview(HMR_SETTLE_TIMEOUT_MS);
+      setPreviewState('phase-settled');
+      logActivity(
+        project.id,
+        'preview_updated',
+        `Phase ${phase} reached the preview via ${settled === 'reloaded' ? 'a controlled reload (HMR did not settle)' : settled === 'hmr' ? 'HMR' : 'no running preview'}`,
+      );
+    },
+  };
+}
+
 /** role (e.g. "code-gen-page:HomePage", "code-gen-components", "scaffold") -> the manifest file category an UNPLANNED file returned under that role most likely belongs to — only used by the reconciliation path (requirement G), never for matching an already-planned file (that's a straight path lookup). */
 function categoryForRole(role: string): string {
   if (role.startsWith('code-gen-page')) {
@@ -902,6 +1151,19 @@ export function useCodeGeneration() {
         generate(system, prompt, { ...opts, ...getRoleGenerateOptions(project, 'frontend-draft') });
 
       const manifestContext: ManifestGenerationContext = { files: [] };
+
+      /*
+       * Sprint 99C — one workspace session per run: the incremental write ledger, the installed
+       * `package.json` checksum and the dev-server-started flag all start empty here, so a second
+       * run in the same browser session rewrites everything rather than trusting a stale ledger.
+       */
+      beginWorkspaceSession(project.id);
+
+      const workspace: WorkspaceRunContext = {
+        previewState: 'not-available',
+        startedAt: Date.now(),
+        timings: {},
+      };
       const currentUserId = user?.id ?? null;
 
       // Sprint 48 — resolved once here so the plan itself carries MVP scope (see GenerationPlanScope); createPlanReadyHandler re-resolves it independently at persistence time for Part 7's staleness guard.
@@ -955,7 +1217,14 @@ export function useCodeGeneration() {
         controller.signal,
 
         // Sprint 99B — the Progressive Phase Runner's activation/reporting; see `createPhaseHooks`.
-        createPhaseHooks(project, manifestContext, backendModules),
+        {
+          ...createPhaseHooks(project, manifestContext, backendModules),
+
+          // Sprint 99C — Early Preview: each completed phase's files go straight to the workspace; Phase 1 additionally boots the dev server.
+          ...createWorkspacePhaseController(project, workspace, protectedPaths, preservedContent, (patch) =>
+            setState((prev) => ({ ...prev, ...patch })),
+          ),
+        },
       );
 
       /*
@@ -997,11 +1266,31 @@ export function useCodeGeneration() {
 
       if (!result.ok || !result.project) {
         const message = result.issues.find((issue) => issue.severity === 'error')?.message ?? 'Generation failed.';
-        setState({ isRunning: false, stage: 'failed', stageLabel: 'Failed', result, error: message });
+
+        /*
+         * Sprint 99C — a later phase failing must NOT destroy an already-working preview. If Phase
+         * 1 booted, the workspace keeps serving what it has; the run is reported failed (the
+         * customer is told which stage broke and can retry), but `previewAvailable` stays true and
+         * the Preview tab keeps working. Before this sprint the question could not arise, because
+         * nothing was ever written before the run finished.
+         */
+        const previewSurvives = isPreviewAvailable(workspace.previewState);
+        workspace.previewState = nextPreviewState(workspace.previewState, 'phase-failed');
+
+        setState({
+          isRunning: false,
+          stage: 'failed',
+          stageLabel: 'Failed',
+          result,
+          error: message,
+          previewState: workspace.previewState,
+          previewMessage: describePreviewState(workspace.previewState),
+        });
         logActivity(
           project.id,
           'generation_failed',
-          `Generation failed at ${result.failedStage ?? 'unknown stage'}: ${message}`,
+          `Generation failed at ${result.failedStage ?? 'unknown stage'}: ${message}` +
+            (previewSurvives ? ' — the preview from the completed phases is still available' : ''),
         );
         upsertEngineeringTimelineEvent(STAGE_TIMELINE_ID[result.failedStage ?? 'planning'], {
           label: `${STAGE_GROUP_LABELS[result.failedStage ?? 'planning']} failed`,
@@ -1012,6 +1301,7 @@ export function useCodeGeneration() {
           lastGenerationStatus: 'failed',
           currentStage: result.failedStage ?? 'planning',
           lastError: message,
+          ...(previewSurvives ? { previewAvailable: true, lastPreviewStatus: 'available' as const } : {}),
         });
 
         return;
@@ -1106,16 +1396,10 @@ export function useCodeGeneration() {
          * workspace since it was last generated) has no entry in `preservedContent` and is
          * genuinely dropped — there is nothing to protect.
          */
-        if (protectedPaths.size > 0) {
-          generatedProject = {
-            ...generatedProject,
-            files: generatedProject.files
-              .filter((file) => !protectedPaths.has(file.path) || preservedContent.has(file.path))
-              .map((file) =>
-                protectedPaths.has(file.path) ? { ...file, content: preservedContent.get(file.path)! } : file,
-              ),
-          };
-        }
+        generatedProject = {
+          ...generatedProject,
+          files: applyOwnershipPolicy(generatedProject.files, protectedPaths, preservedContent),
+        };
 
         setState((prev) => ({ ...prev, stage: 'writing-files', stageLabel: STAGE_GROUP_LABELS['writing-files'] }));
 
@@ -1163,6 +1447,26 @@ export function useCodeGeneration() {
          * On failure the Repair Engineer patches the ALREADY-WRITTEN files, re-writes them,
          * and retries — up to a fixed attempt limit — before this is reported as failed.
          */
+        /*
+         * Sprint 99C — the Build Validator now runs against a workspace that is usually ALREADY
+         * installed and serving (Phase 1 did both). `ensureWorkspaceRunning` is passed in place of
+         * `installAndStartDevServer` so a validation pass reinstalls only when `package.json`
+         * actually changed and never spawns a second dev server against the same WebContainer —
+         * the duplicate-installer failure mode Sprint 44 traced a five-minute hang to. For a run
+         * whose Phase 1 preview never booted, this behaves exactly like the old call: first
+         * install, first dev server.
+         */
+        const ensureRunningForValidation = (onOutput?: (chunk: string) => void) =>
+          ensureWorkspaceRunning({
+            projectId: project.id,
+            packageJson: generatedProject.files.find((file) => file.path === 'package.json')?.content,
+            onOutput,
+          }).then((outcome) =>
+            outcome.ok
+              ? ({ ok: true } as const)
+              : ({ ok: false, error: outcome.error ?? 'Workspace could not be started.' } as const),
+          );
+
         const buildResult = await runBuildRepairLoop({
           project: generatedProject,
           projectId: project.id,
@@ -1170,7 +1474,7 @@ export function useCodeGeneration() {
           productPackageSummary,
           generate: repairGenerate,
           onEvent: handleRepairEvent,
-          installAndStartDevServer,
+          installAndStartDevServer: ensureRunningForValidation,
           writeProjectToWebContainer: writeGeneratedProjectToWebContainer,
           saveSnapshot,
         });
@@ -1178,7 +1482,18 @@ export function useCodeGeneration() {
         generatedProject = buildResult.project;
 
         if (!buildResult.ok) {
-          setState({ isRunning: false, stage: 'failed', stageLabel: 'Failed', result, error: buildResult.error });
+          // Sprint 99C — as with a failed phase above, a preview that is already serving is kept; only the run is reported failed.
+          const previewSurvives = isPreviewAvailable(workspace.previewState);
+
+          setState({
+            isRunning: false,
+            stage: 'failed',
+            stageLabel: 'Failed',
+            result,
+            error: buildResult.error,
+            previewState: workspace.previewState,
+            previewMessage: describePreviewState(workspace.previewState),
+          });
           logActivity(project.id, 'generation_failed', `Generation failed while installing: ${buildResult.error}`);
           updateProjectWorkspaceState(project.id, {
             lastGenerationStatus: 'failed',
@@ -1186,6 +1501,7 @@ export function useCodeGeneration() {
             lastError: buildResult.error,
             lastRepairStatus: 'failed',
             repairAttempts: totalRepairAttempts,
+            ...(previewSurvives ? { previewAvailable: true, lastPreviewStatus: 'available' as const } : {}),
           });
 
           return;
@@ -1202,7 +1518,29 @@ export function useCodeGeneration() {
         logActivity(project.id, 'preview_started', 'Preview launched for the generated application');
         upsertEngineeringTimelineEvent('preview-ready', { label: 'Preview ready', status: 'done' });
 
-        setState({ isRunning: false, stage: 'complete', stageLabel: STAGE_GROUP_LABELS.complete, result });
+        workspace.previewState = nextPreviewState(workspace.previewState, 'generation-complete');
+        setState({
+          isRunning: false,
+          stage: 'complete',
+          stageLabel: STAGE_GROUP_LABELS.complete,
+          result,
+          previewState: workspace.previewState,
+          previewMessage: describePreviewState(workspace.previewState),
+          timeToPreviewMs: workspace.timings.timeToPreviewMs,
+        });
+
+        if (workspace.timings.timeToPreviewMs !== undefined) {
+          logActivity(
+            project.id,
+            'generation_timing',
+            `Time to preview ${Math.round(workspace.timings.timeToPreviewMs / 1000)}s ` +
+              `(Phase 1 files ${Math.round((workspace.timings.phaseOneFilesReadyMs ?? 0) / 1000)}s, ` +
+              `workspace write ${workspace.timings.workspaceWriteMs ?? 0}ms, ` +
+              `install ${Math.round((workspace.timings.installMs ?? 0) / 1000)}s); ` +
+              `full generation ${Math.round((Date.now() - workspace.startedAt) / 1000)}s`,
+          );
+        }
+
         updateProjectWorkspaceState(project.id, {
           lastGenerationStatus: 'generated',
           generatedApplicationExists: true,
@@ -1333,18 +1671,34 @@ export function useCodeGeneration() {
       isProjectDashboardOpenStore.set(false);
       upsertEngineeringTimelineEvent('writing-files', { label: 'Restoring files', status: 'active' });
 
-      await writeGeneratedProjectToWebContainer({
-        projectId: project.id,
-        templateId: 'resumed',
-        files,
-        folders: [],
-        generatedAt: new Date().toISOString(),
-      });
+      /*
+       * Sprint 99C — resume is phase-ordered too. The reconstructed Phase 1 (entry, config, styles,
+       * components — everything needed to boot) is written and started FIRST, so the preview comes
+       * back at the same point in the sequence it does during a fresh run, rather than after every
+       * one of ~130 restored files has been written. The remaining phases are written immediately
+       * afterwards into the already-running workspace, which is what HMR is for.
+       *
+       * `phaseForPath` classifies restored content that carries no category of its own — see its
+       * own comment on why a path is a sound input here.
+       */
+      beginWorkspaceSession(project.id);
+
+      const phaseOneFiles = files.filter((file) => phaseForPath(file.path) === 1);
+      const laterPhaseFiles = files.filter((file) => phaseForPath(file.path) !== 1);
+
+      await writeGeneratedFilesToWebContainer(project.id, phaseOneFiles);
 
       setState((prev) => ({ ...prev, stage: 'installing', stageLabel: STAGE_GROUP_LABELS.installing }));
       upsertEngineeringTimelineEvent('installing', { label: 'Installing dependencies', status: 'active' });
 
-      const installResult = await installAndStartDevServer();
+      const installResult = await ensureWorkspaceRunning({
+        projectId: project.id,
+        packageJson: files.find((file) => file.path === 'package.json')?.content,
+      }).then((outcome) =>
+        outcome.ok
+          ? ({ ok: true } as const)
+          : ({ ok: false, error: outcome.error ?? 'Workspace could not be started.' } as const),
+      );
 
       if (!installResult.ok) {
         setState({ isRunning: false, stage: 'failed', stageLabel: 'Failed', error: installResult.error });
@@ -1369,7 +1723,36 @@ export function useCodeGeneration() {
       logActivity(project.id, 'preview_started', 'Preview relaunched while resuming development');
       upsertEngineeringTimelineEvent('preview-ready', { label: 'Preview ready', status: 'done' });
 
-      setState({ isRunning: false, stage: 'complete', stageLabel: STAGE_GROUP_LABELS.complete });
+      setState((prev) => ({
+        ...prev,
+        stage: 'launching-preview',
+        previewState: 'preview-ready',
+        previewMessage: describePreviewState('preview-ready'),
+      }));
+      updateProjectWorkspaceState(project.id, {
+        previewAvailable: true,
+        lastPreviewStatus: 'available',
+        lastActivity: 'Preview restored — Builders is restoring the remaining files.',
+      });
+
+      /* Everything the reconstructed Phase 1 did not need, written into the now-running workspace. */
+      if (laterPhaseFiles.length > 0) {
+        await writeGeneratedFilesToWebContainer(project.id, laterPhaseFiles);
+        await propagatePhaseUpdateToPreview(HMR_SETTLE_TIMEOUT_MS);
+        logActivity(
+          project.id,
+          'workspace_reconstructed',
+          `${laterPhaseFiles.length} later-phase file(s) restored into the running workspace`,
+        );
+      }
+
+      setState({
+        isRunning: false,
+        stage: 'complete',
+        stageLabel: STAGE_GROUP_LABELS.complete,
+        previewState: 'generation-complete',
+        previewMessage: describePreviewState('generation-complete'),
+      });
       updateProjectWorkspaceState(project.id, {
         previewAvailable: true,
         lastPreviewStatus: 'available',

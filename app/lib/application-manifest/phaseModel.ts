@@ -214,6 +214,61 @@ export function phaseForFile(file: PhaseAssignableFile, context: PhaseAssignment
   }
 }
 
+/**
+ * Sprint 99C — the category of a file known only by its PATH.
+ *
+ * Resume reconstructs a workspace from stored content (`reconstructFilesFromManifest`, or the
+ * Sprint 38.5 whole-project snapshot for a project that predates the manifest), and neither carries
+ * a category. Every path this returns a non-`'other'` answer for is a path THIS codebase itself
+ * generates — `manifestBuilder.ts`'s `buildFileDrafts` and `projectScaffolder.ts` are the only two
+ * producers — so this is a lookup of our own layout, not a guess about arbitrary code.
+ */
+export function categoryForPath(path: string): ManifestFileCategory {
+  if (path === 'src/main.tsx' || path === 'src/App.tsx') {
+    return 'entry';
+  }
+
+  if (path.startsWith('src/pages/')) {
+    return 'pages';
+  }
+
+  if (path.startsWith('src/components/')) {
+    return 'components';
+  }
+
+  if (path.startsWith('src/types/')) {
+    return 'types';
+  }
+
+  if (path.startsWith('src/services/')) {
+    return 'services';
+  }
+
+  if (path.startsWith('src/features/') || path.startsWith('api/')) {
+    return 'backend';
+  }
+
+  if (path.endsWith('.css')) {
+    return 'styles';
+  }
+
+  if (path.endsWith('.md')) {
+    return 'documentation';
+  }
+
+  if (!path.includes('/')) {
+    // Root-level files this scaffold produces: package.json, vite.config.ts, tsconfig*.json, index.html, .env.example.
+    return 'config';
+  }
+
+  return 'other';
+}
+
+/** Convenience for callers that hold only a path — see `categoryForPath` for why that is a sound input. */
+export function phaseForPath(path: string, context: PhaseAssignmentContext = {}): GenerationPhase {
+  return phaseForFile({ path, category: categoryForPath(path) }, context);
+}
+
 export type PhaseStatus = 'completed' | 'active' | 'pending' | 'failed' | 'skipped';
 
 export interface PhaseFileForState {
