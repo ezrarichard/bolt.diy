@@ -22,18 +22,38 @@ Builders is an AI product engineering platform that coordinates specialized AI e
 
 ## Documentation
 
-New to Builders? Start with the user guide.
+There are two levels of user documentation. Start with the first one.
+
+### 1. [Getting Started Guide](docs/GETTING_STARTED.md) — recommended for new users
+
+The friendly, non-technical introduction. Written for project managers, business analysts, sales,
+product owners, and anyone evaluating Builders. No technical knowledge needed.
+
+Takes you from signing in to a working application: creating a project, explaining your business,
+reviewing requirements, generating the app, and what to do when something looks wrong — with
+worked examples throughout.
+
+### 2. [User Guide](docs/USER_GUIDE.md) — complete reference manual
+
+The full detail, for when you need it. Every screen, every artifact, every setting: Business
+Discovery, the Knowledge Ledger, the Product Package, the Technical Architecture Specification,
+the generation pipeline, reviews, activity history, known limitations, troubleshooting, and
+tester guidelines.
+
+### Other documents
 
 | Document | Audience | What it covers |
 |---|---|---|
-| **[User Guide (Early Access Edition)](docs/USER_GUIDE.md)** | First-time users, business analysts, developers, testers | End-to-end walkthrough: signing in, creating a project, Business Discovery, requirements, the product package, the Technical Architecture Specification, application generation, reviews, FAQ, troubleshooting, and tester guidelines |
 | [Executive Summary](docs/00-EXECUTIVE-SUMMARY.md) | Stakeholders | High-level overview of the platform |
 | [Product Requirements](docs/00-PRODUCT-REQUIREMENTS.md) | Product and engineering | What Builders itself is required to do |
 | [Documentation Roadmap](docs/DOCUMENTATION-ROADMAP.md) | Contributors | How the `docs/` tree is organised |
 | [Contributing](CONTRIBUTING.md) | Contributors | Development setup and contribution workflow |
 
 > [!TIP]
-> Testers should read [Section 17 — Tester Guidelines](docs/USER_GUIDE.md#17-tester-guidelines) before starting, and use the bug-report format described there.
+> Sending Builders to someone for the first time? Send them the
+> [Getting Started Guide](docs/GETTING_STARTED.md) — it is written to be read on its own.
+> Testers should also read [Section 17 — Tester Guidelines](docs/USER_GUIDE.md#17-tester-guidelines)
+> and use the bug-report format described there.
 
 ## Vision
 
