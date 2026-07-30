@@ -61,13 +61,13 @@ function StagePanel({ stage }: { stage: FactoryStage }) {
     <div
       className={classNames(
         'flex items-center gap-2.5 rounded-xl px-3.5 py-2.5 shrink-0',
-        'border border-white/10 bg-white/[0.04] backdrop-blur-xl',
-        'shadow-[0_8px_24px_-16px_rgba(0,0,0,0.9)]',
-        'transition-all duration-300 hover:-translate-y-0.5 hover:border-purple-400/30 hover:bg-white/[0.07]',
+        'border border-bolt-elements-borderColor/60 bg-bolt-elements-background-depth-2/70 backdrop-blur-xl',
+        'shadow-sm',
+        'transition-all duration-300 hover:-translate-y-0.5 hover:border-builders-brand-primary/40 hover:bg-bolt-elements-background-depth-2',
       )}
     >
-      <span className={classNames(stage.icon, 'w-4 h-4 text-purple-200/90 shrink-0')} />
-      <span className="text-xs font-medium text-white/80 whitespace-nowrap">{stage.label}</span>
+      <span className={classNames(stage.icon, 'w-4 h-4 text-builders-brand-primary shrink-0')} />
+      <span className="text-xs font-medium text-bolt-elements-textSecondary whitespace-nowrap">{stage.label}</span>
     </div>
   );
 }
@@ -86,25 +86,25 @@ function QuickAccessCard({ icon, title, description, onClick }: QuickAccessCardP
       onClick={onClick}
       className={classNames(
         'group flex items-start gap-4 rounded-2xl p-5 text-left w-full',
-        'border border-white/10 bg-white/[0.03] backdrop-blur-xl',
+        'border border-bolt-elements-borderColor/60 bg-bolt-elements-background-depth-2/70 backdrop-blur-xl',
         'transition-all duration-300',
-        'hover:-translate-y-0.5 hover:border-purple-400/40 hover:bg-white/[0.06]',
-        'hover:shadow-[0_0_40px_-12px_rgba(168,85,247,0.45)]',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400/60',
+        'hover:-translate-y-0.5 hover:border-builders-brand-primary/50 hover:bg-bolt-elements-background-depth-2',
+        'hover:shadow-lg hover:shadow-builders-brand-primary/20',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-builders-border-focus',
       )}
     >
       <span
         className={classNames(
           'flex items-center justify-center w-11 h-11 rounded-xl shrink-0',
-          'border border-white/10 bg-white/[0.05]',
-          'transition-colors duration-300 group-hover:border-purple-400/40 group-hover:bg-purple-500/10',
+          'border border-bolt-elements-borderColor/60 bg-bolt-elements-background-depth-3',
+          'transition-colors duration-300 group-hover:border-builders-brand-primary/50 group-hover:bg-builders-brand-subtleSurface',
         )}
       >
-        <span className={classNames(icon, 'w-5 h-5 text-purple-200/90')} />
+        <span className={classNames(icon, 'w-5 h-5 text-builders-brand-primary')} />
       </span>
       <span className="min-w-0">
-        <span className="block text-sm font-semibold text-white">{title}</span>
-        <span className="block text-xs text-white/50 mt-1 leading-relaxed">{description}</span>
+        <span className="block text-sm font-semibold text-bolt-elements-textPrimary">{title}</span>
+        <span className="block text-xs text-bolt-elements-textSecondary mt-1 leading-relaxed">{description}</span>
       </span>
     </button>
   );
@@ -137,15 +137,21 @@ export function HomeWorkflows() {
   };
 
   return (
-    <div className="relative isolate shrink-0 overflow-hidden bg-[#07060d] -mx-4 lg:mx-0">
-      {/* ── Background: masked tech grid, two glow orbs, and a fade into the app surface ── */}
+    <div className="relative isolate shrink-0 overflow-hidden bg-[var(--builders-hero-surface)] -mx-4 lg:mx-0">
+      {/*
+        ── Background: masked tech grid, two glow orbs, and a fade into the app surface ──
+
+        Every colour here comes from a `--builders-hero-*` token (app/styles/builders-tokens.scss),
+        which is defined once per theme. That is what makes light mode a designed bright surface
+        rather than an inverted dark one, and it is why nothing below hardcodes an rgba.
+      */}
       <div
         aria-hidden
-        className="absolute inset-0 opacity-[0.35]"
+        className="absolute inset-0 opacity-60 dark:opacity-[0.35]"
         style={{
           backgroundImage:
-            'linear-gradient(to right, rgba(148,163,184,0.09) 1px, transparent 1px),' +
-            'linear-gradient(to bottom, rgba(148,163,184,0.09) 1px, transparent 1px)',
+            'linear-gradient(to right, var(--builders-hero-grid-line) 1px, transparent 1px),' +
+            'linear-gradient(to bottom, var(--builders-hero-grid-line) 1px, transparent 1px)',
           backgroundSize: '56px 56px',
           maskImage: 'radial-gradient(ellipse 90% 60% at 50% 30%, black, transparent 75%)',
           WebkitMaskImage: 'radial-gradient(ellipse 90% 60% at 50% 30%, black, transparent 75%)',
@@ -153,13 +159,13 @@ export function HomeWorkflows() {
       />
       <div
         aria-hidden
-        className="absolute -top-40 left-1/2 -translate-x-1/2 w-[900px] h-[520px] rounded-full blur-[130px] opacity-50"
-        style={{ background: 'radial-gradient(circle, rgba(147,51,234,0.55) 0%, transparent 65%)' }}
+        className="absolute -top-40 left-1/2 -translate-x-1/2 w-[900px] h-[520px] rounded-full blur-[130px] opacity-70 dark:opacity-50"
+        style={{ background: 'radial-gradient(circle, var(--builders-hero-glow-primary) 0%, transparent 65%)' }}
       />
       <div
         aria-hidden
-        className="absolute -bottom-32 -right-24 w-[620px] h-[420px] rounded-full blur-[130px] opacity-35"
-        style={{ background: 'radial-gradient(circle, rgba(56,132,255,0.45) 0%, transparent 65%)' }}
+        className="absolute -bottom-32 -right-24 w-[620px] h-[420px] rounded-full blur-[130px] opacity-60 dark:opacity-35"
+        style={{ background: 'radial-gradient(circle, var(--builders-hero-glow-secondary) 0%, transparent 65%)' }}
       />
       <div
         aria-hidden
@@ -169,8 +175,8 @@ export function HomeWorkflows() {
       <div className="relative z-10 flex flex-col">
         {/* Top bar — brand only. This is an app homepage, not a marketing site. */}
         <div className="max-w-5xl mx-auto w-full px-6 sm:px-8 py-6 flex items-center justify-between">
-          <span className="text-white font-semibold tracking-tight">Builders</span>
-          <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-purple-200/70 border border-purple-300/20 rounded-full px-3 py-1">
+          <span className="text-bolt-elements-textPrimary font-semibold tracking-tight">Builders</span>
+          <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-builders-brand-primary border border-builders-brand-primary/30 rounded-full px-3 py-1">
             AI Software Factory
           </span>
         </div>
@@ -178,11 +184,14 @@ export function HomeWorkflows() {
         {/* ── Hero ── */}
         <div className="max-w-5xl mx-auto w-full px-6 sm:px-8 pt-16 pb-14 sm:pt-24 sm:pb-20 text-center">
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-semibold tracking-tight leading-[1.08]">
-            <span className="bg-gradient-to-b from-white via-white to-white/55 bg-clip-text text-transparent">
+            {/* Gradient built from the two text tokens, so it reads dark-on-light and light-on-dark without a second definition. */}
+            <span className="bg-gradient-to-b from-[var(--bolt-elements-textPrimary)] via-[var(--bolt-elements-textPrimary)] to-[var(--bolt-elements-textSecondary)] bg-clip-text text-transparent">
               Where ideas become software.
             </span>
           </h1>
-          <p className="mt-5 text-base sm:text-lg text-white/55">Plan, build, review and ship — all in one platform.</p>
+          <p className="mt-5 text-base sm:text-lg text-bolt-elements-textSecondary">
+            Plan, build, review and ship — all in one platform.
+          </p>
 
           <div className="mt-9 flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-5">
             <button
@@ -191,10 +200,21 @@ export function HomeWorkflows() {
               className={classNames(
                 'group inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl',
                 'text-sm font-semibold text-white',
-                'bg-gradient-to-b from-purple-500 to-purple-600 hover:from-purple-400 hover:to-purple-500',
-                'shadow-[0_10px_40px_-12px_rgba(168,85,247,0.75)]',
-                'transition-all duration-300 hover:-translate-y-0.5',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-300/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#07060d]',
+
+                /*
+                 * A SOLID background-color, not a gradient. The gradient this replaced left
+                 * `background-color` resolving to the browser's native `buttonface` (#efefef) —
+                 * white-on-#efefef is 1.08:1, i.e. invisible, any time the gradient did not paint.
+                 *
+                 * purple-600/700/800 rather than `bg-builders-brand-primary`: that token resolves
+                 * to purple-500 in dark theme, and purple-500 against white text is 3.3:1, under
+                 * the 4.5:1 AA floor for this 14px label. These three all clear it (4.9 / 6.5 / 8.6)
+                 * and are identical in both themes, so the CTA never depends on the surface behind it.
+                 */
+                'bg-purple-600 hover:bg-purple-700 active:bg-purple-800',
+                'shadow-lg shadow-purple-600/30',
+                'transition-all duration-300 hover:-translate-y-0.5 active:translate-y-0',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-builders-border-focus focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--builders-hero-surface)]',
               )}
             >
               Start a New Project
@@ -210,7 +230,7 @@ export function HomeWorkflows() {
               <button
                 type="button"
                 onClick={() => openProject(recentProject, navigate)}
-                className="inline-flex items-center gap-1.5 bg-transparent border-0 p-0 appearance-none text-sm text-white/50 hover:text-white/85 transition-colors focus-visible:outline-none focus-visible:text-white"
+                className="inline-flex items-center gap-1.5 bg-transparent border-0 p-0 appearance-none text-sm text-bolt-elements-textSecondary hover:text-bolt-elements-textPrimary transition-colors focus-visible:outline-none focus-visible:text-bolt-elements-textPrimary focus-visible:underline"
               >
                 Open Recent Project
                 <span className="i-ph:arrow-up-right w-3.5 h-3.5" />
@@ -218,10 +238,11 @@ export function HomeWorkflows() {
             )}
           </div>
 
-          <div className="mt-7 inline-flex items-center gap-2 text-[11px] text-white/40">
+          {/* textSecondary, not textTertiary: at 11px the tertiary token measures 4.43:1 on the hero surface, just under the 4.5:1 AA floor. */}
+          <div className="mt-7 inline-flex items-center gap-2 text-[11px] text-bolt-elements-textSecondary">
             <span className="relative flex w-1.5 h-1.5">
-              <span className="absolute inline-flex w-full h-full rounded-full bg-emerald-400/70 animate-ping" />
-              <span className="relative inline-flex w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              <span className="absolute inline-flex w-full h-full rounded-full bg-builders-status-success-border/70 animate-ping" />
+              <span className="relative inline-flex w-1.5 h-1.5 rounded-full bg-builders-status-success-border" />
             </span>
             {statusLabel}
           </div>
@@ -234,7 +255,7 @@ export function HomeWorkflows() {
                 {index < FACTORY_STAGES.length - 1 && (
                   <span
                     aria-hidden
-                    className="hidden lg:block h-px w-7 xl:w-10 shrink-0 bg-gradient-to-r from-purple-500/10 via-purple-400/50 to-purple-500/10"
+                    className="hidden lg:block h-px w-7 xl:w-10 shrink-0 bg-gradient-to-r from-transparent via-builders-brand-primary/60 to-transparent"
                   />
                 )}
               </Fragment>

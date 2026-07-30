@@ -226,11 +226,14 @@ export const Menu = () => {
   };
 
   /*
-   * Sprint 41.2 — header now shows the authenticated-user greeting instead of the generic
-   * "Builders" label (still available via BuildersLogoMark's tooltip/aria-label). Given a
-   * fixed dark background (not the theme-adaptive gray used elsewhere) so the greeting's
-   * `text-white`/`text-white/50` typography stays legible in light theme too — this is the
-   * only background change in this sprint, scoped to this header strip alone.
+   * Sprint 41.2 — header shows the authenticated-user greeting instead of the generic "Builders"
+   * label (still available via BuildersLogoMark's tooltip/aria-label).
+   *
+   * Landing Redesign follow-up — that sprint pinned this strip to a fixed dark `bg-[#171128]` so
+   * its hardcoded `text-white`/`text-white/50` stayed legible in light theme. The side effect was
+   * a dark band left across the top of an otherwise light sidebar. Fixed at the root instead: the
+   * typography now uses the same `--bolt-elements-text*` tokens as the rest of the sidebar, so the
+   * background is free to follow the theme like every other surface.
    */
   const collapsedDesktop = !isMobile && collapsed;
 
@@ -249,7 +252,7 @@ export const Menu = () => {
   const header = (
     <div
       className={classNames(
-        'flex items-center border-b border-purple-500/10 bg-[#171128] shrink-0',
+        'flex items-center border-b border-bolt-elements-borderColor bg-bolt-elements-background-depth-2 shrink-0',
         collapsedDesktop ? 'flex-col gap-2 py-3' : 'h-16 justify-between gap-2 px-4',
       )}
     >
@@ -259,8 +262,13 @@ export const Menu = () => {
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
           <BuildersLogoMark size={30} title="Builders" className="shrink-0" />
           <div className="min-w-0 flex-1">
-            <div className="text-lg font-semibold text-white truncate leading-tight">{greeting.title}</div>
-            <div className="text-xs text-white/50 uppercase tracking-wider truncate">{greeting.subtitle}</div>
+            <div className="text-lg font-semibold text-bolt-elements-textPrimary truncate leading-tight">
+              {greeting.title}
+            </div>
+            {/* textSecondary, not textTertiary: tertiary measures 3.78:1 on this surface, under the AA floor. */}
+            <div className="text-xs text-bolt-elements-textSecondary uppercase tracking-wider truncate">
+              {greeting.subtitle}
+            </div>
           </div>
         </div>
       )}
@@ -270,7 +278,7 @@ export const Menu = () => {
           size="xl"
           title="Close"
           onClick={() => setMobileOpen(false)}
-          className="text-white/60 hover:text-white shrink-0"
+          className="text-bolt-elements-textSecondary hover:text-bolt-elements-textPrimary shrink-0"
         />
       ) : (
         <IconButton
@@ -278,7 +286,7 @@ export const Menu = () => {
           size="xl"
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           onClick={toggleSidebarCollapsed}
-          className="text-white/60 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+          className="text-bolt-elements-textSecondary hover:text-bolt-elements-textPrimary hover:bg-bolt-elements-background-depth-3 transition-colors shrink-0"
         />
       )}
     </div>

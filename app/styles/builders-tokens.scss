@@ -110,6 +110,17 @@
   --builders-status-working-text: var(--builders-brand-hover);
   --builders-status-working-border: var(--builders-brand-primary);
   --builders-status-working-bg: var(--builders-brand-subtle-surface);
+
+  /* App note: Landing hero (see app/components/chat/HomeWorkflows.tsx). The hero is the only
+     full-bleed, marketing-weight surface in Builders, so its backdrop needs values no existing
+     token carried: a tinted base surface, two ambient glows, and a grid line. They live here
+     rather than as hardcoded rgba in the component precisely so light theme gets a designed
+     treatment instead of an inverted dark one — the light values are a bright lavender-white
+     surface with restrained accents, NOT the dark values lightened. */
+  --builders-hero-surface: color-mix(in srgb, var(--builders-brand-primary) 4%, theme('colors.white'));
+  --builders-hero-glow-primary: color-mix(in srgb, theme('colors.purple.400') 30%, transparent);
+  --builders-hero-glow-secondary: color-mix(in srgb, theme('colors.accent.400') 22%, transparent);
+  --builders-hero-grid-line: theme('colors.alpha.gray.5');
 }
 
 /* ── New concepts — Dark theme ────────────────────────────────────────── */
@@ -177,4 +188,12 @@
   --builders-status-working-text: theme('colors.purple.300');
   --builders-status-working-border: var(--builders-brand-primary);
   --builders-status-working-bg: var(--builders-brand-subtle-surface);
+
+  /* See the light-theme block's App note. Dark keeps the deep, near-black hero the redesign
+     shipped: a purple-tinted black rather than flat gray-950, so the glows read as bloom
+     against it instead of sitting on neutral gray. */
+  --builders-hero-surface: color-mix(in srgb, theme('colors.purple.950') 45%, theme('colors.black'));
+  --builders-hero-glow-primary: color-mix(in srgb, theme('colors.purple.600') 55%, transparent);
+  --builders-hero-glow-secondary: color-mix(in srgb, theme('colors.accent.500') 40%, transparent);
+  --builders-hero-grid-line: theme('colors.alpha.white.5');
 }
