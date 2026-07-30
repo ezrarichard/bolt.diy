@@ -15,9 +15,6 @@ import { getApiKeysFromCookies } from './APIKeyManager';
 import Cookies from 'js-cookie';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import styles from './BaseChat.module.scss';
-import { ImportButtons } from '~/components/chat/chatExportAndImport/ImportButtons';
-import { ExamplePrompts } from '~/components/chat/ExamplePrompts';
-import GitCloneButton from './GitCloneButton';
 import type { ProviderInfo } from '~/types/model';
 import { HomeWorkflows } from './HomeWorkflows';
 import {
@@ -25,6 +22,8 @@ import {
   BuildersStatsSection,
   RecentProjectsSection,
   BuildersActivitySection,
+  HOME_PROJECTS_ANCHOR_ID,
+  HOME_ACTIVITY_ANCHOR_ID,
 } from './HomeDashboardSections';
 import type { ActionAlert, SupabaseAlert, DeployAlert, LlmErrorAlertType } from '~/types/actions';
 import DeployChatAlert from '~/components/deploy/DeployAlert';
@@ -67,6 +66,15 @@ interface BaseChatProps {
   sendMessage?: (event: React.UIEvent, messageInput?: string) => void;
   handleInputChange?: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
   enhancePrompt?: () => void;
+
+  /**
+   * Landing Redesign — no longer consumed. The home screen's Import Chat / Import Folder /
+   * Clone-a-repo row was its only reader, and that row (with ImportButtons, ImportFolderButton
+   * and GitCloneButton) is gone. Kept on the props type because Chat.client.tsx still passes it:
+   * dropping it there shortens ChatImpl's parameter list enough that Prettier re-wraps and
+   * re-indents that whole 900-line component, which is a far bigger diff than this dead prop is
+   * worth. Safe to delete alongside the next intentional reformat of Chat.client.tsx.
+   */
   importChat?: (description: string, messages: Message[]) => Promise<void>;
   exportChat?: () => void;
   uploadedFiles?: File[];
@@ -114,7 +122,6 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
       enhancePrompt,
       sendMessage,
       handleStop,
-      importChat,
       exportChat,
       uploadedFiles = [],
       setUploadedFiles,
@@ -520,30 +527,31 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
               </StickToBottom.Content>
               {chatStarted && promptBox}
             </StickToBottom>
-            {/* Sprint 39.8 — ordered home-dashboard sections, each independently no-op when empty; a future "Pinned Project" section only needs inserting before ContinueWorkingSection here. */}
+            {/*
+              Sprint 39.8 — ordered home-dashboard sections, each independently no-op when empty; a future
+              "Pinned Project" section only needs inserting before ContinueWorkingSection here.
+
+              Landing Redesign — the two wrappers carry the anchor ids the hero's quick access cards scroll
+              to (HomeDashboardSections.tsx). `scroll-mt-6` keeps a scrolled-to section clear of the top edge.
+
+              Also removed here: the Import Chat / Import Folder / Clone-a-repo row and the ExamplePrompts
+              template chips. Both were shortcuts into the frozen Quick Build path, and the redesign makes
+              the New Project dialog the single way into Builders. Those were the only consumers of
+              ImportButtons/ImportFolderButton/GitCloneButton/ExamplePrompts and of BaseChat's `importChat`
+              prop, so all of them were deleted rather than left as unreachable code.
+            */}
             {!chatStarted && (
               <>
-                <ContinueWorkingSection />
-                <BuildersStatsSection />
-                <RecentProjectsSection />
-                <BuildersActivitySection />
+                <div id={HOME_PROJECTS_ANCHOR_ID} className="scroll-mt-6">
+                  <ContinueWorkingSection />
+                  <BuildersStatsSection />
+                  <RecentProjectsSection />
+                </div>
+                <div id={HOME_ACTIVITY_ANCHOR_ID} className="scroll-mt-6">
+                  <BuildersActivitySection />
+                </div>
               </>
             )}
-            <div className="flex flex-col justify-center">
-              {!chatStarted && (
-                <div className="flex justify-center gap-2">
-                  {ImportButtons(importChat)}
-                  <GitCloneButton importChat={importChat} />
-                </div>
-              )}
-              <div className="flex flex-col gap-5">
-                {!chatStarted &&
-                  ExamplePrompts((prompt) => {
-                    handleInputChange?.({ target: { value: prompt } } as React.ChangeEvent<HTMLTextAreaElement>);
-                    textareaRef?.current?.focus();
-                  })}
-              </div>
-            </div>
           </div>
           <ClientOnly>
             {() => (

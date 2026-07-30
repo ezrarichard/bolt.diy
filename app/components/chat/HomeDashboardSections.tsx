@@ -33,6 +33,14 @@ import { ACTIVITY_ICON, DEFAULT_ACTIVITY_ICON } from '~/components/sidebar/Proje
  * `ContinueWorkingSection` in that list, no other section needs to change.
  */
 
+/**
+ * Landing Redesign — anchor ids for the hero's quick access cards. BaseChat.tsx puts these on
+ * the wrappers around the sections below, so "My Projects" / "Recent Activity" scroll to real
+ * content on this page instead of navigating somewhere that doesn't exist.
+ */
+export const HOME_PROJECTS_ANCHOR_ID = 'home-projects';
+export const HOME_ACTIVITY_ANCHOR_ID = 'home-activity';
+
 const CONTINUE_WORKING_LIMIT = 3;
 const RECENT_PROJECTS_LIMIT = 6;
 const ACTIVITY_PROJECT_SCAN_LIMIT = 5;
@@ -172,8 +180,12 @@ function canOpenProject(project: Project): boolean {
   return project.projectType !== 'quick_build' || Boolean(project.linkedChatId);
 }
 
-/** Sprint 39.7's existing quick_build-vs-guided_engineering branch (Menu.client.tsx / HomeWorkflows.tsx) — reused verbatim, not reimplemented. */
-function openProject(project: Project, navigate: ReturnType<typeof useNavigate>) {
+/**
+ * Sprint 39.7's existing quick_build-vs-guided_engineering branch (Menu.client.tsx /
+ * HomeWorkflows.tsx) — reused verbatim, not reimplemented. Exported for the hero's
+ * "Open Recent Project" link so that link and these cards open a project the same way.
+ */
+export function openProject(project: Project, navigate: ReturnType<typeof useNavigate>) {
   currentProjectIdStore.set(project.id);
   touchProjectLastOpened(project.id);
 
@@ -183,6 +195,15 @@ function openProject(project: Project, navigate: ReturnType<typeof useNavigate>)
   }
 
   isProjectDashboardOpenStore.set(true);
+}
+
+/**
+ * Landing Redesign — the project the hero's "Open Recent Project" link should open: the
+ * most-recently-touched project that actually has somewhere to go (see `canOpenProject`).
+ * Undefined when there is none, which is how the hero knows to hide that link entirely.
+ */
+export function getMostRecentOpenableProject(projects: Project[]): Project | undefined {
+  return sortByRecency(projects).find(canOpenProject);
 }
 
 // ── Section: Continue Working ────────────────────────────────────────────
