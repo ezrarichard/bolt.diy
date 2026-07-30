@@ -20,6 +20,21 @@ Builders is an AI product engineering platform that coordinates specialized AI e
 > [!NOTE]
 > This README reflects the repository as implemented today. Items marked as future work are based on code comments and documentation in the repo, not on assumptions.
 
+## Documentation
+
+New to Builders? Start with the user guide.
+
+| Document | Audience | What it covers |
+|---|---|---|
+| **[User Guide (Early Access Edition)](docs/USER_GUIDE.md)** | First-time users, business analysts, developers, testers | End-to-end walkthrough: signing in, creating a project, Business Discovery, requirements, the product package, the Technical Architecture Specification, application generation, reviews, FAQ, troubleshooting, and tester guidelines |
+| [Executive Summary](docs/00-EXECUTIVE-SUMMARY.md) | Stakeholders | High-level overview of the platform |
+| [Product Requirements](docs/00-PRODUCT-REQUIREMENTS.md) | Product and engineering | What Builders itself is required to do |
+| [Documentation Roadmap](docs/DOCUMENTATION-ROADMAP.md) | Contributors | How the `docs/` tree is organised |
+| [Contributing](CONTRIBUTING.md) | Contributors | Development setup and contribution workflow |
+
+> [!TIP]
+> Testers should read [Section 17 — Tester Guidelines](docs/USER_GUIDE.md#17-tester-guidelines) before starting, and use the bug-report format described there.
+
 ## Vision
 
 **Mission:** Build the platform once. Build unlimited products.
