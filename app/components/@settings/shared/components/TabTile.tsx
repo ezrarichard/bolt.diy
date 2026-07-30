@@ -2,7 +2,29 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { classNames } from '~/utils/classNames';
 import type { TabVisibilityConfig } from '~/components/@settings/core/types';
 import { TAB_LABELS, TAB_ICONS } from '~/components/@settings/core/constants';
-import { GlowingEffect } from '~/components/ui/GlowingEffect';
+
+/**
+ * Control Panel settings card — Control Panel Modernization.
+ *
+ * Was a ~370x250px centre-aligned tile (a 12x12 icon medallion stacked over a centred title and
+ * wrapped description, held to `aspect-[1.5/1]` by the caller) which fitted five cards in a
+ * 1440x900 viewport. This is the same card as a compact horizontal row — icon, title, one-line
+ * description, optional badge, chevron — at a fixed ~68px height, so the whole settings surface is
+ * legible at a glance the way Linear/Vercel/Raycast settings are.
+ *
+ * Behaviour is deliberately unchanged: same props, same `onClick`, same loading/active/update
+ * states, same Radix tooltip carrying `statusMessage`. Only presentation moved.
+ *
+ * Two structural changes worth naming:
+ *  - It renders a real `<button>` rather than a `<div role="button">`, so keyboard activation,
+ *    focus order and disabled semantics come from the platform instead of hand-rolled key
+ *    handling. `appearance-none` + an explicit background are required with it — a bare `<button>`
+ *    paints the native `buttonface` grey, the bug ProjectWorkflowBar.tsx documents.
+ *  - `GlowingEffect` (a per-card pointer-tracking canvas) is gone in favour of a CSS hover glow:
+ *    twelve simultaneous pointer listeners cost more than the effect was worth at this size, and
+ *    the CSS version themes correctly from tokens. The component itself is untouched and still
+ *    exported for other callers.
+ */
 
 interface TabTileProps {
   tab: TabVisibilityConfig;
@@ -13,7 +35,9 @@ interface TabTileProps {
   description?: string;
   isLoading?: boolean;
   className?: string;
-  children?: React.ReactNode;
+
+  /** Short qualifier shown top-right, e.g. "Beta". Rendered only when provided. */
+  badge?: string;
 }
 
 export const TabTile: React.FC<TabTileProps> = ({
@@ -25,141 +49,97 @@ export const TabTile: React.FC<TabTileProps> = ({
   description,
   isLoading,
   className,
-  children,
+  badge,
 }: TabTileProps) => {
+  const IconComponent = TAB_ICONS[tab.id];
+
+  const card = (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={isLoading}
+      aria-current={isActive ? 'page' : undefined}
+      className={classNames(
+        'group relative flex items-center gap-3 w-full h-[68px] px-3.5 rounded-xl text-left',
+        'appearance-none border bg-bolt-elements-background-depth-2/70 backdrop-blur-sm',
+        'transition-all duration-200 ease-out',
+        'hover:-translate-y-px hover:bg-bolt-elements-background-depth-2',
+        'hover:border-builders-brand-primary/50 hover:shadow-lg hover:shadow-builders-brand-primary/10',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-builders-border-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bolt-elements-background-depth-1',
+        isActive
+          ? 'border-builders-brand-primary/60 bg-builders-brand-subtleSurface'
+          : 'border-bolt-elements-borderColor/60',
+        isLoading ? 'cursor-wait opacity-60' : 'cursor-pointer',
+        className || '',
+      )}
+    >
+      <span
+        className={classNames(
+          'flex items-center justify-center w-9 h-9 rounded-lg shrink-0 border',
+          'transition-colors duration-200 ease-out',
+          isActive
+            ? 'border-builders-brand-primary/50 bg-builders-brand-subtleSurface'
+            : 'border-bolt-elements-borderColor/60 bg-bolt-elements-background-depth-3',
+          'group-hover:border-builders-brand-primary/50 group-hover:bg-builders-brand-subtleSurface',
+        )}
+      >
+        <IconComponent className="w-[18px] h-[18px] text-builders-brand-primary" />
+      </span>
+
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5">
+          <span className="block text-[13px] font-semibold leading-tight text-bolt-elements-textPrimary truncate">
+            {TAB_LABELS[tab.id]}
+          </span>
+          {hasUpdate && (
+            <span aria-hidden className="w-1.5 h-1.5 rounded-full bg-builders-brand-primary shrink-0 animate-pulse" />
+          )}
+        </span>
+        {description && (
+          <span className="block mt-0.5 text-[11px] leading-tight text-bolt-elements-textSecondary truncate">
+            {description}
+          </span>
+        )}
+      </span>
+
+      {badge && (
+        <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-wide bg-builders-brand-subtleSurface text-builders-brand-primary border border-builders-brand-primary/30">
+          {badge}
+        </span>
+      )}
+
+      {/* Click affordance — nudges right on hover, the one bit of icon motion in the card. */}
+      <span
+        aria-hidden
+        className="i-ph:caret-right w-3.5 h-3.5 shrink-0 text-bolt-elements-textTertiary transition-all duration-200 group-hover:text-builders-brand-primary group-hover:translate-x-0.5"
+      />
+    </button>
+  );
+
+  /* Only cards that actually have something to say get a tooltip — previously every card mounted a Provider/Root pair. */
+  if (!hasUpdate || !statusMessage) {
+    return card;
+  }
+
   return (
     <Tooltip.Provider delayDuration={0}>
       <Tooltip.Root>
-        <Tooltip.Trigger asChild>
-          <div className={classNames('min-h-[160px] list-none', className || '')}>
-            <div className="relative h-full rounded-xl border border-bolt-elements-borderColor/40 dark:border-white/[0.06] p-0.5">
-              <GlowingEffect
-                blur={0}
-                borderWidth={1}
-                spread={20}
-                glow={true}
-                disabled={false}
-                proximity={40}
-                inactiveZone={0.3}
-                movementDuration={0.4}
-              />
-              <div
-                onClick={onClick}
-                role="button"
-                tabIndex={isLoading ? -1 : 0}
-                onKeyDown={(event) => {
-                  if (!isLoading && (event.key === 'Enter' || event.key === ' ')) {
-                    event.preventDefault();
-                    onClick?.();
-                  }
-                }}
-                className={classNames(
-                  'relative flex flex-col items-center justify-center h-full p-5 rounded-xl',
-                  'bg-[#F7F7F8]/90 dark:bg-[#161616]/80 backdrop-blur-md',
-                  'border border-black/[0.05] dark:border-white/[0.05]',
-                  'group cursor-pointer',
-                  'shadow-sm hover:shadow-lg hover:shadow-purple-500/5 dark:hover:shadow-black/20',
-                  'hover:-translate-y-0.5 hover:border-purple-500/25 dark:hover:border-purple-500/20',
-                  'hover:bg-[#F1EFFB]/90 dark:hover:bg-[#1e1e1e]/90',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bolt-elements-background-depth-1',
-                  'transition-all duration-200 ease-out',
-                  isActive
-                    ? 'bg-purple-500/5 dark:bg-purple-500/10 border-purple-500/30 dark:border-purple-500/25'
-                    : '',
-                  isLoading ? 'cursor-wait opacity-70 pointer-events-none' : '',
-                )}
-              >
-                {/* Icon */}
-                <div
-                  className={classNames(
-                    'relative',
-                    'w-12 h-12',
-                    'flex items-center justify-center',
-                    'rounded-full',
-                    'bg-purple-500/8 dark:bg-purple-500/10',
-                    'ring-1 ring-purple-500/10 dark:ring-purple-500/15',
-                    'group-hover:bg-purple-500/15 dark:group-hover:bg-purple-500/20',
-                    'group-hover:ring-purple-500/30 dark:group-hover:ring-purple-500/30',
-                    'group-hover:scale-105',
-                    'transition-all duration-200 ease-out',
-                    isActive ? 'bg-purple-500/15 dark:bg-purple-500/20 ring-purple-500/40 dark:ring-purple-500/40' : '',
-                  )}
-                >
-                  {(() => {
-                    const IconComponent = TAB_ICONS[tab.id];
-                    return (
-                      <IconComponent
-                        className={classNames(
-                          'w-6 h-6',
-                          'text-purple-600/80 dark:text-purple-400/80',
-                          'group-hover:text-purple-600 dark:group-hover:text-purple-300',
-                          'transition-colors duration-200 ease-out',
-                          isActive ? 'text-purple-600 dark:text-purple-300' : '',
-                        )}
-                      />
-                    );
-                  })()}
-                </div>
-
-                {/* Label and Description */}
-                <div className="flex flex-col items-center mt-4 w-full">
-                  <h3
-                    className={classNames(
-                      'text-[14px] font-semibold tracking-tight leading-snug mb-1.5',
-                      'text-bolt-elements-textPrimary',
-                      'group-hover:text-purple-600 dark:group-hover:text-purple-300/90',
-                      'transition-colors duration-200 ease-out',
-                      isActive ? 'text-purple-600 dark:text-purple-400/90' : '',
-                    )}
-                  >
-                    {TAB_LABELS[tab.id]}
-                  </h3>
-                  {description && (
-                    <p
-                      className={classNames(
-                        'text-[12px] leading-relaxed',
-                        'text-bolt-elements-textTertiary',
-                        'max-w-[85%]',
-                        'text-center',
-                        'group-hover:text-purple-500/80 dark:group-hover:text-purple-400/70',
-                        'transition-colors duration-200 ease-out',
-                        isActive ? 'text-purple-400 dark:text-purple-400/80' : '',
-                      )}
-                    >
-                      {description}
-                    </p>
-                  )}
-                </div>
-
-                {/* Update Indicator with Tooltip */}
-                {hasUpdate && (
-                  <>
-                    <div className="absolute top-4 right-4 w-2 h-2 rounded-full bg-purple-500 dark:bg-purple-400 animate-pulse" />
-                    <Tooltip.Portal>
-                      <Tooltip.Content
-                        className={classNames(
-                          'px-3 py-1.5 rounded-lg',
-                          'bg-[#18181B] text-white',
-                          'text-sm font-medium',
-                          'select-none',
-                          'z-[100]',
-                        )}
-                        side="top"
-                        sideOffset={5}
-                      >
-                        {statusMessage}
-                        <Tooltip.Arrow className="fill-[#18181B]" />
-                      </Tooltip.Content>
-                    </Tooltip.Portal>
-                  </>
-                )}
-
-                {/* Children (e.g. Beta Label) */}
-                {children}
-              </div>
-            </div>
-          </div>
-        </Tooltip.Trigger>
+        <Tooltip.Trigger asChild>{card}</Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content
+            className={classNames(
+              'px-2.5 py-1.5 rounded-lg z-[110] select-none',
+              'bg-bolt-elements-background-depth-3 text-bolt-elements-textPrimary',
+              'border border-bolt-elements-borderColor shadow-lg',
+              'text-xs font-medium',
+            )}
+            side="top"
+            sideOffset={6}
+          >
+            {statusMessage}
+            <Tooltip.Arrow className="fill-bolt-elements-borderColor" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
       </Tooltip.Root>
     </Tooltip.Provider>
   );

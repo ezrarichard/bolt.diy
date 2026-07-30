@@ -35,21 +35,24 @@ interface ControlPanelProps {
   onClose: () => void;
 }
 
-// Beta status for experimental features
-const BETA_TABS = new Set<TabType>(['local-providers', 'mcp']);
-
 /*
  * Groups the control panel grid into labeled sections, purely for presentation.
  * This does not affect tab visibility/order logic — visibleTabs (driven by
  * tabConfigurationStore) is still the single source of truth for what renders;
  * this just buckets that same list under headings.
+ *
+ * Control Panel Modernization — ordered Workspace -> AI -> Infrastructure, nearest-to-daily-use
+ * first. Section membership is unchanged; only the order of the three groups moved. There is no
+ * "Developer" section because this build ships no diagnostics/feature-flag/system-info tab — the
+ * `More` fallback below still catches any tab type that is not listed here, so nothing can be
+ * silently dropped by adding a section.
  */
 const PANEL_SECTIONS: { id: string; label: string; icon: string; tabs: TabType[] }[] = [
   {
-    id: 'infrastructure',
-    label: 'Infrastructure',
-    icon: 'i-ph:cloud-arrow-up-duotone',
-    tabs: ['github', 'gitlab', 'supabase', 'vercel', 'netlify'],
+    id: 'workspace',
+    label: 'Workspace',
+    icon: 'i-ph:squares-four-duotone',
+    tabs: ['features', 'data', 'notifications', 'event-logs'],
   },
   {
     id: 'ai',
@@ -58,18 +61,18 @@ const PANEL_SECTIONS: { id: string; label: string; icon: string; tabs: TabType[]
     tabs: ['cloud-providers', 'local-providers', 'mcp'],
   },
   {
-    id: 'workspace',
-    label: 'Workspace',
-    icon: 'i-ph:squares-four-duotone',
-    tabs: ['data', 'notifications', 'event-logs', 'features'],
+    id: 'infrastructure',
+    label: 'Infrastructure',
+    icon: 'i-ph:cloud-arrow-up-duotone',
+    tabs: ['github', 'gitlab', 'supabase', 'vercel', 'netlify'],
   },
 ];
 
-const BetaLabel = () => (
-  <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-full bg-purple-500/10 dark:bg-purple-500/20">
-    <span className="text-[10px] font-medium text-purple-600 dark:text-purple-400">BETA</span>
-  </div>
-);
+/** Badge text per tab. Only states the app can actually back with data — no invented "Connected"/"Coming Soon". */
+const TAB_BADGES: Partial<Record<TabType, string>> = {
+  'local-providers': 'Beta',
+  mcp: 'Beta',
+};
 
 export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
   // State
@@ -260,9 +263,14 @@ export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
             onPointerDownOutside={handleClose}
             className="relative z-[101]"
           >
+            {/*
+              Height follows content up to a ceiling instead of always claiming 90vh. With the
+              compact cards the landing grid is ~600px tall, so a fixed 90vh left a large empty
+              band under the last section; drilled-into tabs still grow to the full 88vh.
+            */}
             <div
               className={classNames(
-                'w-[1200px] h-[90vh]',
+                'w-[min(1120px,94vw)] max-h-[88vh] min-h-[420px]',
                 'bg-bolt-elements-background-depth-1',
                 'rounded-2xl shadow-2xl',
                 'border border-bolt-elements-borderColor',
@@ -275,35 +283,47 @@ export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
               <div className="absolute inset-0 overflow-hidden rounded-2xl">
                 <BackgroundRays />
               </div>
-              <div className="relative z-10 flex flex-col h-full">
-                {/* Header */}
-                <div className="flex items-center justify-between px-6 py-4 border-b border-bolt-elements-borderColor/60">
-                  <div className="flex items-center space-x-4">
+              {/*
+                `flex-1 min-h-0`, not `h-full`. The panel's height is now capped by `max-h` rather than
+                fixed, so it has no definite height for a percentage to resolve against — `h-full`
+                silently became `auto`, the scroller below grew to its content instead of scrolling, and
+                the outer `overflow-hidden` clipped the final card with no way to reach it. `min-h-0` is
+                what lets the scroller shrink below its content inside this flex column.
+              */}
+              <div className="relative z-10 flex flex-col flex-1 min-h-0">
+                {/* Header — title carries a subtitle on the landing view only; a drilled-into tab keeps its own name alone. */}
+                <div className="flex items-start justify-between gap-4 px-6 py-4 border-b border-bolt-elements-borderColor/60">
+                  <div className="flex items-start gap-3 min-w-0">
                     {(activeTab || showTabManagement) && (
                       <button
                         onClick={handleBack}
-                        className="flex items-center justify-center w-8 h-8 rounded-full bg-transparent hover:bg-purple-500/10 dark:hover:bg-purple-500/20 group transition-colors duration-150"
+                        aria-label="Back"
+                        className="flex items-center justify-center w-8 h-8 mt-0.5 shrink-0 rounded-lg bg-transparent border-0 appearance-none hover:bg-builders-brand-subtleSurface group transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-builders-border-focus"
                       >
-                        <div className="i-ph:arrow-left w-4 h-4 text-bolt-elements-textTertiary group-hover:text-purple-500 transition-colors" />
+                        <div className="i-ph:arrow-left w-4 h-4 text-bolt-elements-textSecondary group-hover:text-builders-brand-primary transition-colors" />
                       </button>
                     )}
-                    <DialogTitle className="text-xl font-semibold tracking-tight text-bolt-elements-textPrimary">
-                      {showTabManagement ? 'Tab Management' : activeTab ? TAB_LABELS[activeTab] : 'Control Panel'}
-                    </DialogTitle>
+                    <div className="min-w-0">
+                      <DialogTitle className="text-lg font-semibold tracking-tight text-bolt-elements-textPrimary truncate">
+                        {showTabManagement ? 'Tab Management' : activeTab ? TAB_LABELS[activeTab] : 'Control Panel'}
+                      </DialogTitle>
+                      {!activeTab && !showTabManagement && (
+                        <p className="mt-0.5 text-xs text-bolt-elements-textSecondary">
+                          Configure Builders, AI providers, infrastructure and workspace preferences.
+                        </p>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="flex items-center gap-6">
-                    {/* Avatar and Dropdown */}
-                    <div className="pl-6">
-                      <AvatarDropdown onSelectTab={handleTabClick} />
-                    </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <AvatarDropdown onSelectTab={handleTabClick} />
 
-                    {/* Close Button */}
                     <button
                       onClick={handleClose}
-                      className="flex items-center justify-center w-8 h-8 rounded-full bg-transparent hover:bg-purple-500/10 dark:hover:bg-purple-500/20 group transition-all duration-200"
+                      aria-label="Close control panel"
+                      className="flex items-center justify-center w-8 h-8 rounded-lg bg-transparent border-0 appearance-none hover:bg-builders-brand-subtleSurface group transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-builders-border-focus"
                     >
-                      <div className="i-ph:x w-4 h-4 text-bolt-elements-textTertiary group-hover:text-purple-500 transition-colors" />
+                      <div className="i-ph:x w-4 h-4 text-bolt-elements-textSecondary group-hover:text-builders-brand-primary transition-colors" />
                     </button>
                   </div>
                 </div>
@@ -311,7 +331,7 @@ export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
                 {/* Content */}
                 <div
                   className={classNames(
-                    'flex-1',
+                    'flex-1 min-h-0',
                     'overflow-y-auto',
                     'hover:overflow-y-auto',
                     'scrollbar scrollbar-w-2',
@@ -322,16 +342,11 @@ export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
                     'touch-auto',
                   )}
                 >
-                  <div
-                    className={classNames(
-                      'p-6 transition-opacity duration-150',
-                      activeTab || showTabManagement ? 'opacity-100' : 'opacity-100',
-                    )}
-                  >
+                  <div className="px-6 py-5">
                     {activeTab ? (
                       getTabComponent(activeTab)
                     ) : (
-                      <div className="flex flex-col gap-8">
+                      <div className="flex flex-col gap-6">
                         {(() => {
                           let tileIndex = 0;
                           const sectioned = PANEL_SECTIONS.map((section) => ({
@@ -358,27 +373,34 @@ export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
 
                           return sectioned.map((section) => (
                             <div key={section.id}>
-                              <div className="flex items-center gap-2 mb-4">
-                                <div className={classNames(section.icon, 'w-4 h-4 text-purple-500/70')} />
-                                <h2 className="text-[13px] font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">
+                              <div className="flex items-center gap-2 mb-3">
+                                <div className={classNames(section.icon, 'w-4 h-4 text-builders-brand-primary')} />
+                                <h2 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-bolt-elements-textSecondary">
                                   {section.label}
                                 </h2>
-                                <div className="flex-1 h-px bg-bolt-elements-borderColor/40" />
+                                {/* textSecondary, not textTertiary: tertiary measures 4.18:1 here in dark theme, under the AA floor for 11px text. */}
+                                <span className="text-[11px] text-bolt-elements-textSecondary tabular-nums">
+                                  {section.items.length}
+                                </span>
+                                <div className="flex-1 h-px bg-bolt-elements-borderColor/50" />
                               </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 relative">
+                              {/*
+                                Two columns, not three. The dialog is width-capped, so a third column only
+                                narrows each card to ~355px — enough to truncate the longer descriptions
+                                ("Configure MCP (Model Context Protocol) servers") without buying any
+                                vertical space worth having. At two columns every description fits whole and
+                                all twelve cards still land on one screen.
+                              */}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                                 {section.items.map((tab) => {
                                   const index = tileIndex++;
 
                                   return (
                                     <div
                                       key={tab.id}
-                                      className={classNames(
-                                        'aspect-[1.5/1] transition-transform duration-100 ease-out',
-                                        'hover:scale-[1.01]',
-                                      )}
                                       style={{
-                                        animationDelay: `${index * 30}ms`,
-                                        animation: open ? 'fadeInUp 200ms ease-out forwards' : 'none',
+                                        animationDelay: `${index * 20}ms`,
+                                        animation: open ? 'fadeInUp 180ms ease-out forwards' : 'none',
                                       }}
                                     >
                                       <TabTile
@@ -389,10 +411,8 @@ export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
                                         statusMessage={getStatusMessage(tab.id)}
                                         description={TAB_DESCRIPTIONS[tab.id]}
                                         isLoading={loadingTab === tab.id}
-                                        className="h-full relative"
-                                      >
-                                        {BETA_TABS.has(tab.id) && <BetaLabel />}
-                                      </TabTile>
+                                        badge={TAB_BADGES[tab.id as TabType]}
+                                      />
                                     </div>
                                   );
                                 })}
