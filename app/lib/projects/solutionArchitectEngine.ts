@@ -11,7 +11,12 @@ import {
 } from './artifacts';
 import { hasLegacyEngineeringProgress } from './productOwnerEngine';
 import type { EngineeringHandoff, ProductOwnerDraft } from './prompts/productOwner';
-import { parseStructuredDraft, type ParsedDraftResult } from './draftParsing';
+import { extractJsonPayload, parseStructuredDraft, type ParsedDraftResult } from './draftParsing';
+import {
+  EMPTY_TAS,
+  parseTechnicalArchitectureSpec,
+  type TechnicalArchitectureSpecification,
+} from '~/lib/technical-architecture/tasTypes';
 import {
   gatherAIDecisions,
   gatherEngineeringNotes,
@@ -201,27 +206,98 @@ function buildArchitecturePrompt(context: ArchitectureContext): { system: string
 /**
  * Parses the AI's raw text response into an `ArchitectureDraft` via the
  * shared generic parser (app/lib/projects/draftParsing.ts), validated
- * field-by-field against ARCHITECTURE_DRAFT_FIELDS.
+ * field-by-field against ARCHITECTURE_DRAFT_FIELDS, PLUS (Sprint 100B) the
+ * separate `technicalArchitecture` block from the SAME JSON response,
+ * validated via `parseTechnicalArchitectureSpec` (which never throws/fails —
+ * malformed or missing input just degrades to `EMPTY_TAS`, so a pre-100B-shape
+ * response never breaks the narrative draft's approval flow).
+ *
+ * Deliberately identical in shape to databaseDesignerEngine.parseDraft's
+ * Sprint 75 handling of `structuredSchema`: one LLM call, one JSON payload,
+ * two independently-parsed outputs. The AI is never asked twice.
  */
 function parseDraft(rawText: string): ParsedArchitectureDraft {
-  return parseStructuredDraft<ArchitectureDraft>(rawText, ARCHITECTURE_DRAFT_FIELDS);
+  const result = parseStructuredDraft<ArchitectureDraft>(rawText, ARCHITECTURE_DRAFT_FIELDS);
+
+  if (!result.ok) {
+    return result;
+  }
+
+  let rawTas: unknown;
+
+  try {
+    rawTas = (JSON.parse(extractJsonPayload(rawText)) as Record<string, unknown>).technicalArchitecture;
+  } catch {
+    rawTas = undefined;
+  }
+
+  return { ok: true, draft: { ...result.draft, technicalArchitecture: parseTechnicalArchitectureSpec(rawTas) } };
 }
 
 /**
- * Builds an Architecture Draft artifact holding the parsed draft as JSON.
- * Approving this artifact only ever changes its own `status` — it never
- * mutates Project Knowledge or any database/frontend/backend artifact.
+ * Builds an Architecture Draft artifact holding the parsed NARRATIVE draft as
+ * JSON — `technicalArchitecture` is deliberately stripped here (it is persisted
+ * separately via `createTechnicalArchitectureArtifact` below) so this artifact's
+ * shape never changes size/content because of Sprint 100B's addition. That
+ * stripping is what makes the change invisible to every existing reader of this
+ * artifact. Approving it only ever changes its own `status` — it never mutates
+ * Project Knowledge or any database/frontend/backend artifact.
  */
 function createDraftArtifact(draft: ArchitectureDraft, version: number): ProjectArtifact {
+  const { technicalArchitecture: _technicalArchitecture, ...narrative } = draft;
+
   return createArtifact({
     taskId: ARTIFACT_TASK_ID,
     title: `Architecture Draft v${version}`,
     type: ARTIFACT_TYPE,
-    content: JSON.stringify(draft, null, 2),
+    content: JSON.stringify(narrative, null, 2),
     status: 'draft',
     generatedBy: GENERATOR_NAME,
     version,
   });
+}
+
+/**
+ * Sprint 100B — builds the paired, machine-readable
+ * TECHNICAL_ARCHITECTURE_SPEC artifact from the same parsed draft's
+ * `technicalArchitecture` field. Passed to useDraftPanel.ts as
+ * `createPairedArtifact` so it is created/approved/discarded in lockstep with
+ * `createDraftArtifact` above, always at the exact same version — never a
+ * separate action, and never reachable through an entry point that could move
+ * one without the other.
+ */
+function createTechnicalArchitectureArtifact(draft: ArchitectureDraft, version: number): ProjectArtifact {
+  const tas: TechnicalArchitectureSpecification = draft.technicalArchitecture ?? EMPTY_TAS;
+
+  return createArtifact({
+    taskId: ARTIFACT_TASK_ID,
+    title: `Technical Architecture Specification v${version}`,
+    type: ARTIFACT_TYPES.TECHNICAL_ARCHITECTURE_SPEC,
+    content: JSON.stringify(tas, null, 2),
+    status: 'draft',
+    generatedBy: GENERATOR_NAME,
+    version,
+  });
+}
+
+/**
+ * Reads the latest approved TECHNICAL_ARCHITECTURE_SPEC artifact, or `undefined`
+ * for any project that has none — which is every project created before Sprint
+ * 100B, and is a permanently valid state rather than an error.
+ *
+ * NO CALLER IN SPRINT 100B. Provided so Sprint 100C's consumers have one
+ * retrieval path rather than each re-deriving artifact lookup, exactly as
+ * `databaseDesignerEngine.getApprovedStructuredSchema` does for the schema pair.
+ * Returns the parsed spec (not raw content) so a stored artifact written by an
+ * older shape still reads as a valid, if empty, spec.
+ */
+function getApprovedTechnicalArchitecture(project: Project): TechnicalArchitectureSpecification | undefined {
+  const raw = getApprovedArtifactContent<unknown>(
+    getProjectArtifacts(project),
+    ARTIFACT_TYPES.TECHNICAL_ARCHITECTURE_SPEC,
+  );
+
+  return raw === undefined ? undefined : parseTechnicalArchitectureSpec(raw);
 }
 
 export const solutionArchitectEngine = {
@@ -230,4 +306,6 @@ export const solutionArchitectEngine = {
   buildArchitecturePrompt,
   parseDraft,
   createDraftArtifact,
+  createTechnicalArchitectureArtifact,
+  getApprovedTechnicalArchitecture,
 };

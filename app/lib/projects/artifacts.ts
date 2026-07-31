@@ -106,6 +106,25 @@ export const ARTIFACT_TYPES = {
   /** Sprint 46B — the AI Product Owner's output. Product Planning phase, not Engineering — sits between Requirements and Architecture. See app/lib/projects/productOwnerEngine.ts. */
   PRODUCT_OWNER_DRAFT: 'product-owner-draft',
   ARCHITECTURE_DRAFT: 'architecture-draft',
+
+  /**
+   * Sprint 100B — the Solution Architect's machine-readable counterpart to
+   * ARCHITECTURE_DRAFT above, produced by the same LLM call but persisted as its
+   * own first-class artifact (see app/lib/technical-architecture/tasTypes.ts's
+   * `TechnicalArchitectureSpecification`) so the Application Generator and the
+   * downstream engineering roles never have to re-interpret the narrative
+   * draft's prose — or, as today, never receive its decisions at all. Kept in
+   * lockstep with ARCHITECTURE_DRAFT by solutionArchitectEngine.ts +
+   * useDraftPanel.ts's `pairedArtifactType` — same version number,
+   * approved/discarded/resumed together, never independently. Deliberately the
+   * exact DATABASE_DRAFT/DATABASE_SCHEMA pattern below.
+   *
+   * NOTHING CONSUMES THIS YET. Sprint 100B produces and persists it only; wiring
+   * it into downstream roles and the generator is Sprint 100C. Its absence is
+   * always valid — every project created before Sprint 100B has an
+   * ARCHITECTURE_DRAFT and no TAS, and must keep working exactly as it does.
+   */
+  TECHNICAL_ARCHITECTURE_SPEC: 'technical-architecture',
   DATABASE_DRAFT: 'database-draft',
 
   /**
@@ -144,6 +163,23 @@ export const ARTIFACT_TYPES = {
    * app/lib/projects/roadmapReviewEngine.ts's `completePlanning`.
    */
   ROADMAP_REVIEW_ANALYSIS: 'roadmap-review-analysis',
+
+  /**
+   * Sprint 100G — the Architecture Conformance Report, produced after a successful generation by
+   * comparing the approved TECHNICAL_ARCHITECTURE_SPEC against the files that were actually
+   * generated (see app/lib/architecture-conformance/).
+   *
+   * A normal artifact, deliberately: it gets version history, JSON/Markdown viewing, export and
+   * timeline consistency for free, and Sprint 100G's brief asked for no parallel reporting system
+   * where an existing pattern fits. Same engine-written shape as PRODUCT_REVIEW_ANALYSIS and
+   * ROADMAP_REVIEW_ANALYSIS above — it has no `canGenerate` gate, no place in
+   * AUTO_ENGINEERING_ROLES, and is never produced by an AI call.
+   *
+   * ADVISORY. Its content never blocks or fails a generation; a run that produces violations still
+   * completes. Written at status 'final' because there is nothing for a human to approve — it is a
+   * measurement, not a proposal.
+   */
+  ARCHITECTURE_CONFORMANCE_REPORT: 'architecture-conformance-report',
 } as const;
 
 /**

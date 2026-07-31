@@ -59,6 +59,47 @@ export interface AutoEngineeringRole {
   buildPrompt: (context: any) => { system: string; prompt: string };
   parseDraft: (rawText: string) => ParsedDraftResult<any>;
   createDraftArtifact: (draft: any, version: number) => ProjectArtifact;
+
+  /**
+   * Sprint 100C — the role's optional lockstep-paired artifact, declared HERE rather than in
+   * each orchestrator or panel.
+   *
+   * WHY THE REGISTRY OWNS THIS. Before this sprint, pairing was declared only in the
+   * "*DraftPanel" components (`useDraftPanel`'s `pairedArtifactType`/`createPairedArtifact`),
+   * so the manual path produced a pair and the autonomous path — which reads this registry —
+   * silently did not. That is Sprint 100B's L1, and it is a whole CLASS of bug: any second
+   * execution path added later would have had the same gap, because nothing declared, in one
+   * place, that a role produces two artifacts.
+   *
+   * Both orchestrators now read pairing from this registry (see
+   * `useAutoEngineeringPipeline.ts` and `ArchitectureDraftPanel.tsx`'s
+   * `pairedArtifactConfigFor`), so a role's artifact contract is stated exactly once and every
+   * path is bound to the same declaration. Roles without a pair leave both fields undefined
+   * and are entirely unaffected.
+   *
+   * NOTHING CONSUMES THESE ARTIFACTS. Sprint 100C is artifact availability only.
+   */
+  pairedArtifactType?: string;
+  createPairedArtifact?: (draft: any, version: number) => ProjectArtifact;
+
+  /**
+   * Sprint 100D — the pair is DECLARED here (so this registry stays the complete inventory, and
+   * both the manual path and the incremental baseline read it) but is NOT yet produced by the
+   * autonomous pipeline.
+   *
+   * This exists for exactly one role, the Database Engineer, and for one reason. Its
+   * DATABASE_DRAFT/DATABASE_SCHEMA pair predates the registry mechanism (Sprint 75) and has
+   * never been produced autonomously, so `databaseActivationService.generateDatabaseSchema` —
+   * a user-triggered button — currently refuses for autonomously-generated projects. Producing
+   * the pair there would make that button start working, which is a real change in downstream
+   * behaviour and therefore out of scope for a consolidation sprint (Sprint 100D's brief: "If
+   * migration introduces behavioural changes: Stop. Do not force the migration.").
+   *
+   * The flag is DATA, not a special case: orchestrators read it generically and still hold no
+   * role-specific knowledge. Deleting this one line is the entire remaining migration — see the
+   * Sprint 100D report's deferral record.
+   */
+  deferAutonomousPairing?: boolean;
 }
 
 /** Matches every "*DraftPanel" component's MAX_OUTPUT_TOKENS today (Architecture, Database, UI/UX, Backend, Frontend, QA, DevOps all use 8192) — the autonomous pipeline asks for exactly the same budget a human-driven generation would have. */
@@ -100,6 +141,10 @@ export const AUTO_ENGINEERING_ROLES: AutoEngineeringRole[] = [
     buildPrompt: solutionArchitectEngine.buildArchitecturePrompt,
     parseDraft: solutionArchitectEngine.parseDraft,
     createDraftArtifact: solutionArchitectEngine.createDraftArtifact,
+
+    /* Sprint 100C — the Technical Architecture Specification, produced by the same LLM call. See the interface comment above. */
+    pairedArtifactType: ARTIFACT_TYPES.TECHNICAL_ARCHITECTURE_SPEC,
+    createPairedArtifact: solutionArchitectEngine.createTechnicalArchitectureArtifact,
   },
   {
     id: 'database',
@@ -111,6 +156,15 @@ export const AUTO_ENGINEERING_ROLES: AutoEngineeringRole[] = [
     buildPrompt: databaseDesignerEngine.buildDatabasePrompt,
     parseDraft: databaseDesignerEngine.parseDraft,
     createDraftArtifact: databaseDesignerEngine.createDraftArtifact,
+
+    /*
+     * Sprint 100D — the Sprint 75 DATABASE_SCHEMA pair, moved here from DatabaseDraftPanel so
+     * this registry is the complete pairing inventory. `deferAutonomousPairing` keeps the
+     * autonomous path's behaviour exactly as it was; see the interface comment above.
+     */
+    pairedArtifactType: ARTIFACT_TYPES.DATABASE_SCHEMA,
+    createPairedArtifact: databaseDesignerEngine.createSchemaArtifact,
+    deferAutonomousPairing: true,
   },
   {
     id: 'uiux',
@@ -190,6 +244,71 @@ export function getNextAutoRole(project: Project): AutoEngineeringRole | undefin
   return AUTO_ENGINEERING_ROLES.find(
     (role) => !getLatestApprovedArtifact(artifacts, role.artifactType) && role.canGenerate(project),
   );
+}
+
+/** The registry entry for a role id, or undefined for an id the pipeline doesn't contain. */
+export function findAutoEngineeringRole(roleId: string): AutoEngineeringRole | undefined {
+  return AUTO_ENGINEERING_ROLES.find((role) => role.id === roleId);
+}
+
+/**
+ * Sprint 100C — a role's paired-artifact declaration, shaped to drop straight into
+ * `useDraftPanel`'s config so a "*DraftPanel" component never restates it.
+ *
+ * This is the point of the sprint. A panel that spreads this in and an orchestrator that reads
+ * the same registry entry cannot disagree about whether a role produces a pair — which is
+ * exactly how the manual and autonomous paths drifted apart in Sprint 100B (L1). Returns an
+ * empty object for roles without a pair, so spreading it is always safe.
+ */
+export function pairedArtifactConfigFor(roleId: string): {
+  pairedArtifactType?: string;
+  createPairedArtifact?: (draft: any, version: number) => ProjectArtifact;
+} {
+  const role = findAutoEngineeringRole(roleId);
+
+  if (!role?.pairedArtifactType || !role.createPairedArtifact) {
+    return {};
+  }
+
+  return { pairedArtifactType: role.pairedArtifactType, createPairedArtifact: role.createPairedArtifact };
+}
+
+/**
+ * Sprint 100D — the paired artifact the AUTONOMOUS pipeline should produce for a role, or
+ * undefined when it should produce none.
+ *
+ * Separate from `pairedArtifactConfigFor` (which serves the manual panels) for one reason: a
+ * pair can be declared and produced manually while its autonomous production is still deferred
+ * — `deferAutonomousPairing`. Expressing that here, as a registry query, is what keeps the
+ * orchestrator free of role-specific knowledge: it asks "what pair, if any, do I create?" and
+ * never asks "which role is this?".
+ */
+export function autonomousPairedArtifactFactoryFor(
+  role: Pick<AutoEngineeringRole, 'pairedArtifactType' | 'createPairedArtifact' | 'deferAutonomousPairing'>,
+): ((draft: any, version: number) => ProjectArtifact) | undefined {
+  if (!role.pairedArtifactType || !role.createPairedArtifact || role.deferAutonomousPairing) {
+    return undefined;
+  }
+
+  return role.createPairedArtifact;
+}
+
+/**
+ * Sprint 100D — every artifact type a role owns: its own, plus its declared pair.
+ *
+ * The single answer to "what does this role produce", used by the incremental baseline
+ * (`incrementalExecutionContext.baselineArtifactTypesFor`) so pairing is not restated there.
+ * Deliberately ignores `deferAutonomousPairing`: a declared pair is still part of the role's
+ * released baseline wherever it exists, regardless of which path produced it.
+ */
+export function ownedArtifactTypesFor(roleId: string): string[] {
+  const role = findAutoEngineeringRole(roleId);
+
+  if (!role) {
+    return [];
+  }
+
+  return role.pairedArtifactType ? [role.artifactType, role.pairedArtifactType] : [role.artifactType];
 }
 
 /**
