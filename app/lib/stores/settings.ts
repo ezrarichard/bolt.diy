@@ -348,10 +348,23 @@ const getInitialTabConfiguration = (): TabWindowConfig => {
       return defaultConfig;
     }
 
-    // Ensure proper typing of loaded configuration
-    return {
-      userTabs: parsed.userTabs.filter((tab: TabVisibilityConfig): tab is UserTabConfig => tab.window === 'user'),
-    };
+    const savedUserTabs = parsed.userTabs.filter(
+      (tab: TabVisibilityConfig): tab is UserTabConfig => tab.window === 'user',
+    );
+
+    /*
+     * Merge in any default tab the saved configuration predates. Without this, a tab added to
+     * DEFAULT_TAB_CONFIG after a user's first visit would never appear for them: their
+     * localStorage copy is authoritative and simply has no entry for it, so it can't even be
+     * enabled from Tab Management. Only ADDS missing ids — a tab the user deliberately hid stays
+     * hidden, because its entry already exists and is left untouched.
+     */
+    const savedIds = new Set(savedUserTabs.map((tab: UserTabConfig) => tab.id));
+    const missingDefaults = DEFAULT_TAB_CONFIG.filter(
+      (tab): tab is UserTabConfig => tab.window === 'user' && !savedIds.has(tab.id),
+    );
+
+    return { userTabs: [...savedUserTabs, ...missingDefaults] };
   } catch (error) {
     console.warn('Failed to parse tab configuration:', error);
     return defaultConfig;

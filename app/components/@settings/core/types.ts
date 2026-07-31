@@ -17,7 +17,10 @@ export type TabType =
   | 'vercel'
   | 'supabase'
   | 'event-logs'
-  | 'mcp';
+  | 'mcp'
+
+  /* Observability — see app/lib/observability/observabilityModules.ts. AI Usage is its first module. */
+  | 'ai-usage';
 
 export type WindowType = 'user' | 'developer';
 
@@ -81,6 +84,7 @@ export const TAB_LABELS: Record<TabType, string> = {
   supabase: 'Supabase',
   'event-logs': 'Event Logs',
   mcp: 'MCP Servers',
+  'ai-usage': 'AI Usage',
 };
 
 export const categoryLabels: Record<SettingCategory, string> = {

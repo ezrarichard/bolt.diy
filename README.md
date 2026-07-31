@@ -44,6 +44,7 @@ tester guidelines.
 
 | Document | Audience | What it covers |
 |---|---|---|
+| [Observability](docs/10-Operations/Observability.md) | Operators, engineering | AI usage, token and cost tracking, and the Observability module architecture |
 | [Executive Summary](docs/00-EXECUTIVE-SUMMARY.md) | Stakeholders | High-level overview of the platform |
 | [Product Requirements](docs/00-PRODUCT-REQUIREMENTS.md) | Product and engineering | What Builders itself is required to do |
 | [Documentation Roadmap](docs/DOCUMENTATION-ROADMAP.md) | Contributors | How the `docs/` tree is organised |

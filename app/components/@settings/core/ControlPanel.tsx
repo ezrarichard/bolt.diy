@@ -9,6 +9,7 @@ import { useConnectionStatus } from '~/lib/hooks/useConnectionStatus';
 import { tabConfigurationStore, resetTabConfiguration } from '~/lib/stores/settings';
 import { profileStore } from '~/lib/stores/profile';
 import type { TabType, Profile } from './types';
+import { observabilityTabIds } from '~/lib/observability/observabilityModules';
 import { TAB_LABELS, DEFAULT_TAB_CONFIG, TAB_DESCRIPTIONS } from './constants';
 import { DialogTitle } from '~/components/ui/Dialog';
 import { AvatarDropdown } from './AvatarDropdown';
@@ -29,6 +30,7 @@ import NetlifyTab from '~/components/@settings/tabs/netlify/NetlifyTab';
 import CloudProvidersTab from '~/components/@settings/tabs/providers/cloud/CloudProvidersTab';
 import LocalProvidersTab from '~/components/@settings/tabs/providers/local/LocalProvidersTab';
 import McpTab from '~/components/@settings/tabs/mcp/McpTab';
+import AiUsageTab from '~/components/@settings/tabs/observability/AiUsageTab';
 
 interface ControlPanelProps {
   open: boolean;
@@ -65,6 +67,18 @@ const PANEL_SECTIONS: { id: string; label: string; icon: string; tabs: TabType[]
     label: 'Infrastructure',
     icon: 'i-ph:cloud-arrow-up-duotone',
     tabs: ['github', 'gitlab', 'supabase', 'vercel', 'netlify'],
+  },
+
+  /*
+   * Observability owns no tab list of its own here — it takes it from the module registry
+   * (app/lib/observability/observabilityModules.ts), so a future module becomes visible in this
+   * section by flipping its status there rather than by editing this array.
+   */
+  {
+    id: 'observability',
+    label: 'Observability',
+    icon: 'i-ph:chart-line-up-duotone',
+    tabs: observabilityTabIds(),
   },
 ];
 
@@ -181,6 +195,8 @@ export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
         return <EventLogsTab />;
       case 'mcp':
         return <McpTab />;
+      case 'ai-usage':
+        return <AiUsageTab />;
 
       default:
         return null;

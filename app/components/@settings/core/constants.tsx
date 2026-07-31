@@ -1,5 +1,5 @@
 import type { TabType } from './types';
-import { User, Settings, Bell, Star, Database, Cloud, Laptop, Github, Wrench, List } from 'lucide-react';
+import { User, Settings, Bell, Star, Database, Cloud, Laptop, Github, Wrench, List, Activity } from 'lucide-react';
 
 /*
  * The four brand marks below are plain SVGs rather than lucide components. Each now forwards the
@@ -59,6 +59,7 @@ export const TAB_ICONS: Record<TabType, React.ComponentType<{ className?: string
   supabase: SupabaseIcon,
   'event-logs': List,
   mcp: Wrench,
+  'ai-usage': Activity,
 };
 
 export const TAB_LABELS: Record<TabType, string> = {
@@ -76,6 +77,7 @@ export const TAB_LABELS: Record<TabType, string> = {
   supabase: 'Supabase',
   'event-logs': 'Event Logs',
   mcp: 'MCP Servers',
+  'ai-usage': 'AI Usage',
 };
 
 export const TAB_DESCRIPTIONS: Record<TabType, string> = {
@@ -93,6 +95,7 @@ export const TAB_DESCRIPTIONS: Record<TabType, string> = {
   supabase: 'Setup Supabase database connection',
   'event-logs': 'View system events and logs',
   mcp: 'Configure MCP (Model Context Protocol) servers',
+  'ai-usage': 'Track AI requests, tokens, latency and cost',
 };
 
 export const DEFAULT_TAB_CONFIG = [
@@ -109,6 +112,7 @@ export const DEFAULT_TAB_CONFIG = [
   { id: 'notifications', visible: true, window: 'user' as const, order: 9 },
   { id: 'event-logs', visible: true, window: 'user' as const, order: 10 },
   { id: 'mcp', visible: true, window: 'user' as const, order: 11 },
+  { id: 'ai-usage', visible: true, window: 'user' as const, order: 12 },
 
   // User Window Tabs (In dropdown, initially hidden)
 ];
