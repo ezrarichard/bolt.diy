@@ -98,6 +98,41 @@ export interface ArchitectureContext {
 
 export type ParsedArchitectureDraft = ParsedDraftResult<ArchitectureDraft>;
 
+/**
+ * Sprint 100E — the Solution Architect's own output-token budget, deliberately larger than
+ * the 8192 every other role shares (autoEngineeringEngine.AUTO_ENGINEERING_MAX_OUTPUT_TOKENS).
+ *
+ * This role is the only one that emits TWO artifacts from ONE call: the narrative
+ * ArchitectureDraft (~500 tokens) and the machine-readable Technical Architecture
+ * Specification (~7,800+ tokens) — see parseDraft below, and prompts/architecture.ts's
+ * explicit "this brevity rule does NOT apply to technicalArchitecture" instruction. Sprint
+ * 100B added the TAS to this call without revisiting the shared budget, so the request
+ * exceeded 8192 and `finishReason: 'length'` truncated the JSON mid-TAS. Because
+ * parseStructuredDraft runs one JSON.parse over the whole payload and `technicalArchitecture`
+ * is emitted LAST, that truncation discarded the already-complete narrative fields too.
+ *
+ * SIZING. The only measured datapoint is the repo's own reference TAS
+ * (technical-architecture/boutiqueProTas.spec.ts): ~8,300 output tokens — and that is a FLOOR
+ * twice over, since the example is explicitly trimmed and describes a deliberately simple
+ * single-shop product. A large multi-tenant SaaS runs well above it, because every capability
+ * the Product Owner defers to a later MVP still owes a `future`/`deferred` binding, a
+ * doNotBuild entry, and an evolution entry (tasValidation.ts V5/V6) — so the smaller MVP 1
+ * gets, the LARGER this response grows. No large-SaaS TAS has been measured, so the headroom
+ * above the floor is a deliberate over-provision, not a computed requirement.
+ *
+ * Over-provisioning is the right side to err on: `maxTokens` is a CEILING, not a reservation.
+ * The model does not emit more because the ceiling is higher, and billing follows actual
+ * output — so unused headroom is free, while a ceiling set too low costs a guaranteed failed
+ * generation plus retries. That asymmetry is why this is 32000 rather than a tighter fit.
+ *
+ * Safe for every model an architecture-draft profile can route to: the smallest is Haiku 4.5 at
+ * maxCompletionTokens 64000 (modules/llm/providers/anthropic.ts), and roleGenerationRecovery's
+ * retry ceiling (48000) still fits under it while staying above this base.
+ *
+ * Capacity only — no prompt, schema, validator, or parsing behaviour changes with it.
+ */
+export const SOLUTION_ARCHITECT_MAX_OUTPUT_TOKENS = 32000;
+
 const GENERATOR_NAME = 'AI Solution Architect';
 const ARTIFACT_TYPE = ARTIFACT_TYPES.ARCHITECTURE_DRAFT;
 

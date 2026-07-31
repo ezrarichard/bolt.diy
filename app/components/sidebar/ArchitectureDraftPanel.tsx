@@ -2,7 +2,7 @@ import { classNames } from '~/utils/classNames';
 import { type Project } from '~/lib/stores/projects';
 import { ARTIFACT_TYPES, formatArtifactTimestamp } from '~/lib/projects/artifacts';
 import type { AIDecision } from '~/lib/projects/draftParsing';
-import { solutionArchitectEngine } from '~/lib/projects/solutionArchitectEngine';
+import { solutionArchitectEngine, SOLUTION_ARCHITECT_MAX_OUTPUT_TOKENS } from '~/lib/projects/solutionArchitectEngine';
 import { ARCHITECTURE_DRAFT_FIELDS, type ArchitectureDraft } from '~/lib/projects/prompts/architecture';
 import { useDraftPanel } from '~/lib/hooks/useDraftPanel';
 
@@ -20,8 +20,13 @@ const ARTIFACT_TYPE = ARTIFACT_TYPES.ARCHITECTURE_DRAFT;
  * up front is the actual fix; app/routes/api.generate-text.ts fails
  * gracefully (a clear 400 message surfaced via `errorMessage`) if the
  * selected model can't support this many output tokens.
+ *
+ * Sprint 100E — no longer a local literal: manual and autonomous generation must ask for the
+ * same budget, so both now read `SOLUTION_ARCHITECT_MAX_OUTPUT_TOKENS` from the engine (see
+ * solutionArchitectEngine.ts for why this role needs more than the shared 8192). A local copy
+ * is exactly how the two paths drifted apart in the first place.
  */
-const MAX_OUTPUT_TOKENS = 8192;
+const MAX_OUTPUT_TOKENS = SOLUTION_ARCHITECT_MAX_OUTPUT_TOKENS;
 
 /**
  * Sprint 14 — the Architecture Draft feature, built on the exact Sprint 13

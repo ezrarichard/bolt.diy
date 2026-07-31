@@ -2,7 +2,7 @@ import { getProjectArtifacts, type Project } from '~/lib/stores/projects';
 import { ARTIFACT_TYPES, getLatestApprovedArtifact, type ProjectArtifact } from './artifacts';
 import type { ParsedDraftResult } from './draftParsing';
 import { productOwnerEngine } from './productOwnerEngine';
-import { solutionArchitectEngine } from './solutionArchitectEngine';
+import { solutionArchitectEngine, SOLUTION_ARCHITECT_MAX_OUTPUT_TOKENS } from './solutionArchitectEngine';
 import { databaseDesignerEngine } from './databaseDesignerEngine';
 import { uiuxDesignerEngine } from './uiuxDesignerEngine';
 import { backendEngineerEngine } from './backendEngineerEngine';
@@ -102,7 +102,16 @@ export interface AutoEngineeringRole {
   deferAutonomousPairing?: boolean;
 }
 
-/** Matches every "*DraftPanel" component's MAX_OUTPUT_TOKENS today (Architecture, Database, UI/UX, Backend, Frontend, QA, DevOps all use 8192) — the autonomous pipeline asks for exactly the same budget a human-driven generation would have. */
+/**
+ * Matches every "*DraftPanel" component's MAX_OUTPUT_TOKENS today (Database, UI/UX, Backend,
+ * Frontend, QA, DevOps all use 8192) — the autonomous pipeline asks for exactly the same
+ * budget a human-driven generation would have.
+ *
+ * Sprint 100E — the Solution Architect is the one exception: it emits the narrative draft AND
+ * the Technical Architecture Specification from a single call, so it uses its own larger
+ * `SOLUTION_ARCHITECT_MAX_OUTPUT_TOKENS` (see solutionArchitectEngine.ts for the sizing
+ * rationale). Every other role's budget is deliberately unchanged.
+ */
 const AUTO_ENGINEERING_MAX_OUTPUT_TOKENS = 8192;
 
 /** Rough, presentation-only estimate shown next to the currently-generating role in the AI Engineering Team panel — not a real measurement, just a "this takes a moment" hint sized to the shared 8192-token budget above. */
@@ -135,7 +144,9 @@ export const AUTO_ENGINEERING_ROLES: AutoEngineeringRole[] = [
     id: 'architecture',
     label: 'Solution Architect',
     artifactType: ARTIFACT_TYPES.ARCHITECTURE_DRAFT,
-    maxOutputTokens: AUTO_ENGINEERING_MAX_OUTPUT_TOKENS,
+
+    /* Sprint 100E — the only role that does not use the shared budget; it emits the narrative draft plus the full TAS in one response. */
+    maxOutputTokens: SOLUTION_ARCHITECT_MAX_OUTPUT_TOKENS,
     canGenerate: solutionArchitectEngine.canGenerateArchitecture,
     buildContext: solutionArchitectEngine.buildArchitectureContext,
     buildPrompt: solutionArchitectEngine.buildArchitecturePrompt,

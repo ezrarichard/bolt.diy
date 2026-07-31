@@ -88,8 +88,24 @@ export interface RoleGenerationDeps<T> {
 
 const DEFAULT_MAX_RETRIES = 2;
 
-/** Absolute ceiling for a raised retry budget, so a bug can never request an unbounded output length. */
-const RETRY_MAX_OUTPUT_TOKENS_CEILING = 16000;
+/**
+ * Absolute ceiling for a raised retry budget, so a bug can never request an unbounded output
+ * length.
+ *
+ * Sprint 100E — raised from 16000, which was set when every role shared an 8192 base budget
+ * and therefore sat comfortably above `8192 * 2`. The Solution Architect now starts at 32000
+ * (solutionArchitectEngine.SOLUTION_ARCHITECT_MAX_OUTPUT_TOKENS) because it emits the
+ * Technical Architecture Specification alongside its narrative draft, so the old ceiling
+ * would have CLAMPED ITS RETRY BELOW ITS OWN FIRST ATTEMPT (min(64000, 16000) = 16000) —
+ * making every retry strictly more likely to truncate than the attempt it was retrying.
+ *
+ * 48000 keeps every retry a genuine ESCALATION above its own first attempt (the invariant this
+ * constant must preserve — the architect retries at 1.5x rather than the full 2x, which is the
+ * point at which the doubling gets clamped) while staying under the smallest routable model's
+ * 64000 completion limit (Haiku 4.5). This is a ceiling, not a budget: it only ever raises the
+ * cap a retry may reach, and no role's base budget changes because of it.
+ */
+const RETRY_MAX_OUTPUT_TOKENS_CEILING = 48000;
 
 /** Appended to the prompt on every retry: the previous attempt was cut off, so ask for a smaller, fences-free, single JSON object that actually fits. Never invents content — only tightens format/length. */
 const RETRY_JSON_ONLY_INSTRUCTION = `

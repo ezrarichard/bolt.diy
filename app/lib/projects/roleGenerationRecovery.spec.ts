@@ -6,6 +6,7 @@ import {
   type RoleGenerationDeps,
 } from './roleGenerationRecovery';
 import { parseStructuredDraft, type DraftFieldConfig } from './draftParsing';
+import { SOLUTION_ARCHITECT_MAX_OUTPUT_TOKENS } from './solutionArchitectEngine';
 
 /**
  * Sprint 44 — recovery-core tests. The recovery function is pure (the `generate` call is
@@ -276,5 +277,26 @@ describe('generateRoleWithRecovery', () => {
 
     expect(logs[0]).toMatchObject({ outcome: 'truncated', finishReason: 'length', isRetry: false });
     expect(logs[1]).toMatchObject({ outcome: 'success', isRetry: true });
+  });
+
+  /**
+   * Sprint 100E — the retry ceiling must never sit below a role's own base budget, or the
+   * retry would ask for LESS room than the attempt that just truncated, guaranteeing it
+   * truncates again. This bit the Solution Architect specifically: its budget rose to 32000
+   * for the Technical Architecture Specification while the ceiling was still 16000.
+   */
+  it('escalates the Solution Architect budget on retry instead of clamping it below the first attempt', async () => {
+    const { generate, calls } = scriptedGenerate([
+      { ok: true, text: '{"summary":"cut off mid', finishReason: 'length' },
+      { ok: true, text: VALID_JSON, finishReason: 'stop' },
+    ]);
+
+    const result = await generateRoleWithRecovery(
+      baseDeps(generate, { roleKey: 'architecture-draft', maxOutputTokens: SOLUTION_ARCHITECT_MAX_OUTPUT_TOKENS }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(calls[0].options.maxTokens).toBe(SOLUTION_ARCHITECT_MAX_OUTPUT_TOKENS);
+    expect(Number(calls[1].options.maxTokens)).toBeGreaterThan(SOLUTION_ARCHITECT_MAX_OUTPUT_TOKENS);
   });
 });
