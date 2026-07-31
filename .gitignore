@@ -24,8 +24,12 @@ dist-ssr
 
 /.history
 /.cache
-/build
-!build/server.d.ts
+# `/build/*` (contents) rather than `/build` (the directory): git cannot re-include a file whose
+# PARENT DIRECTORY is excluded, so the negation below was silently ineffective and
+# build/server.d.ts — the checked-in type declaration functions/[[path]].ts depends on — could
+# never be committed. Excluding the contents instead lets the negation work.
+/build/*
+!/build/server.d.ts
 functions/build/
 .env.local
 .env
