@@ -13,6 +13,15 @@ type RecordAiUsageInput = Omit<
 >;
 
 /**
+ * Why a usage event did or did not land. Returned rather than swallowed so a caller can react —
+ * no caller is required to, and none of them block on it.
+ */
+export interface RecordAiUsageOutcome {
+  recorded: boolean;
+  reason?: 'no-access-token' | 'insert-rejected' | 'threw';
+}
+
+/**
  * AI Usage Ledger — Sprint 42.1.
  *
  * The one function every AI call path (app/routes/api.chat.ts, app/routes/api.generate-text.ts,
@@ -41,9 +50,16 @@ type RecordAiUsageInput = Omit<
  * point every call site's error text passes through, rather than each route implementing its
  * own length/redaction logic — before it ever reaches insertUsageEvent()/the RPC.
  */
-export async function recordAiUsage(accessToken: string | null, input: RecordAiUsageInput): Promise<void> {
+export async function recordAiUsage(
+  accessToken: string | null,
+  input: RecordAiUsageInput,
+): Promise<RecordAiUsageOutcome> {
   if (!accessToken) {
-    return;
+    /*
+     * Not a failure: an unauthenticated call has no user to attribute a row to, and the RPC
+     * derives user_id from auth.uid(). Reported distinctly so it is never mistaken for a fault.
+     */
+    return { recorded: false, reason: 'no-access-token' };
   }
 
   try {
@@ -59,11 +75,36 @@ export async function recordAiUsage(accessToken: string | null, input: RecordAiU
       pricingVersion: cost.pricingVersion,
     });
 
-    if (!ok) {
-      logger.warn('AI usage event was not recorded (see the preceding [AiUsage] log for details).');
+    if (ok) {
+      return { recorded: true };
     }
+
+    /*
+     * Structured, and unconditional. The ledger was absent for weeks precisely because this path
+     * produced a message nobody could search for or aggregate. Every field here is operational —
+     * no prompt, no response, no credential.
+     */
+    logger.warn('[telemetry] AI usage event was NOT recorded. AI generation is unaffected.', {
+      outcome: 'insert-rejected',
+      requestType: input.requestType,
+      roleKey: input.roleKey ?? null,
+      provider: input.provider,
+      apiModel: input.apiModel,
+      projectId: input.projectId ?? null,
+      hint: 'Check that builders_ai_usage_events and builders_record_ai_usage() exist — see docs/10-Operations/Observability.md.',
+    });
+
+    return { recorded: false, reason: 'insert-rejected' };
   } catch (error) {
-    logger.warn('recordAiUsage() failed — the AI response itself is unaffected.', error);
+    logger.warn('[telemetry] recordAiUsage() threw. AI generation is unaffected.', {
+      outcome: 'threw',
+      requestType: input.requestType,
+      provider: input.provider,
+      apiModel: input.apiModel,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    return { recorded: false, reason: 'threw' };
   }
 }
 

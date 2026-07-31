@@ -16,6 +16,8 @@ import { createScopedLogger } from '~/utils/logger';
 import type { AiUsageStatus } from '~/lib/ai-usage/aiUsageTypes';
 import { resolveRangeStart } from './aiUsageAggregations';
 import type { AiUsageEvent, AiUsageQueryOptions } from './aiUsageQueryTypes';
+import { reportTelemetryFailure, reportTelemetrySuccess } from '~/lib/observability/telemetry/telemetryStatus';
+import { formatError } from '~/lib/builders-db/repositories/structuredError';
 
 const logger = createScopedLogger('observability/ai-usage');
 
@@ -143,9 +145,24 @@ export async function fetchAiUsageEvents(options: AiUsageQueryOptions): Promise<
       throw error;
     }
 
+    reportTelemetrySuccess();
+
     return { events: (data ?? []).map((row) => toEvent(row as unknown as AiUsageRow)), available: true };
   } catch (error) {
+    /*
+     * Reported, not just logged. A read failure is the one telemetry fault the browser can observe
+     * directly, and it is what moves the badge to 'degraded' (or corroborates 'unavailable' when
+     * the schema check has already found the ledger missing).
+     */
+    /*
+     * `formatError`, not `String(error)`: a PostgrestError is a plain object, so String() yields
+     * "[object Object]" and throws away the code/message/hint. structuredError.ts exists precisely
+     * because that once cost an hour of debugging — and this line reproduced it until a
+     * fault-injection test showed "[object Object]" in the UI.
+     */
+    reportTelemetryFailure('ledger-read', formatError(error));
     logger.warn('Failed to read AI usage events — the dashboard will show an unavailable state.', error);
+
     return EMPTY_UNAVAILABLE;
   }
 }

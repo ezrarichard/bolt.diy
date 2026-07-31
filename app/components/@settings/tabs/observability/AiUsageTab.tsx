@@ -45,6 +45,8 @@ import {
 } from './useObservabilityData';
 import { RequestInspector } from './RequestInspector';
 import { SystemHealthPanel } from './SystemHealthPanel';
+import { TelemetryStatusNotice } from './TelemetryStatusNotice';
+import { useTelemetryStatus } from '~/lib/observability/telemetry/useTelemetryStartupCheck';
 import { PricingSettingsPanel } from './PricingSettingsPanel';
 
 /**
@@ -293,6 +295,7 @@ export default function AiUsageTab() {
   const [inspecting, setInspecting] = useState<AiUsageEvent | null>(null);
 
   const { events, summaryEvents, available, loading, enrichedCount } = useObservabilityData(filters);
+  const telemetry = useTelemetryStatus();
 
   const projectName = useMemo(() => {
     const byId = new Map(projects.map((project) => [project.id, project.name]));
@@ -339,18 +342,23 @@ export default function AiUsageTab() {
 
   if (!available && !loading) {
     return (
-      <div className="rounded-xl border border-bolt-elements-borderColor/60 bg-bolt-elements-background-depth-2/70 px-4 py-8 text-center">
-        <div className="i-ph:cloud-slash-duotone w-6 h-6 mx-auto text-bolt-elements-textSecondary" />
-        <p className="mt-2 text-sm text-bolt-elements-textPrimary">AI usage data is unavailable</p>
-        <p className="mt-1 text-xs text-bolt-elements-textSecondary">
-          Builders could not reach the usage ledger. This does not affect AI generation — only this dashboard.
-        </p>
+      <div className="space-y-4">
+        <TelemetryStatusNotice status={telemetry} />
+        <div className="rounded-xl border border-bolt-elements-borderColor/60 bg-bolt-elements-background-depth-2/70 px-4 py-8 text-center">
+          <div className="i-ph:cloud-slash-duotone w-6 h-6 mx-auto text-bolt-elements-textSecondary" />
+          <p className="mt-2 text-sm text-bolt-elements-textPrimary">AI usage data is unavailable</p>
+          <p className="mt-1 text-xs text-bolt-elements-textSecondary">
+            Builders could not reach the usage ledger. This does not affect AI generation — only this dashboard.
+          </p>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
+      <TelemetryStatusNotice status={telemetry} />
+
       {/* Status + filters */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-bolt-elements-textSecondary">

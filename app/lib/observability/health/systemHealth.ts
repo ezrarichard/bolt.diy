@@ -49,6 +49,16 @@ export interface HealthInputs {
 
   /** Browser storage availability, the app's local persistence layer for settings and drafts. */
   storageAvailable: boolean;
+
+  /**
+   * Telemetry self-monitoring (see app/lib/observability/telemetry/). Passed in rather than read
+   * here so this module stays a pure function of its inputs.
+   */
+  telemetry?: {
+    state: 'healthy' | 'degraded' | 'unavailable' | 'unknown';
+    missing: string[];
+    lastErrorMessage?: string;
+  };
 }
 
 /** Judges the AI provider from recent outcomes. More than a third failing is a warning, all failing is offline. */
@@ -88,6 +98,40 @@ function resolveAiStatus(inputs: HealthInputs): HealthComponent {
   return { id: 'ai-provider', label: 'AI Provider', status: 'healthy', detail: `${aiProvider} responding normally` };
 }
 
+/**
+ * Telemetry health. This is the component that would have surfaced the missing ledger: an absent
+ * table is `offline` with the exact objects named, not a quiet nothing.
+ */
+function resolveTelemetryStatus(inputs: HealthInputs): HealthComponent {
+  const telemetry = inputs.telemetry;
+
+  if (!telemetry || telemetry.state === 'unknown') {
+    return { id: 'telemetry', label: 'Telemetry', status: 'not-configured', detail: 'Not checked yet' };
+  }
+
+  if (telemetry.state === 'unavailable') {
+    return {
+      id: 'telemetry',
+      label: 'Telemetry',
+      status: 'offline',
+      detail: `Usage is not being recorded — missing: ${telemetry.missing.join(', ')}`,
+    };
+  }
+
+  if (telemetry.state === 'degraded') {
+    return {
+      id: 'telemetry',
+      label: 'Telemetry',
+      status: 'warning',
+      detail: telemetry.lastErrorMessage
+        ? `Logging failures detected — ${telemetry.lastErrorMessage}`
+        : 'Logging failures detected',
+    };
+  }
+
+  return { id: 'telemetry', label: 'Telemetry', status: 'healthy', detail: 'Usage is being recorded' };
+}
+
 export function resolveSystemHealth(inputs: HealthInputs): HealthComponent[] {
   const buildersDb: HealthComponent = !inputs.buildersDbConfigured
     ? { id: 'builders-db', label: 'BuildersDB', status: 'not-configured', detail: 'BuildersDB is not configured' }
@@ -124,7 +168,7 @@ export function resolveSystemHealth(inputs: HealthInputs): HealthComponent[] {
     ? { id: 'storage', label: 'Storage', status: 'healthy', detail: 'Local storage available' }
     : { id: 'storage', label: 'Storage', status: 'offline', detail: 'Local storage unavailable or full' };
 
-  return [resolveAiStatus(inputs), buildersDb, supabase, github, deployment, storage];
+  return [resolveAiStatus(inputs), resolveTelemetryStatus(inputs), buildersDb, supabase, github, deployment, storage];
 }
 
 /**

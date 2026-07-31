@@ -18,6 +18,7 @@ function inputs(overrides: Partial<HealthInputs> = {}): HealthInputs {
     deploymentProvider: 'Vercel',
     deploymentConnected: true,
     storageAvailable: true,
+    telemetry: { state: 'healthy', missing: [] },
     ...overrides,
   };
 }
@@ -30,7 +31,7 @@ describe('resolveSystemHealth', () => {
   it('reports every component healthy when everything is connected', () => {
     const components = resolveSystemHealth(inputs());
     expect(components.every((component) => component.status === 'healthy')).toBe(true);
-    expect(components).toHaveLength(6);
+    expect(components).toHaveLength(7);
   });
 
   it('treats an unconfigured integration as not-configured, not offline', () => {
@@ -64,6 +65,40 @@ describe('resolveSystemHealth', () => {
   it('does not treat a cancelled request as a failure', () => {
     const components = resolveSystemHealth(inputs({ recentAiStatuses: ['cancelled', 'success'] }));
     expect(statusOf(components, 'ai-provider')).toBe('healthy');
+  });
+});
+
+describe('telemetry component', () => {
+  it('is offline and names the missing objects when the ledger does not exist', () => {
+    const components = resolveSystemHealth(
+      inputs({ telemetry: { state: 'unavailable', missing: ['builders_ai_usage_events'] } }),
+    );
+    const telemetry = components.find((component) => component.id === 'telemetry');
+
+    expect(telemetry?.status).toBe('offline');
+    expect(telemetry?.detail).toContain('builders_ai_usage_events');
+  });
+
+  it('warns and surfaces the last error when logging is failing', () => {
+    const components = resolveSystemHealth(
+      inputs({ telemetry: { state: 'degraded', missing: [], lastErrorMessage: 'relation does not exist' } }),
+    );
+    const telemetry = components.find((component) => component.id === 'telemetry');
+
+    expect(telemetry?.status).toBe('warning');
+    expect(telemetry?.detail).toContain('relation does not exist');
+  });
+
+  it('is not-configured, never a failure, before the check has run', () => {
+    const components = resolveSystemHealth(inputs({ telemetry: undefined }));
+    expect(components.find((component) => component.id === 'telemetry')?.status).toBe('not-configured');
+  });
+
+  it('drags the overall indicator down when the ledger is missing', () => {
+    const components = resolveSystemHealth(
+      inputs({ telemetry: { state: 'unavailable', missing: ['builders_ai_usage_events'] } }),
+    );
+    expect(overallHealth(components)).toBe('offline');
   });
 });
 

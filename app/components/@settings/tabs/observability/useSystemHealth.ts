@@ -13,6 +13,7 @@ import {
   type HealthStatus,
 } from '~/lib/observability/health/systemHealth';
 import type { AiUsageEvent } from '~/lib/observability/ai-usage/aiUsageQueryTypes';
+import { useTelemetryStatus } from '~/lib/observability/telemetry/useTelemetryStartupCheck';
 
 /**
  * Bridges the app's existing connection stores into the pure health resolver.
@@ -35,6 +36,7 @@ export function useSystemHealth(
   const supabase = useStore(supabaseConnection);
   const vercel = useStore(vercelConnection);
   const netlify = useStore(netlifyConnection);
+  const telemetry = useTelemetryStatus();
 
   return useMemo(() => {
     const recent = events.slice(0, RECENT_WINDOW);
@@ -53,8 +55,13 @@ export function useSystemHealth(
       deploymentProvider,
       deploymentConnected: Boolean(deploymentProvider),
       storageAvailable: detectStorageAvailable(),
+      telemetry: {
+        state: telemetry.state,
+        missing: telemetry.schema?.missing ?? [],
+        lastErrorMessage: telemetry.lastError?.message,
+      },
     });
 
     return { components, overall: overallHealth(components) };
-  }, [events, ledgerReachable, githubConnected, supabase, vercel, netlify]);
+  }, [events, ledgerReachable, githubConnected, supabase, vercel, netlify, telemetry]);
 }

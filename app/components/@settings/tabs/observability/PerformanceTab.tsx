@@ -6,6 +6,8 @@ import { EmptyNote, Panel, ProportionBar, Stat } from './ObservabilityPrimitives
 import { ObservabilityFilterBar } from './ObservabilityFilterBar';
 import { DEFAULT_FILTERS, useObservabilityData, type ObservabilityFilters } from './useObservabilityData';
 import { SystemHealthPanel } from './SystemHealthPanel';
+import { TelemetryStatusNotice } from './TelemetryStatusNotice';
+import { useTelemetryStatus } from '~/lib/observability/telemetry/useTelemetryStartupCheck';
 
 /**
  * Builders Observability — Performance module.
@@ -24,6 +26,7 @@ function percent(value: number | null): string {
 export default function PerformanceTab() {
   const [filters, setFilters] = useState<ObservabilityFilters>({ ...DEFAULT_FILTERS, range: '7d' });
   const { events, summaryEvents, available, loading } = useObservabilityData(filters);
+  const telemetry = useTelemetryStatus();
 
   const metrics = useMemo(() => analyzePerformance(events), [events]);
 
@@ -63,6 +66,8 @@ export default function PerformanceTab() {
 
   return (
     <div className="space-y-4">
+      <TelemetryStatusNotice status={telemetry} />
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-[11px] text-bolt-elements-textSecondary">
           Derived from the same AI usage ledger — no separate metrics are stored.

@@ -9,10 +9,9 @@ Find it in **Control Panel → Observability**.
 > [!IMPORTANT]
 > **The ledger table must exist before any of this shows data.** The AI usage ledger was originally
 > appended to a migration that had already been applied, so Supabase never ran it and the table was
-> never created — and because `recordAiUsage()` is deliberately non-blocking, that failed silently.
-> `supabase/migrations/20260813100000_ai_usage_ledger_repair.sql` re-declares it in a new version.
-> Apply migrations before expecting usage data; until then every panel correctly reports
-> "unavailable" rather than showing zeros.
+> never created — and because `recordAiUsage()` is deliberately non-blocking, that failed silently
+> for weeks. `supabase/migrations/20260813100000_ai_usage_ledger_repair.sql` re-declares it in a new
+> version. Builders now detects this itself: see [§7 Telemetry self-monitoring](#7-telemetry-self-monitoring).
 
 ---
 
@@ -288,7 +287,122 @@ recorded; an empty widget in the header is worse than no widget.
 
 ---
 
-## 6. Where the code lives
+## 7. Telemetry self-monitoring
+
+Telemetry is **fail-open**: a logging problem must never break an AI generation. It used to be
+fail-*silent* too, which is why a completely missing ledger went unnoticed. It is now fail-open and
+loud.
+
+### Status values
+
+| Status | Meaning | Where it comes from |
+|---|---|---|
+| 🟢 **Healthy** | Schema verified, no failures observed | Startup check passed |
+| 🟡 **Degraded** | Ledger exists but reads/writes are failing | A runtime failure was reported |
+| 🔴 **Unavailable** | Ledger objects are missing — nothing is being recorded | Startup check found them absent |
+| ⚪ **Not checked** | The check has not run yet. Never shown as a problem | Initial state |
+
+A missing schema object **outranks everything**: no number of successful reads can make a
+non-existent ledger look healthy.
+
+### Where it surfaces
+
+- **Header widget** — a red/amber chip appears whenever telemetry is Unavailable or Degraded, even
+  with no usage data at all. Clicking it opens AI Usage.
+- **Observability → System Health** — a first-class `Telemetry` row alongside AI Provider,
+  BuildersDB and the rest.
+- **Banner** at the top of AI Usage and Performance, naming the missing objects, the migration to
+  apply, and the last error with its source and timestamp.
+- **Console** — every failure logs a structured `[Builders][telemetry]` warning, client-side; the
+  server logs a structured `[telemetry]` warning from `recordAiUsage()` with the request type,
+  role, provider, model and a pointer to this document.
+
+The last error and its timestamp are retained even after recovery — "recovered, and here is what
+went wrong" is more useful than a status that erases its own history.
+
+### The startup health check
+
+Runs once per page load, read-only, and validates:
+
+| Object | How | Certainty |
+|---|---|---|
+| `builders_ai_usage_events` | `select('*').limit(0)` | Definitive |
+| `builders_ai_usage_daily` | `select('*').limit(0)` | Definitive |
+| `builders_record_ai_usage()` | Inferred from the table | See below |
+
+> [!WARNING]
+> Two probe forms look correct and are not. `{ head: true, count: 'exact' }` returns **204 with no
+> error for a table that does not exist**, so it reports every missing relation as present —
+> silently defeating the check. Selecting a named column (`select('id')`) fails with `42703` on a
+> view whose shape differs, conflating "wrong columns" with "missing relation". Only
+> `select('*').limit(0)` distinguishes the cases (404 `PGRST205` vs 200). `limit(0)` transfers no
+> rows, and RLS only ever hides rows — never the relation — so this stays a schema check, not a
+> permission check.
+
+**The write RPC cannot be verified directly from the browser**, and the UI never pretends
+otherwise. PostgREST reports "no such function" and "function exists with a different signature"
+with the same `PGRST202` code, its OpenAPI listing requires a `service_role` key that must never
+reach the browser, and calling the function for real would write a ledger row. So it is reported
+`unverifiable` when the table is present, and `missing` when the table is missing — both objects
+come from the same migration, which makes that inference sound.
+
+---
+
+## 8. Troubleshooting
+
+### "AI Usage telemetry is not configured"
+
+Telemetry is **Unavailable** — the ledger objects do not exist and nothing is being recorded.
+
+1. Apply migrations: `supabase db push` (or apply
+   `supabase/migrations/20260813100000_ai_usage_ledger_repair.sql`).
+2. Reload Builders. The startup check re-runs and the banner clears.
+3. Confirm in **Observability → System Health** that `Telemetry` reads Healthy.
+
+If it persists, verify in the SQL editor:
+
+```sql
+select to_regclass('public.builders_ai_usage_events');   -- expect a name, not null
+select to_regclass('public.builders_ai_usage_daily');    -- expect a name, not null
+select proname from pg_proc where proname = 'builders_record_ai_usage';
+```
+
+> Never "fix" this by editing an already-applied migration file. Supabase tracks migrations by
+> version, not content, so the edit will never run — that is the exact mistake that caused this.
+> Always add a new migration.
+
+### "Telemetry Degraded"
+
+The ledger exists but a read or write failed. The banner shows the source, timestamp and error.
+
+| Error | Likely cause |
+|---|---|
+| `PGRST205` | A ledger object is missing — this should read Unavailable; re-run the check by reloading |
+| `42501` / RLS | The `builders_ai_usage_events_select_own` policy is missing or altered |
+| `PGRST301` / 401 | The session expired — sign in again |
+| Network / 5xx | Supabase unreachable; transient, and clears itself on the next successful read |
+
+Degraded clears automatically after one successful read.
+
+### The dashboard is empty but telemetry is Healthy
+
+Expected when no AI request has run since the ledger was created. Run a generation and reload.
+Historical requests made while the ledger was missing are **gone** — they were never written, and
+nothing can reconstruct them.
+
+### Costs all show "—"
+
+Not a telemetry fault. No pricing is configured for those models; the dashboard names them. See
+[§3 Cost tracking](#3-cost-tracking).
+
+### Generations show "Inferred"
+
+Expected for requests recorded before generation tracking existed. See
+[§4b](#4b-generation-analytics). New generations are exact.
+
+---
+
+## 9. Where the code lives
 
 | Path | Responsibility |
 |---|---|
@@ -300,6 +414,8 @@ recorded; an empty widget in the header is worse than no widget.
 | `app/lib/observability/ai-usage/aiUsageAnalytics.ts` | Project, generation and performance analytics |
 | `app/lib/observability/pricing/pricingOverrides.ts` | Configurable pricing on top of the registry |
 | `app/lib/observability/health/systemHealth.ts` | Pure health resolution |
+| `app/lib/observability/telemetry/telemetryStatus.ts` | Telemetry state machine and failure recording |
+| `app/lib/observability/telemetry/telemetrySchemaCheck.ts` | Startup validation of the ledger objects |
 | `app/lib/ai-usage/` | Write path (pre-existing): `recordAiUsage`, pricing, cost, redaction |
 | `app/components/@settings/tabs/observability/` | Dashboard and formatters |
 

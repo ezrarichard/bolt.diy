@@ -8,6 +8,8 @@ import { isBuildersDbConfigured } from '~/lib/builders-db/client';
 import type { AiUsageEvent } from '~/lib/observability/ai-usage/aiUsageQueryTypes';
 import { HEALTH_DOT_CLASS, HEALTH_LABEL } from '~/components/@settings/tabs/observability/ObservabilityPrimitives';
 import { EMPTY_VALUE, formatCostUsd, formatCount } from '~/components/@settings/tabs/observability/observabilityFormat';
+import { useTelemetryStatus } from '~/lib/observability/telemetry/useTelemetryStartupCheck';
+import { TELEMETRY_STATE_LABEL } from '~/lib/observability/telemetry/telemetryStatus';
 
 /**
  * Builders Observability — always-visible status widget.
@@ -29,6 +31,9 @@ const REFRESH_MS = 60_000;
 export function ObservabilityStatusBar() {
   const [events, setEvents] = useState<AiUsageEvent[] | null>(null);
   const [reachable, setReachable] = useState(true);
+
+  /* Also the app-wide startup check: this widget mounts on every page, so telemetry is validated once per load. */
+  const telemetry = useTelemetryStatus();
 
   useEffect(() => {
     if (!isBuildersDbConfigured()) {
@@ -93,7 +98,38 @@ export function ObservabilityStatusBar() {
     );
   }, [events, reachable]);
 
-  /* Nothing recorded yet (or no ledger) — stay out of the header entirely. */
+  /*
+   * Telemetry being broken is exactly the case that must NOT be silent — so when it is, the widget
+   * appears even though there is no usage to show, and links straight to the explanation.
+   */
+  if (telemetry.state === 'unavailable' || telemetry.state === 'degraded') {
+    const unavailable = telemetry.state === 'unavailable';
+
+    return (
+      <button
+        type="button"
+        onClick={() => requestControlPanel('ai-usage')}
+        title={
+          unavailable
+            ? 'AI Usage telemetry is not configured. Observability data will not be recorded until the migration is applied.'
+            : 'Usage logging has reported failures. AI generation is unaffected.'
+        }
+        className={classNames(
+          'hidden md:inline-flex items-center gap-2 shrink-0 px-2.5 py-1 rounded-lg',
+          'appearance-none border text-[11px] transition-colors',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-builders-border-focus',
+          unavailable
+            ? 'border-builders-status-error-border/40 bg-builders-status-error-bg text-builders-status-error-text'
+            : 'border-builders-status-warning-border/40 bg-builders-status-warning-bg text-builders-status-warning-text',
+        )}
+      >
+        <span aria-hidden className="i-ph:warning-duotone w-3.5 h-3.5" />
+        Telemetry {TELEMETRY_STATE_LABEL[telemetry.state]}
+      </button>
+    );
+  }
+
+  /* Nothing recorded yet (and telemetry is fine) — stay out of the header entirely. */
   if (!events || events.length === 0 || !summary || !health) {
     return null;
   }
