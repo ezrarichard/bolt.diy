@@ -1,4 +1,4 @@
-import { resolveModelPricing } from './modelPricingRegistry';
+import { resolveModelPricing, type ModelPricing } from './modelPricingRegistry';
 import type { AiTokenUsage } from './aiUsageTypes';
 
 export interface EstimatedCost {
@@ -26,8 +26,19 @@ function round(value: number): number {
  * treated as free if that rate isn't set) instead of the full input rate, and excluded from
  * the "billable" input count so they're never double-counted.
  */
-export function calculateEstimatedCost(modelKey: string | null | undefined, usage: AiTokenUsage): EstimatedCost {
-  const pricing = resolveModelPricing(modelKey);
+export function calculateEstimatedCost(
+  modelKey: string | null | undefined,
+  usage: AiTokenUsage,
+
+  /**
+   * Explicit pricing, bypassing the registry lookup. Additive and optional — the write path calls
+   * this exactly as before. The Observability dashboard passes configured overrides here so an
+   * unpriced historical row can be costed for display without duplicating this arithmetic
+   * (see app/lib/observability/pricing/pricingOverrides.ts).
+   */
+  explicitPricing?: ModelPricing,
+): EstimatedCost {
+  const pricing = explicitPricing ?? resolveModelPricing(modelKey);
 
   if (!pricing) {
     return NULL_COST;

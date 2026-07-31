@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { beginAiOperationScope, endAiOperationScope } from '~/lib/observability/aiOperationScope';
 import { useStore } from '@nanostores/react';
 import { toast } from 'react-toastify';
 import {
@@ -13,6 +14,7 @@ import {
 import { getLatestArtifact } from '~/lib/projects/artifacts';
 import { isRequirementsCaptured } from '~/lib/projects/knowledge';
 import {
+  autonomousPairedArtifactFactoryFor,
   describePipelineBlock,
   getNextAutoRole,
   isProjectDefinitionApproved,
@@ -183,6 +185,14 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
 
     runningProjectIds.add(projectId);
 
+    /*
+     * Observability — one pipeline run is one application generation. Opening the scope here,
+     * beside the existing run marker, means every role below reports the same `operation_id`
+     * and Generation Analytics can group them exactly instead of inferring the boundary.
+     * Purely additive: the id is only ever attached to a usage row.
+     */
+    const operationId = beginAiOperationScope(projectId);
+
     if (isMountedRef.current) {
       setIsRunning(true);
       setFailure(undefined);
@@ -288,6 +298,7 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
                 projectId,
                 roleKey: role.artifactType,
                 requestType: 'auto_role_generation',
+                operationId,
               },
               onAttempt: (log) =>
                 logger.debug(
@@ -316,6 +327,28 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
             addProjectArtifact(projectId, artifact, 'automatic');
 
             /*
+             * Sprint 100C — the role's lockstep-paired artifact, if it declares one in
+             * AUTO_ENGINEERING_ROLES. Closes Sprint 100B's L1: this path produced only the
+             * primary artifact, so an autonomously-generated project had an Architecture Draft
+             * and no Technical Architecture Specification, while the manual path produced both.
+             *
+             * Deliberately mirrors useDraftPanel.ts's semantics exactly — same `nextVersion` as
+             * the primary (computed above from the PRIMARY artifact type, so the pair can never
+             * drift), written immediately after it, and approved in the same action below. This
+             * is a no-op for every role that declares no pair.
+             *
+             * The paired artifact is created BEFORE the Product Owner early-break below so that
+             * ordering holds for any future gated role that has a pair: both rows land as
+             * 'draft' together and are approved together, never one without the other.
+             */
+            const createPaired = autonomousPairedArtifactFactoryFor(role);
+            const pairedArtifact = createPaired ? createPaired(outcome.draft, nextVersion) : undefined;
+
+            if (pairedArtifact) {
+              addProjectArtifact(projectId, { ...pairedArtifact, version: nextVersion }, 'automatic');
+            }
+
+            /*
              * Sprint 46B — Gate A (Roadmap/Scope Approval). Unlike every other role, the
              * Product Owner's draft must never auto-approve: it's a business decision (what
              * ships first, what the customer waits for), not a technical execution of
@@ -332,6 +365,12 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
             }
 
             updateProjectArtifact(projectId, artifact.id, { status: 'approved' }, 'automatic');
+
+            /* Sprint 100C — the pair is approved in the SAME action as the primary, never independently. */
+            if (pairedArtifact) {
+              updateProjectArtifact(projectId, pairedArtifact.id, { status: 'approved' }, 'automatic');
+            }
+
             toast.success(`${role.label} completed`);
           } catch (error) {
             const message = error instanceof Error ? error.message : `${role.label} failed unexpectedly.`;
@@ -346,6 +385,7 @@ export function useAutoEngineeringPipeline(project: Project): AutoEngineeringPip
         }
       } finally {
         runningProjectIds.delete(projectId);
+        endAiOperationScope(projectId);
 
         if (isMountedRef.current) {
           setIsRunning(false);

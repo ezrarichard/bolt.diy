@@ -21,6 +21,7 @@ function event(overrides: Partial<AiUsageEvent> = {}): AiUsageEvent {
     projectId: 'proj-1',
     requestType: 'architecture',
     roleKey: 'architecture-draft',
+    operationId: null,
     provider: 'Anthropic',
     modelKey: 'claude-sonnet-4.6',
     apiModel: 'claude-sonnet-4-6',

@@ -20,6 +20,13 @@ export interface AiUsageEvent {
   projectId: string | null;
   requestType: string;
   roleKey: string | null;
+
+  /**
+   * The generation this request belongs to, minted by aiOperationScope.ts. Null on every row
+   * written before that instrumentation existed — Generation Analytics falls back to inferred
+   * grouping for those (see groupIntoGenerations).
+   */
+  operationId: string | null;
   provider: string;
   modelKey: string | null;
   apiModel: string;
@@ -31,6 +38,12 @@ export interface AiUsageEvent {
 
   /** Null whenever the model has no configured price — never a guess. */
   estimatedCostUsd: number | null;
+
+  /**
+   * Set to `'override'` only when the cost was filled in at read time from configured pricing
+   * (see enrichEventCosts.ts). Absent means the value is exactly what the ledger recorded.
+   */
+  costSource?: 'override';
   durationMs: number | null;
   status: AiUsageStatus;
   errorMessage: string | null;

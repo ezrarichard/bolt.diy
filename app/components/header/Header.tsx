@@ -4,6 +4,7 @@ import { chatStore } from '~/lib/stores/chat';
 import { HeaderActionButtons } from './HeaderActionButtons.client';
 import { ChatDescription } from '~/lib/persistence/ChatDescription.client';
 import { BuildersWordmark } from '~/components/branding/BuildersLogo';
+import { ObservabilityStatusBar } from './ObservabilityStatusBar.client';
 
 export function Header() {
   const chat = useStore(chatStore);
@@ -24,6 +25,9 @@ export function Header() {
       )}
 
       {!chat.started && <div className="flex-1" />}
+
+      {/* Observability status — renders nothing until an AI request has actually been recorded. */}
+      <ClientOnly>{() => <ObservabilityStatusBar />}</ClientOnly>
 
       {chat.started && (
         <div className="shrink-0">

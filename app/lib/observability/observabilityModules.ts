@@ -48,9 +48,10 @@ export const OBSERVABILITY_MODULES: readonly ObservabilityModule[] = [
   {
     id: 'performance',
     label: 'Performance',
-    description: 'Generation throughput, queue depth and stage timings',
+    description: 'Latency, success rate, retries and throughput',
     icon: 'i-ph:gauge-duotone',
-    status: 'planned',
+    status: 'available',
+    tabId: 'performance',
   },
   {
     id: 'infrastructure',

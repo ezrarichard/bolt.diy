@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from '@remix-run/react';
 import { ThemeSwitch } from '~/components/ui/ThemeSwitch';
 import { ControlPanel } from '~/components/@settings/core/ControlPanel';
+import { controlPanelRequestStore } from '~/lib/stores/controlPanel';
+import type { TabType } from '~/components/@settings/core/types';
 import { SettingsButton, HelpButton } from '~/components/ui/SettingsButton';
 import { IconButton } from '~/components/ui/IconButton';
 import { cubicEasingFn } from '~/utils/easings';
@@ -110,6 +112,8 @@ export const Menu = () => {
   const collapsed = useStore(sidebarCollapsedStore);
   const showWorkbench = useStore(workbenchStore.showWorkbench);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [requestedSettingsTab, setRequestedSettingsTab] = useState<TabType | undefined>(undefined);
+  const controlPanelRequest = useStore(controlPanelRequestStore);
   const projects = useStore(projectsStore);
   const currentProjectId = useStore(currentProjectIdStore);
   const currentProject = currentProjectId ? projects.find((project) => project.id === currentProjectId) : null;
@@ -210,7 +214,18 @@ export const Menu = () => {
     };
   }, [isMobile, mobileOpen]);
 
+  /* An external request (e.g. the header's Observability widget) opens the panel on a specific tab. */
+  useEffect(() => {
+    if (controlPanelRequest.nonce === 0) {
+      return;
+    }
+
+    setRequestedSettingsTab(controlPanelRequest.tab);
+    setIsSettingsOpen(true);
+  }, [controlPanelRequest]);
+
   const handleSettingsClick = () => {
+    setRequestedSettingsTab(undefined);
     setIsSettingsOpen(true);
     setMobileOpen(false);
   };
@@ -361,7 +376,7 @@ export const Menu = () => {
         open={isProjectDashboardOpen}
         onClose={() => isProjectDashboardOpenStore.set(false)}
       />
-      <ControlPanel open={isSettingsOpen} onClose={handleSettingsClose} />
+      <ControlPanel open={isSettingsOpen} onClose={handleSettingsClose} initialTab={requestedSettingsTab} />
     </>
   );
 };

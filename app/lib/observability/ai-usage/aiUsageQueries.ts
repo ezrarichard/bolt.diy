@@ -38,6 +38,7 @@ interface AiUsageRow {
   project_id: string | null;
   request_type: string;
   role_key: string | null;
+  operation_id: string | null;
   provider: string;
   model_key: string | null;
   api_model: string;
@@ -75,6 +76,7 @@ function toEvent(row: AiUsageRow): AiUsageEvent {
     projectId: row.project_id,
     requestType: row.request_type,
     roleKey: row.role_key,
+    operationId: row.operation_id,
     provider: row.provider,
     modelKey: row.model_key,
     apiModel: row.api_model,
@@ -110,7 +112,7 @@ export async function fetchAiUsageEvents(options: AiUsageQueryOptions): Promise<
     let query = client
       .from('builders_ai_usage_events')
       .select(
-        'id, created_at, project_id, request_type, role_key, provider, model_key, api_model, ' +
+        'id, created_at, project_id, request_type, role_key, operation_id, provider, model_key, api_model, ' +
           'input_tokens, output_tokens, cached_input_tokens, cached_output_tokens, total_tokens, ' +
           'estimated_cost_usd, duration_ms, status, error_message',
       )

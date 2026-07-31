@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { resolveOperationId } from '~/lib/observability/aiOperationScope';
 import { toast } from 'react-toastify';
 import { addProjectArtifact, getProjectArtifacts, updateProjectArtifact, type Project } from '~/lib/stores/projects';
 import {
@@ -151,6 +152,13 @@ export function useDraftPanel<TDraft extends object, TContext>(
       projectId: project.id,
       roleKey: artifactType,
       requestType: artifactType,
+
+      /*
+       * Observability — joins the pipeline's generation when one is running for this project,
+       * and otherwise mints a standalone id so a hand-regenerated role is still a (one-request)
+       * generation rather than an ungrouped orphan. See aiOperationScope.ts.
+       */
+      operationId: resolveOperationId(project.id),
     });
 
     if (!result.ok) {

@@ -20,7 +20,8 @@ export type TabType =
   | 'mcp'
 
   /* Observability — see app/lib/observability/observabilityModules.ts. AI Usage is its first module. */
-  | 'ai-usage';
+  | 'ai-usage'
+  | 'performance';
 
 export type WindowType = 'user' | 'developer';
 
@@ -85,6 +86,7 @@ export const TAB_LABELS: Record<TabType, string> = {
   'event-logs': 'Event Logs',
   mcp: 'MCP Servers',
   'ai-usage': 'AI Usage',
+  performance: 'Performance',
 };
 
 export const categoryLabels: Record<SettingCategory, string> = {

@@ -31,10 +31,14 @@ import CloudProvidersTab from '~/components/@settings/tabs/providers/cloud/Cloud
 import LocalProvidersTab from '~/components/@settings/tabs/providers/local/LocalProvidersTab';
 import McpTab from '~/components/@settings/tabs/mcp/McpTab';
 import AiUsageTab from '~/components/@settings/tabs/observability/AiUsageTab';
+import PerformanceTab from '~/components/@settings/tabs/observability/PerformanceTab';
 
 interface ControlPanelProps {
   open: boolean;
   onClose: () => void;
+
+  /** Tab to land on when opening, e.g. from the header's Observability widget. Undefined opens the grid. */
+  initialTab?: TabType;
 }
 
 /*
@@ -88,7 +92,7 @@ const TAB_BADGES: Partial<Record<TabType, string>> = {
   mcp: 'Beta',
 };
 
-export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
+export const ControlPanel = ({ open, onClose, initialTab }: ControlPanelProps) => {
   // State
   const [activeTab, setActiveTab] = useState<TabType | null>(null);
   const [loadingTab, setLoadingTab] = useState<TabType | null>(null);
@@ -143,10 +147,10 @@ export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
       setLoadingTab(null);
       setShowTabManagement(false);
     } else {
-      // When opening, set to null to show the main view
-      setActiveTab(null);
+      /* Opening: land on the requested tab when one was asked for, otherwise show the grid. */
+      setActiveTab(initialTab ?? null);
     }
-  }, [open]);
+  }, [open, initialTab]);
 
   // Handle closing
   const handleClose = () => {
@@ -197,6 +201,8 @@ export const ControlPanel = ({ open, onClose }: ControlPanelProps) => {
         return <McpTab />;
       case 'ai-usage':
         return <AiUsageTab />;
+      case 'performance':
+        return <PerformanceTab />;
 
       default:
         return null;
