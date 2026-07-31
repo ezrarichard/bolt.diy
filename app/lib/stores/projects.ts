@@ -1,3 +1,4 @@
+import { resolveProjectStatus, type ProjectStatus } from '~/lib/projects/projectLifecycle';
 import { atom } from 'nanostores';
 import {
   PROJECT_TYPE_REGISTRY,
@@ -53,6 +54,28 @@ export interface Project {
   icon: string; // emoji, shown in the project's circular avatar
   color: string; // tailwind-ish accent color token, e.g. 'purple' | 'blue' | 'green'
   createdAt: string;
+
+  /**
+   * Project Lifecycle — 'active' | 'archived' | 'deleted'. Persisted to the EXISTING
+   * `builders_projects.status` column, which has always been there (`text not null default
+   * 'active'`, no check constraint) but was written as a hardcoded 'active' and never read back —
+   * so lifecycle needs no migration. Undefined on rows written before lifecycle existed and is
+   * read as 'active' (see resolveProjectStatus).
+   *
+   * 'deleted' is a RECYCLE BIN, not a removal: the row is untouched and fully recoverable. Only an
+   * explicitly confirmed permanent delete ever removes a row.
+   */
+  status?: ProjectStatus;
+
+  /** Server-side `updated_at`. Read-only here — the write path always stamps it itself. */
+  updatedAt?: string;
+
+  /** Set when the project was pinned; pinned projects sort first. Metadata-folded. */
+  pinnedAt?: string;
+
+  /** When the project entered archived / deleted. Metadata-folded; cleared on restore. */
+  archivedAt?: string;
+  deletedAt?: string;
 
   /**
    * Sprint 3 — id of the ProjectBlueprint (see app/lib/blueprints/) chosen
@@ -923,6 +946,127 @@ export function deleteProject(projectId: string): void {
   if (currentProjectIdStore.get() === projectId) {
     currentProjectIdStore.set(null);
     isProjectDashboardOpenStore.set(false);
+  }
+}
+
+/*
+ * ── Project Lifecycle ───────────────────────────────────────────────────────
+ *
+ * Active / Archived / Deleted, persisted to the existing `builders_projects.status` column (see
+ * app/lib/projects/projectLifecycle.ts for why no migration is needed).
+ *
+ * `deleted` is a RECYCLE BIN. Nothing below removes a row — `deleteProject` above remains the only
+ * destructive path, and is now reached exclusively through `permanentlyDeleteProjects`, which the
+ * UI gates behind its own separate confirmation.
+ */
+
+/** Applies a lifecycle transition to many projects at once, mirroring each change to BuildersDB. */
+export function setProjectsStatus(projectIds: string[], status: ProjectStatus): number {
+  const ids = new Set(projectIds);
+
+  if (ids.size === 0) {
+    return 0;
+  }
+
+  const now = new Date().toISOString();
+  const changed: Project[] = [];
+
+  const next = projectsStore.get().map((project) => {
+    if (!ids.has(project.id) || resolveProjectStatus(project) === status) {
+      return project;
+    }
+
+    /* Timestamps are set on entry and cleared on exit, so a restored project carries no stale archive date. */
+    const updated: Project = {
+      ...project,
+      status,
+      archivedAt: status === 'archived' ? now : undefined,
+      deletedAt: status === 'deleted' ? now : undefined,
+    };
+
+    changed.push(updated);
+
+    return updated;
+  });
+
+  if (changed.length === 0) {
+    return 0;
+  }
+
+  projectsStore.set(next);
+  projectRepository.saveProjects(next);
+
+  for (const project of changed) {
+    mirrorToBuildersDb(async () => {
+      await buildersDbRepository.updateProject(project);
+
+      const actor = await getCurrentActor();
+      await buildersDbRepository.addProjectActivity({
+        projectId: project.id,
+        activityType: `project_${status}`,
+        description: `Project "${project.name}" ${status === 'active' ? 'restored' : status}`,
+        actorId: actor?.id ?? null,
+        actorDisplayName: actor?.displayName ?? null,
+      });
+    });
+  }
+
+  /*
+   * A project that is no longer active must not stay open behind a dialog that assumes it is
+   * visible — the same guard deleteProject has always applied.
+   */
+  const currentId = currentProjectIdStore.get();
+
+  if (currentId && ids.has(currentId) && status !== 'active') {
+    currentProjectIdStore.set(null);
+    isProjectDashboardOpenStore.set(false);
+  }
+
+  return changed.length;
+}
+
+export function archiveProjects(projectIds: string[]): number {
+  return setProjectsStatus(projectIds, 'archived');
+}
+
+/** Restores archived OR soft-deleted projects to active. */
+export function restoreProjects(projectIds: string[]): number {
+  return setProjectsStatus(projectIds, 'active');
+}
+
+/** Soft delete — moves projects to the recycle bin. Fully recoverable; no row is removed. */
+export function softDeleteProjects(projectIds: string[]): number {
+  return setProjectsStatus(projectIds, 'deleted');
+}
+
+/**
+ * THE ONLY destructive path. Irreversible, and deliberately not reachable from any automatic
+ * flow — the UI requires a separate typed confirmation before calling this.
+ */
+export function permanentlyDeleteProjects(projectIds: string[]): number {
+  for (const projectId of projectIds) {
+    deleteProject(projectId);
+  }
+
+  return projectIds.length;
+}
+
+/** Pins/unpins a project. Pinned projects sort first (see sortProjectsForDisplay). */
+export function toggleProjectPinned(projectId: string): void {
+  const next = projectsStore
+    .get()
+    .map((project) =>
+      project.id === projectId
+        ? { ...project, pinnedAt: project.pinnedAt ? undefined : new Date().toISOString() }
+        : project,
+    );
+  projectsStore.set(next);
+  projectRepository.saveProjects(next);
+
+  const updated = next.find((project) => project.id === projectId);
+
+  if (updated) {
+    mirrorToBuildersDb(() => buildersDbRepository.updateProject(updated));
   }
 }
 

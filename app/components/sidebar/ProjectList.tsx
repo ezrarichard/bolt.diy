@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '@nanostores/react';
 import { classNames } from '~/utils/classNames';
-import { deleteProject, projectsStore, requestNewProjectDialogStore, type Project } from '~/lib/stores/projects';
+import { softDeleteProjects, projectsStore, requestNewProjectDialogStore, type Project } from '~/lib/stores/projects';
+import {
+  matchesFilter,
+  matchesSearch,
+  resolveProjectStatus,
+  sortProjectsForDisplay,
+  type ProjectFilter,
+} from '~/lib/projects/projectLifecycle';
+import { ProjectManagementDialog } from './ProjectManagementDialog';
 import { ProjectListItem, PROJECT_COLOR_CLASSES } from './ProjectListItem';
 import { NewProjectDialog } from './NewProjectDialog';
 
@@ -19,6 +27,8 @@ export function ProjectList({ onSelectProject, collapsed = false, onRequestExpan
   const projects = useStore(projectsStore);
   const [query, setQuery] = useState('');
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
+  const [isManageOpen, setIsManageOpen] = useState(false);
+  const [filter, setFilter] = useState<ProjectFilter>('active');
   const newProjectDialogRequest = useStore(requestNewProjectDialogStore);
 
   /*
@@ -33,15 +43,25 @@ export function ProjectList({ onSelectProject, collapsed = false, onRequestExpan
     }
   }, [newProjectDialogRequest]);
 
+  /*
+   * Project Lifecycle — only Active projects show by default. A search deliberately spans EVERY
+   * status (the brief requires archived projects to stay findable), so typing a query widens the
+   * result set rather than narrowing it within the current filter.
+   */
   const filteredProjects = useMemo(() => {
-    if (!query.trim()) {
-      return projects;
-    }
+    const searching = query.trim().length > 0;
+    const matched = projects.filter(
+      (project: Project) => matchesSearch(project, query) && (searching || matchesFilter(project, filter)),
+    );
 
-    const q = query.toLowerCase();
+    return sortProjectsForDisplay(matched);
+  }, [projects, query, filter]);
 
-    return projects.filter((project: Project) => project.name.toLowerCase().includes(q));
-  }, [projects, query]);
+  /* The collapsed rail only ever shows active work — it has no room to explain a status badge. */
+  const activeProjects = useMemo(
+    () => sortProjectsForDisplay(projects.filter((project: Project) => resolveProjectStatus(project) === 'active')),
+    [projects],
+  );
 
   if (collapsed) {
     return (
@@ -66,7 +86,7 @@ export function ProjectList({ onSelectProject, collapsed = false, onRequestExpan
           <span className="i-ph:magnifying-glass h-5 w-5" />
         </button>
         <div className="flex-1 min-h-0 w-full overflow-y-auto modern-scrollbar flex flex-col items-center gap-1.5 pt-1">
-          {projects.map((project: Project) => {
+          {activeProjects.map((project: Project) => {
             const colorClasses = PROJECT_COLOR_CLASSES[project.color] || PROJECT_COLOR_CLASSES.purple;
 
             return (
@@ -118,10 +138,43 @@ export function ProjectList({ onSelectProject, collapsed = false, onRequestExpan
           />
         </div>
 
-        <div
-          className={classNames('text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400 px-1')}
-        >
-          Projects
+        {/* Lifecycle filter chips — Phase 6. Counts come from the same resolver the rows use. */}
+        <div className="flex items-center gap-1">
+          {(['active', 'archived', 'deleted', 'all'] as ProjectFilter[]).map((value) => {
+            const count =
+              value === 'all'
+                ? projects.length
+                : projects.filter((project: Project) => resolveProjectStatus(project) === value).length;
+
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setFilter(value)}
+                className={classNames(
+                  'px-2 py-0.5 rounded-full text-[10px] appearance-none border transition-colors capitalize',
+                  filter === value
+                    ? 'border-builders-brand-primary/50 bg-builders-brand-subtleSurface text-builders-brand-primary font-medium'
+                    : 'border-bolt-elements-borderColor/50 bg-transparent text-bolt-elements-textSecondary hover:text-bolt-elements-textPrimary',
+                )}
+              >
+                {value === 'deleted' ? 'bin' : value} <span className="tabular-nums opacity-70">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center justify-between px-1">
+          <span className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+            {query.trim() ? 'Search results' : 'Projects'}
+          </span>
+          <button
+            type="button"
+            onClick={() => setIsManageOpen(true)}
+            className="text-[10px] bg-transparent border-0 appearance-none text-bolt-elements-textSecondary hover:text-builders-brand-primary transition-colors"
+          >
+            Manage
+          </button>
         </div>
       </div>
 
@@ -135,13 +188,14 @@ export function ProjectList({ onSelectProject, collapsed = false, onRequestExpan
               key={project.id}
               project={project}
               onClick={() => onSelectProject(project.id)}
-              onDelete={deleteProject}
+              onDelete={(projectId: string) => softDeleteProjects([projectId])}
             />
           ))
         )}
       </div>
 
       <NewProjectDialog open={isNewProjectOpen} onClose={() => setIsNewProjectOpen(false)} />
+      <ProjectManagementDialog open={isManageOpen} onClose={() => setIsManageOpen(false)} />
     </div>
   );
 }

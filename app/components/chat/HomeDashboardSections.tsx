@@ -10,6 +10,7 @@ import {
   type Project,
 } from '~/lib/stores/projects';
 import { PROJECT_COLOR_CLASSES } from '~/components/sidebar/ProjectListItem';
+import { resolveProjectStatus } from '~/lib/projects/projectLifecycle';
 import { getProjectTypeDefinition } from '~/lib/project-types/projectTypeRegistry';
 import { DEFAULT_GENERATION_PROFILES, DEFAULT_GENERATION_PROFILE_ID } from '~/lib/generation-profiles/defaultProfiles';
 import { projectManagerEngine } from '~/lib/projects/projectManagerEngine';
@@ -50,9 +51,18 @@ function lastTouchedIso(project: Project): string {
   return project.workspaceState?.lastGenerationTime ?? project.createdAt;
 }
 
-/** Most-recently-active first; projects nothing has happened to yet fall back to creation time. */
+/**
+ * Most-recently-active first; projects nothing has happened to yet fall back to creation time.
+ *
+ * Project Lifecycle — archived and soft-deleted projects are dropped here rather than at each call
+ * site, so EVERY home-dashboard section (Continue Working, Stats, Recent Projects, Activity) is
+ * active-only by construction. That is Phase 8: the home screen shows current work, and cleaned-up
+ * sprint clutter disappears from it the moment it is archived.
+ */
 function sortByRecency(projects: Project[]): Project[] {
-  return [...projects].sort((a, b) => new Date(lastTouchedIso(b)).getTime() - new Date(lastTouchedIso(a)).getTime());
+  return [...projects]
+    .filter((project) => resolveProjectStatus(project) === 'active')
+    .sort((a, b) => new Date(lastTouchedIso(b)).getTime() - new Date(lastTouchedIso(a)).getTime());
 }
 
 /** No existing relative-time formatter in the codebase — formatArtifactTimestamp (artifacts.ts) is absolute-only. */
@@ -330,7 +340,10 @@ function StatCard({ label, value }: { label: string; value: number }) {
 }
 
 export function BuildersStatsSection() {
-  const projects = useStore(projectsStore);
+  const allProjects = useStore(projectsStore);
+
+  /* Active only — an archived sprint-verification project must not inflate the factory's stats. */
+  const projects = allProjects.filter((project) => resolveProjectStatus(project) === 'active');
 
   if (projects.length === 0) {
     return null;

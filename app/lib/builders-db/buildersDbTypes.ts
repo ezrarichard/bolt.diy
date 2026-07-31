@@ -85,6 +85,15 @@ const METADATA_FIELDS = [
 
   /** Sprint 75 — the project's Database Schema generation/validation/provisioning/connection status. See Project.databaseActivation's own comment; no migration needed, same metadata-folding convention as every other field in this list. */
   'databaseActivation',
+
+  /**
+   * Project Lifecycle — the pin flag and the archive/delete timestamps. The lifecycle STATE itself
+   * is not here: it goes to the real `status` column below, which already existed. Only these
+   * satellite fields fold into metadata, same convention as every field above.
+   */
+  'pinnedAt',
+  'archivedAt',
+  'deletedAt',
 ] as const;
 
 /**
@@ -118,7 +127,9 @@ export function toProjectRow(
     icon: project.icon,
     color: project.color,
     blueprint_id: project.blueprintId ?? null,
-    status: 'active',
+
+    /* Project Lifecycle — was hardcoded 'active', which is why the column existed but never meant anything. */
+    status: project.status ?? 'active',
     owner_id: ownerId ?? null,
     created_by: ownerId ?? null,
     last_opened_at: null,
@@ -148,6 +159,10 @@ export function fromProjectRow(row: BuildersDbProjectRow): Project {
     projectType: (row.project_type as Project['projectType']) ?? 'guided_engineering',
     createdFrom: (row.created_from as Project['createdFrom']) ?? 'guided_engineering',
     createdAt: row.created_at,
+
+    /* Project Lifecycle — an unknown/legacy value reads as active rather than hiding the project. */
+    status: row.status === 'archived' || row.status === 'deleted' ? row.status : 'active',
+    updatedAt: row.updated_at ?? undefined,
     ...metadata,
   };
 }
